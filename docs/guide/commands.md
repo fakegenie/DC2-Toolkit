@@ -19,6 +19,19 @@ Run `dc2tk help <command>` to see all options for any command.
 
 `build` also takes `--mods <dir>` (the folder that holds the mods), `--no-start-at` (ignore a mod's `start_at`), and `--full` (compile every script, not only the edited ones). `--play` and `play` find PCSX2 through `--pcsx2 <exe>`, the `PCSX2` environment variable, your `PATH`, or its usual install folder.
 
+## The engine
+
+The game's executable (`SCES_511.90`) built from [ChronicleTwo](https://github.com/TheMoonPeople/ChronicleTwo)'s decompiled engine, which this repository pins as the submodule `engine/`. Building needs Docker or Podman (and bash): ChronicleTwo's own build runs in its Kazarov container, on a copy of the engine in `build/engine/`, so `engine/` itself is never changed.
+
+| Command | Action |
+| --- | --- |
+| `dc2tk engine fetch` | Check out the engine at the pinned commit: the submodule in a clone of this repository, else a clone of ChronicleTwo in `engine/` (needs git). |
+| `dc2tk engine build dc2.iso -o SCES_511.90` | Build the executable. The disc (its image, an extracted disc, or its `SCES_511.90`) gives the libraries the build takes from retail. |
+| `dc2tk engine verify dc2.iso` | Build the unedited engine and check it against the disc's executable. |
+| `dc2tk build extracted/scripts dc2.iso -o test.iso --executable SCES_511.90` | Build an image with an executable `engine build` wrote. When it has outgrown the disc's, it moves past the end of the volume. |
+
+The first build makes the container image, which takes a while; later builds reuse it and the copy, and recompile only what changed. `--engine DIR` builds another ChronicleTwo checkout, such as one you have edited, in a copy of its own. The patches in `tools/engine-patches/ps2.json` are applied to every copy: they let an edited engine link (no address fixed to retail's layout, the compiler's alignment kept), and change nothing in an unedited build, which `engine verify` checks.
+
 ## Creating and managing mods
 
 | Command | Action |

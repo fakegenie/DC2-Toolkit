@@ -36,7 +36,7 @@ The goal of this project is to support converting from and to the original game 
 ## Notes
 
 - We only support PAL at the moment
-- We do not extract/decompile/compile the engine code itself, there exists other projects for this such as [ChronicleTwo](https://github.com/TheMoonPeople/ChronicleTwo)
+- The engine's code is [ChronicleTwo](https://github.com/TheMoonPeople/ChronicleTwo)'s decompilation, which ChronicleTwo hosts. This repository pins it as a git submodule at `engine/` and holds none of it; `dc2tk engine fetch` checks it out (clone with `--recurse-submodules` to get it with the repository), and `dc2tk engine build` builds the game's executable from it with ChronicleTwo's own build, in its container (Docker or Podman).
 
 ## Prior art
 

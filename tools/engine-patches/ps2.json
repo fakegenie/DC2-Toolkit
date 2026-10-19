@@ -1,0 +1,12 @@
+[
+  {
+    "file": "ps2/config/pal/SCES_511.90.lcf",
+    "find": "        CHA_DEV_FONT_PIECE_R = 0x00364549;\n        CHA_DEV_FONT_PIECE_U = 0x0036454a;\n        CHA_DEV_FONT_PIECE_D = 0x0036454b;\n        CHA_DEV_FONT_PIECE_LD = 0x0036454d;\n        CHA_DEV_FONT_PIECE_RU = 0x0036454e;\n        CHA_DEV_FONT_PIECE_RD = 0x0036454f;\n        CHA_DEV_FONT_PIECE_VL = 0x00364551;\n        D_1F64A00 = 0x01f64a00;\n",
+    "replace": "        D_1F64A00 = __bss_end;\n"
+  },
+  {
+    "file": "scripts/build/postprocess_object.py",
+    "find": "        section.sh_flags = FLAGS[name]\n        if name not in CODE:\n            section.sh_addralign = 1\n",
+    "replace": "        section.sh_flags = FLAGS[name]\n"
+  }
+]

@@ -2,10 +2,11 @@
 #
 # Each dc2tk zip holds a folder with the executable and the data it reads beside it (sdk/,
 # definitions/ with its native tables: dc2tk looks for them in the nearest folder above itself that has
-# definitions/), the README, the LICENCE, and THIRD-PARTY-LICENCES.md with the licences of the crates
-# built into that platform's executable (tools/third_party_licences.py). The add-on's zip is a Blender
-# extension: blender_manifest.toml at its root, so Blender's Install from Disk takes it as it is,
-# with the LICENCE beside it.
+# definitions/), engine.commit (the ChronicleTwo commit `dc2tk engine fetch` checks out; no engine
+# code is packed) with tools/engine-patches/, the README, the LICENCE, and THIRD-PARTY-LICENCES.md
+# with the licences of the crates built into that platform's executable
+# (tools/third_party_licences.py). The add-on's zip is a Blender extension: blender_manifest.toml
+# at its root, so Blender's Install from Disk takes it as it is, with the LICENCE beside it.
 #
 #   git tag v1.0.0 && git push origin v1.0.0
 
@@ -81,6 +82,11 @@ jobs:
           esac
           cp -R sdk definitions "$folder/"
           cp README.md LICENCE "$folder/"
+          # the engine's commit for dc2tk engine fetch, and the patches its builds apply; the engine
+          # itself is never packed
+          git rev-parse HEAD:engine > "$folder/engine.commit"
+          mkdir -p "$folder/tools"
+          cp -R tools/engine-patches "$folder/tools/"
           # the crates' licences, from the sources the build fetched
           python=python3
           if [ "${{ runner.os }}" = Windows ]; then python=python; fi

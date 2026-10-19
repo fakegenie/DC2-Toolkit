@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use clap::Args;
 use indexmap::IndexMap;
 
@@ -56,6 +56,10 @@ pub struct BuildArgs {
     /// Compile every script, not only those edited, modded or including an edited library.
     #[arg(long)]
     full: bool,
+    /// Put this executable on the image instead of the disc's: an SCES_511.90 that `dc2tk engine
+    /// build` wrote.
+    #[arg(long, value_name = "FILE")]
+    executable: Option<PathBuf>,
     #[command(flatten)]
     common: Common,
 }
@@ -96,6 +100,16 @@ pub fn run_build(args: &BuildArgs) -> Result<ExitCode> {
     print_tree_notes(args, &planned.mod_dirs)?;
     let found = compile(args, &tools, &mut planned)?;
     let made = game_files(args, &tools, &planned, &found)?;
+    if args.executable.is_some() && made.data.executable.is_some() {
+        bail!(
+            "the chosen mods change tables inside the executable, which cannot be patched into an \
+             executable built from the engine yet; build without --executable"
+        );
+    }
+    let executable = match &args.executable {
+        Some(path) => Some(std::fs::read(path).with_context(|| format!("cannot read {}", path.display()))?),
+        None => made.data.executable.clone(),
+    };
     let over_budget = memory_check(args, &made.data.files)?;
     let data_files: usize = made.data.changes.iter().map(|change| change.files.len()).sum();
     let counts = format!(
@@ -109,10 +123,10 @@ pub fn run_build(args: &BuildArgs) -> Result<ExitCode> {
         return Ok(if over_budget { ExitCode::from(1) } else { ExitCode::SUCCESS });
     };
     let written = rebuild::write_disc(&args.disc, output, &made.data.files)?;
-    if let Some(executable) = &made.data.executable {
-        // the executable tables (monsters, spectrumising, ...): the boot executable patched in
-        // place, its size kept
-        rebuild::overwrite_iso_file(output, dc2tk_assets::elf::EXECUTABLE, executable)?;
+    if let Some(executable) = &executable {
+        if rebuild::replace_iso_file(output, dc2tk_assets::elf::EXECUTABLE, executable)? {
+            println!("{} moved past the end of the volume: it outgrew its sectors", dc2tk_assets::elf::EXECUTABLE);
+        }
     }
     print_written(&written);
     let wrong = read_back(output, &found, &made)?;

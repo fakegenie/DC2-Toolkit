@@ -288,25 +288,40 @@ fn write_copy(source_path: &Path, out_path: &Path) -> Result<File> {
     OpenOptions::new().read(true).write(true).open(out_path).with_path("write", out_path)
 }
 
-/// Overwrites a file of the image's own directory tree (outside DATA.DAT, such as the boot
-/// executable) with bytes of the same size, in place: a plain patch, nothing moves.
-pub fn overwrite_iso_file(image_path: &Path, path: &str, data: &[u8]) -> Result<()> {
-    let record = {
+/// Replaces a file of the image's own directory tree (outside DATA.DAT, such as the boot
+/// executable): in place when it fits the sectors the file has, else past the end of the volume,
+/// with its directory record and the volume's size changed to match. Says whether it moved.
+pub fn replace_iso_file(image_path: &Path, path: &str, data: &[u8]) -> Result<bool> {
+    let (record, mut pvd, image_len) = {
         let image = crate::Image::open(image_path)?;
-        iso::find(image.bytes(), path)?.ok_or_else(|| Error::Missing(path.to_string()))?
+        let record = iso::find(image.bytes(), path)?.ok_or_else(|| Error::Missing(path.to_string()))?;
+        let pvd = iso::read_at(image.bytes(), iso::PVD_SECTOR * iso::SECTOR, iso::SECTOR).to_vec();
+        (record, pvd, image.bytes().len() as u64)
     };
-    if record.size as usize != data.len() {
-        return Err(Error::invalid(format!(
-            "{path} is {} bytes; a patch keeps its size, not {}",
-            record.size,
-            data.len()
-        )));
-    }
+    let size = u32::try_from(data.len())
+        .map_err(|_| Error::invalid(format!("{path} is {} bytes, more than ISO 9660 holds", data.len())))?;
+    let moved = sectors(data.len() as u64) > sectors(record.size as u64);
     let mut file = OpenOptions::new().write(true).open(image_path).with_path("write", image_path)?;
-    file.seek(SeekFrom::Start(record.extent as u64 * iso::SECTOR))
-        .and_then(|_| file.write_all(data))
-        .and_then(|()| file.flush())
-        .with_path("write", image_path)
+    if moved {
+        let volume = (u32_at(&pvd, VOLUME_SIZE) as u64).max(sectors(image_len));
+        write_padded(&mut file, volume, data).with_path("write", image_path)?;
+        iso::set_extent(&mut file, image_path, &record, sector_count(volume)?, size)?;
+        let count = sector_count(volume + sectors(data.len() as u64))?;
+        pvd[VOLUME_SIZE..VOLUME_SIZE + 4].copy_from_slice(&count.to_le_bytes());
+        pvd[VOLUME_SIZE + 4..VOLUME_SIZE + 8].copy_from_slice(&count.to_be_bytes());
+        file.seek(SeekFrom::Start(iso::PVD_SECTOR * iso::SECTOR))
+            .and_then(|_| file.write_all(&pvd))
+            .with_path("write", image_path)?;
+    } else {
+        file.seek(SeekFrom::Start(record.extent as u64 * iso::SECTOR))
+            .and_then(|_| file.write_all(data))
+            .with_path("write", image_path)?;
+        if size != record.size {
+            iso::set_extent(&mut file, image_path, &record, record.extent, size)?;
+        }
+    }
+    file.flush().with_path("write", image_path)?;
+    Ok(moved)
 }
 
 #[cfg(test)]
@@ -436,18 +451,28 @@ mod tests {
     }
 
     #[test]
-    fn overwrites_a_root_file_in_place() {
-        let folder = std::env::temp_dir().join(format!("dc2tk-overwrite-{}", std::process::id()));
+    fn replaces_a_root_file_in_place_when_it_fits_and_past_the_volume_when_it_grows() {
+        let folder = std::env::temp_dir().join(format!("dc2tk-replace-{}", std::process::id()));
         fs::create_dir_all(&folder).unwrap();
         let path = folder.join("disc.iso");
         fs::write(&path, samples::iso_image(&[("SCES_511.90", b"executable"), ("OTHER", b"kept")])).unwrap();
-        overwrite_iso_file(&path, "SCES_511.90", b"EXECUTABLE").unwrap();
-        assert!(overwrite_iso_file(&path, "SCES_511.90", b"longer than it was").is_err());
-        let image = crate::Image::open(&path).unwrap();
-        let read =
-            |name: &str| iso::read_file(image.bytes(), &iso::find(image.bytes(), name).unwrap().unwrap()).to_vec();
-        assert_eq!((read("SCES_511.90"), read("OTHER")), (b"EXECUTABLE".to_vec(), b"kept".to_vec()));
-        drop(image);
+        let read = |name: &str| {
+            let image = crate::Image::open(&path).unwrap();
+            let record = iso::find(image.bytes(), name).unwrap().unwrap();
+            let pvd = iso::read_at(image.bytes(), iso::PVD_SECTOR * iso::SECTOR, iso::SECTOR).to_vec();
+            (iso::read_file(image.bytes(), &record).to_vec(), record.extent, u32_at(&pvd, VOLUME_SIZE))
+        };
+        let (_, extent, volume) = read("SCES_511.90");
+        assert!(!replace_iso_file(&path, "SCES_511.90", b"EXE").unwrap());
+        assert_eq!(read("SCES_511.90"), (b"EXE".to_vec(), extent, volume));
+        let longer = vec![7u8; iso::SECTOR as usize + 1];
+        assert!(replace_iso_file(&path, "SCES_511.90", &longer).unwrap());
+        let (data, moved_to, grown) = read("SCES_511.90");
+        assert_eq!(data, longer);
+        assert!(moved_to > extent);
+        assert_eq!(grown, moved_to + 2);
+        assert_eq!(fs::metadata(&path).unwrap().len(), grown as u64 * iso::SECTOR);
+        assert_eq!(read("OTHER").0, b"kept".to_vec());
         fs::remove_dir_all(&folder).unwrap();
     }
 }
