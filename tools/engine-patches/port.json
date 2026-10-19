@@ -1,0 +1,92 @@
+[
+  {
+    "file": "ps2/include/dng_event.hpp",
+    "find": "    virtual void Draw();",
+    "replace": "    virtual int Draw();"
+  },
+  {
+    "file": "ps2/include/dng_hud.hpp",
+    "find": "    virtual void Draw();",
+    "replace": "    virtual int Draw();"
+  },
+  {
+    "file": "ps2/include/mapload.hpp",
+    "find": "    CFuncPoint() {}",
+    "replace": "    CFuncPoint() {} CFuncPoint &operator=(CFuncPoint &other) { __builtin_memcpy(static_cast<void *>(this), &other, sizeof(*this)); return *this; }"
+  },
+  {
+    "file": "ps2/src/dbg_font.cpp",
+    "find": "    char *args = (char *) __builtin_next_arg(format) - (__builtin_args_info(2) >= 8 ? 0 : (8 - __builtin_args_info(2)) * 8);\n    vsprintf((char *) text, format, args);",
+    "replace": "    va_list args; va_start(args, format); vsprintf((char *) text, format, args); va_end(args);"
+  },
+  {
+    "file": "ps2/src/dbg_font.cpp",
+    "find": "#include \"mglib.hpp\"\n",
+    "replace": "#include \"mglib.hpp\"\n#include <cstdarg>\n"
+  },
+  {
+    "file": "ps2/src/dng_event.cpp",
+    "find": "void CRedMarkModel::Draw() {",
+    "replace": "int CRedMarkModel::Draw() {"
+  },
+  {
+    "file": "ps2/src/dng_hud.cpp",
+    "find": "void CLockOnModel::Draw() {",
+    "replace": "int CLockOnModel::Draw() {"
+  },
+  {
+    "file": "ps2/src/gyorace.cpp",
+    "find": "union {\n                CSceneEventData data;\n            };",
+    "replace": "alignas(CSceneEventData) char data_raw[sizeof(CSceneEventData)]; CSceneEventData &data = *(CSceneEventData *) data_raw;"
+  },
+  {
+    "file": "ps2/src/menucapt.cpp",
+    "find": "union {\n        mgCMemory sound_memory;\n    };",
+    "replace": "alignas(mgCMemory) char sound_memory_raw[sizeof(mgCMemory)]; mgCMemory &sound_memory = *(mgCMemory *) sound_memory_raw;"
+  },
+  {
+    "file": "ps2/src/menucls1.cpp",
+    "find": "union {\n        CItemUseTarget target_data;\n    };",
+    "replace": "alignas(CItemUseTarget) char target_data_raw[sizeof(CItemUseTarget)]; CItemUseTarget &target_data = *(CItemUseTarget *) target_data_raw;"
+  },
+  {
+    "file": "ps2/src/sceneevent.cpp",
+    "find": "union {\n        CMapLightingInfo lighting;\n    };",
+    "replace": "alignas(CMapLightingInfo) char lighting_raw[sizeof(CMapLightingInfo)]; CMapLightingInfo &lighting = *(CMapLightingInfo *) lighting_raw;"
+  },
+  {
+    "file": "ps2/src/mg_visual.cpp",
+    "find": "packet[6] = 0x000000000000086E3000000000008001;",
+    "replace": "packet[6] = (((u_long128) 0x86EULL << 64) | 0x3000000000008001ULL);"
+  },
+  {
+    "file": "ps2/src/mg_visual.cpp",
+    "find": "packet[3] = 0x000000000000086E3000000000008001;",
+    "replace": "packet[3] = (((u_long128) 0x86EULL << 64) | 0x3000000000008001ULL);"
+  },
+  {
+    "file": "ps2/src/collision.cpp",
+    "find": "#include \"mglib.hpp\"\n",
+    "replace": "#include \"mglib.hpp\"\nvoid pre_trance_normal(float (*matrix)[4]);\nvoid trance_normal(float *v0, float *v1, float *v2, float *normal);\n"
+  },
+  {
+    "file": "ps2/src/editmap2.cpp",
+    "find": "#include \"snd_mngr.hpp\"\n",
+    "replace": "#include \"snd_mngr.hpp\"\nvoid PlaneNormalXZ(float *normal, float *p0, float *p1, float *p2);\n"
+  },
+  {
+    "file": "ps2/src/gameutil.cpp",
+    "find": "#include \"mglib.hpp\"\n",
+    "replace": "#include \"mglib.hpp\"\nvoid testVUnew(float (*matrix)[4], float *vertex, float *weight, float *accum, float *out);\nextern float def_vrtx[800][4];\n"
+  },
+  {
+    "file": "ps2/src/mg_frame.cpp",
+    "find": "#include \"mglib.hpp\"\n",
+    "replace": "#include \"mglib.hpp\"\nvoid test1(float (*corners)[4], float (*screen)[4], float (*matrix)[4], float *out_max, float *out_min);\nvoid test2(float *out_max, float *out_min);\n"
+  },
+  {
+    "file": "ps2/src/mg_math.cpp",
+    "find": "#include \"mg_math.hpp\"\n",
+    "replace": "#include \"mg_math.hpp\"\nint Check_Point_Poly3(float x, float y, float x0, float y0, float x1, float y1, float x2, float y2);\nvoid MulMatrix3(float (*matrix)[4], float (*second)[4], float (*third)[4]);\n"
+  }
+]
