@@ -87,6 +87,8 @@ jobs:
           git rev-parse HEAD:engine > "$folder/engine.commit"
           mkdir -p "$folder/tools"
           cp -R tools/engine-patches "$folder/tools/"
+          cp tools/engine_mods.py tools/native_prepare.py tools/port_sdk.py tools/movie_sdk.py "$folder/tools/"
+          cp -R port "$folder/"
           # the crates' licences, from the sources the build fetched
           python=python3
           if [ "${{ runner.os }}" = Windows ]; then python=python; fi

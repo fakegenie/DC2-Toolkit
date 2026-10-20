@@ -93,9 +93,9 @@ pub enum ModCommand {
         #[command(flatten)]
         mods: ModsDir,
     },
-    /// Start a patch: copy functions of a script into the mod, marked to replace the script's.
+    /// Start a patch: copy script functions, or use `engine MOD FUNCTION` to copy an engine function.
     Override {
-        /// The decompiled source tree.
+        /// The decompiled source tree, or engine to copy an engine function.
         source: PathBuf,
         /// The mod's name.
         name: String,
@@ -307,6 +307,13 @@ fn run_mod_override(
     common: &Common,
 ) -> Result<ExitCode> {
     let mod_dir = mods_dir.folder(name)?;
+    if source == Path::new("engine") {
+        if targets.iter().any(|(_, value)| value.is_some()) || functions.len() != 1 {
+            bail!("use `dc2tk mod override engine MOD FUNCTION` with one engine function");
+        }
+        crate::engine::export_override(&mod_dir, &functions[0])?;
+        return Ok(ExitCode::SUCCESS);
+    }
     let given: Vec<(TargetKind, &str)> = targets
         .iter()
         .filter_map(|&(kind, value)| value.filter(|value| !value.is_empty()).map(|value| (kind, value)))

@@ -19,6 +19,16 @@ Run `dc2tk help <command>` to see all options for any command.
 
 `build` also takes `--mods <dir>` (the folder that holds the mods), `--no-start-at` (ignore a mod's `start_at`), and `--full` (compile every script, not only the edited ones). `--play` and `play` find PCSX2 through `--pcsx2 <exe>`, the `PCSX2` environment variable, your `PATH`, or its usual install folder.
 
+`dc2tk build extracted/scripts dc2.iso --native` builds the Linux x86-64 SDL3 port as
+`build/port/darkchronicle`. Pass `--native FILE` to choose its path. Add `-o modded.iso` to
+write the ISO too; both builds use the chosen mods, executable tables and native declarations.
+The native build needs clang 21, binutils, Python 3 and SDL3 development files. A local SDK in
+`build/port/sdk` takes precedence over `pkg-config sdl3`; `python3 -I tools/port_sdk.py`
+installs that SDK. Run the binary with `--graphics modded.iso`. It warns when the
+mounted disc's executable differs from the one used for the build. For MPEG2 movies, run
+`python3 -I tools/movie_sdk.py` and add `--movies` to the native build. Engine mods are checked
+with clang as well as MWCC by `mod check`. A mod cannot override a function supplied by `port/src`.
+
 ## The engine
 
 The game's executable (`SCES_511.90`) built from [ChronicleTwo](https://github.com/TheMoonPeople/ChronicleTwo)'s decompiled engine, which this repository pins as the submodule `engine/`. Building needs Docker or Podman (and bash): ChronicleTwo's own build runs in its Kazarov container, on a copy of the engine in `build/engine/`, so `engine/` itself is never changed.
@@ -29,6 +39,16 @@ The game's executable (`SCES_511.90`) built from [ChronicleTwo](https://github.c
 | `dc2tk engine build dc2.iso -o SCES_511.90` | Build the executable. The disc (its image, an extracted disc, or its `SCES_511.90`) gives the libraries the build takes from retail. |
 | `dc2tk engine verify dc2.iso` | Build the unedited engine and check it against the disc's executable. |
 | `dc2tk build extracted/scripts dc2.iso -o test.iso --executable SCES_511.90` | Build an image with an executable `engine build` wrote. When it has outgrown the disc's, it moves past the end of the volume. |
+
+A chosen mod's `engine/` files are built automatically by `dc2tk build … --mod NAME`, including
+`--dry-run`. `dc2tk mod check extracted/scripts NAME --disc dc2.iso` builds them too. These
+commands need the same container tools as `engine build`; `mod check` also needs the native
+clang/SDL3 tools and `--disc` for the retail libraries. Engine mods cannot be combined with `--executable`. See [Engine files](mods.md#engine-files)
+for function replacement, `original()`, headers, added units and native declarations.
+`dc2tk mod override engine NAME FUNCTION` copies an engine function into a mod and refuses
+an existing destination. Engine mods can also edit executable data tables; those values are
+compiled from source. The build reports the space between BSS and the
+PS2 stack and fails if BSS reaches past the stack.
 
 The first build makes the container image, which takes a while; later builds reuse it and the copy, and recompile only what changed. `--engine DIR` builds another ChronicleTwo checkout, such as one you have edited, in a copy of its own. The patches in `tools/engine-patches/ps2.json` are applied to every copy: they let an edited engine link (no address fixed to retail's layout, the compiler's alignment kept), and change nothing in an unedited build, which `engine verify` checks.
 

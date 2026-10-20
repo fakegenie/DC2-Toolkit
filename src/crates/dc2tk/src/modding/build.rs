@@ -27,7 +27,7 @@ pub struct BuildArgs {
     /// image, as `pack` writes it, before the build's changes).
     disc: PathBuf,
     /// Disc image to write.
-    #[arg(short, long, required_unless_present = "dry_run")]
+    #[arg(short, long, required_unless_present_any = ["dry_run", "native"])]
     output: Option<PathBuf>,
     /// Do everything but write the image: say what would change, and check the game's memory
     /// budgets, without the time and disc space an image takes.
@@ -60,6 +60,10 @@ pub struct BuildArgs {
     /// build` wrote.
     #[arg(long, value_name = "FILE")]
     executable: Option<PathBuf>,
+    #[arg(long, num_args = 0..=1, default_missing_value = "build/port/darkchronicle", value_name = "FILE", help = "Build the Linux SDL3 port, optionally writing it to FILE")]
+    native: Option<PathBuf>,
+    #[arg(long, requires = "native", help = "Enable MPEG2 playback in the native port using the local movie SDK")]
+    movies: bool,
     #[command(flatten)]
     common: Common,
 }
@@ -91,7 +95,26 @@ struct GameFiles {
 }
 
 pub fn run_build(args: &BuildArgs) -> Result<ExitCode> {
-    let tools = args.common.tools()?;
+    if args.native.is_some() && args.executable.is_some() {
+        bail!("--native cannot be combined with --executable: native code must come from engine source");
+    }
+    if let Some(output) = &args.native {
+        crate::native::validate_output(output, &args.disc, args.output.as_deref(), &args.source)?;
+    }
+    let mut tools = args.common.tools()?;
+    let mod_dirs = mod_folders(args.mods.path(), &args.mod_names)?;
+    if let Some(output) = &args.native {
+        for directory in &mod_dirs {
+            crate::native::validate_output(output, &args.disc, args.output.as_deref(), directory)?;
+        }
+    }
+    let prepared = crate::engine::prepare_mods(&args.disc, &mod_dirs)?;
+    if let Some(prepared) = &prepared {
+        if args.executable.is_some() {
+            bail!("--executable cannot be combined with a mod's engine files");
+        }
+        crate::engine_natives::regenerate(&prepared.copy, &mut tools)?;
+    }
     let mut planned = plan(args, &tools)?;
     print_mods(args, &planned)?;
     if let Some(start) = start_at(args, &planned)? {
@@ -99,17 +122,37 @@ pub fn run_build(args: &BuildArgs) -> Result<ExitCode> {
     }
     print_tree_notes(args, &planned.mod_dirs)?;
     let found = compile(args, &tools, &mut planned)?;
-    let made = game_files(args, &tools, &planned, &found)?;
+    let mut made = game_files(args, &tools, &planned, &found)?;
     if args.executable.is_some() && made.data.executable.is_some() {
-        bail!(
-            "the chosen mods change tables inside the executable, which cannot be patched into an \
-             executable built from the engine yet; build without --executable"
-        );
+        bail!("--executable cannot be combined with mods that edit executable tables");
     }
+    let engine = match &prepared {
+        Some(prepared) => Some(crate::engine::compile_mods(prepared, made.data.executable.as_deref())?),
+        None => None,
+    };
     let executable = match &args.executable {
         Some(path) => Some(std::fs::read(path).with_context(|| format!("cannot read {}", path.display()))?),
-        None => made.data.executable.clone(),
+        None => engine.or_else(|| made.data.executable.clone()),
     };
+    let native_tables = made.data.executable.clone();
+    if prepared.is_some() {
+        made.data.executable = executable.clone();
+    }
+    if let Some(output) = &args.native {
+        let expected = match &executable {
+            Some(bytes) => bytes.clone(),
+            None => crate::engine::retail_executable(&args.disc)?,
+        };
+        crate::native::build(
+            prepared.as_ref(),
+            &args.disc,
+            native_tables.as_deref(),
+            &expected,
+            output,
+            args.dry_run,
+            args.movies,
+        )?;
+    }
     let over_budget = memory_check(args, &made.data.files)?;
     let data_files: usize = made.data.changes.iter().map(|change| change.files.len()).sum();
     let counts = format!(
@@ -119,7 +162,7 @@ pub fn run_build(args: &BuildArgs) -> Result<ExitCode> {
         made.data.files.len()
     );
     let Some(output) = &args.output else {
-        println!("dry run: {counts}; no image written");
+        println!("{counts}; no image written");
         return Ok(if over_budget { ExitCode::from(1) } else { ExitCode::SUCCESS });
     };
     let written = rebuild::write_disc(&args.disc, output, &made.data.files)?;
@@ -129,7 +172,14 @@ pub fn run_build(args: &BuildArgs) -> Result<ExitCode> {
         }
     }
     print_written(&written);
-    let wrong = read_back(output, &found, &made)?;
+    let mut wrong = read_back(output, &found, &made)?;
+    if let Some(executable) = &executable {
+        let written = dc2tk_disc::DiscSource::open(output)?;
+        if written.disc_file(dc2tk_assets::elf::EXECUTABLE)?.as_ref() != executable.as_slice() {
+            println!("reads back wrong: {}", dc2tk_assets::elf::EXECUTABLE);
+            wrong.push(dc2tk_assets::elf::EXECUTABLE.to_string());
+        }
+    }
     println!("{counts}, written to {}", shown(output));
     if !wrong.is_empty() {
         return Ok(ExitCode::from(1));
@@ -441,4 +491,24 @@ fn read_back(output: &Path, found: &build::Changes, made: &GameFiles) -> Result<
         println!("reads back wrong: {path}");
     }
     Ok(wrong)
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    #[test]
+    fn native_build_accepts_a_default_path_and_an_optional_iso_output() {
+        let parsed = crate::Cli::try_parse_from(["dc2tk", "build", "scripts", "disc.iso", "--native"]).unwrap();
+        let crate::Command::Build(args) = parsed.command else { panic!("expected build") };
+        assert_eq!(args.native.unwrap(), std::path::PathBuf::from("build/port/darkchronicle"));
+        assert!(args.output.is_none());
+        let parsed =
+            crate::Cli::try_parse_from(["dc2tk", "build", "scripts", "disc.iso", "--native", "game", "-o", "mod.iso"])
+                .unwrap();
+        let crate::Command::Build(args) = parsed.command else { panic!("expected build") };
+        assert_eq!(args.native.unwrap(), std::path::PathBuf::from("game"));
+        assert_eq!(args.output.unwrap(), std::path::PathBuf::from("mod.iso"));
+        assert!(crate::Cli::try_parse_from(["dc2tk", "build", "scripts", "disc.iso"]).is_err());
+    }
 }

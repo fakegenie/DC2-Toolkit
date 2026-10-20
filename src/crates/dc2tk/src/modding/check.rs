@@ -22,7 +22,7 @@ pub fn run_mod_check(
     disc: Option<&Path>,
     common: &Common,
 ) -> Result<ExitCode> {
-    let tools = common.tools()?;
+    let mut tools = common.tools()?;
     let mod_dirs = mod_folders(mods_dir.path(), names)?;
     for mod_dir in &mod_dirs {
         let name = mods::name(mod_dir);
@@ -37,11 +37,34 @@ pub fn run_mod_check(
     if !raw_clashes.is_empty() {
         bail!(discfiles::clash_text(&raw_clashes));
     }
-    let lines = replace::all_lines(&mod_dirs)?;
-    let added = match disc {
-        Some(disc) => assets_on_disc(disc, &mod_dirs, &lines, &raw, common)?,
-        None => assets_without_disc(&mod_dirs, &lines)?,
+    let prepared = if crate::engine::mod_files(&mod_dirs)?.is_empty() {
+        None
+    } else {
+        let Some(disc) = disc else {
+            bail!("checking a mod's engine files needs --disc with the retail disc");
+        };
+        crate::engine::prepare_mods(disc, &mod_dirs)?
     };
+    if let Some(prepared) = &prepared {
+        crate::engine_natives::regenerate(&prepared.copy, &mut tools)?;
+    }
+    let lines = replace::all_lines(&mod_dirs)?;
+    let (added, edited_executable) = match disc {
+        Some(disc) => assets_on_disc(disc, &mod_dirs, &lines, &raw, common)?,
+        None => (assets_without_disc(&mod_dirs, &lines)?, None),
+    };
+    if let Some(prepared) = &prepared {
+        let executable = crate::engine::compile_mods(prepared, edited_executable.as_deref())?;
+        crate::native::build(
+            Some(prepared),
+            disc.unwrap(),
+            edited_executable.as_deref(),
+            &executable,
+            &crate::files::root().join("build/port/darkchronicle"),
+            true,
+            false,
+        )?;
+    }
     let consts = default_constants(source)?;
     let constants = mod_constants(&mod_dirs, &lines, &consts, &added, disc, &tools)?;
     let mut result = mods::check_with(&mod_dirs, source, &tools.toolchain(), &consts, &constants)?;
@@ -89,7 +112,7 @@ fn assets_on_disc(
     lines: &[replace::Line],
     raw: &discfiles::Wanted,
     common: &Common,
-) -> Result<ModConstants> {
+) -> Result<(ModConstants, Option<Vec<u8>>)> {
     let (resolved, _) = resolved(mod_dirs, disc, &common.def_sets())?;
     let clashes = replace::clashes(&resolved, raw);
     if !clashes.is_empty() {
@@ -119,7 +142,7 @@ fn assets_on_disc(
             println!("{line}");
         }
     }
-    Ok(resolved.added)
+    Ok((resolved.added, data.executable))
 }
 
 /// Without the disc: no two mods replacing one asset, and each mod's lines as they read. Returns

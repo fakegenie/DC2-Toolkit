@@ -226,3 +226,72 @@ int test_addition(void)
     return add_two(2, 3) == 5;
 }
 ```
+
+## Engine files
+
+A mod can replace functions in the game's executable. Put C++ files under its `engine/`
+folder. Files named after units in ChronicleTwo's `engine/ps2/src/` extend those units; a new
+filename adds a unit. Mark each replacement with
+`PORT_OVERRIDE` and keep its function name and parameter types. An unmarked function adds a
+new definition to that unit.
+
+```text
+mods/my-mod/
+  mod.json
+  engine/
+    userdata.cpp
+```
+
+Include the engine headers that declare the types your code uses. Code must compile with
+MWCC 3.0, so use the C++ supported by that compiler. Functions and data should use engine
+symbols; fixed RAM addresses and hardware access will prevent the same mod running in the
+native port.
+
+```sh
+dc2tk mod check extracted/scripts my-mod --disc dc2.iso
+dc2tk build extracted/scripts dc2.iso -o modded.iso --mod my-mod
+```
+
+Both commands build the engine in Docker or Podman. The disc supplies retail's libraries;
+`mod check` therefore needs `--disc` for engine mods. A build with `--dry-run` compiles the
+engine too. Mods that replace one function clash and the error names both mods and the
+function. `--executable` cannot be combined with engine files.
+
+Each mod set gets a copy under `build/engine/mods-<hash>/`, with its engine inputs included in
+the hash. Builds edit that copy and leave the engine submodule untouched. The link map is
+`build/pal/SCES_511.90.xMAP` within the copy. Every build reports the C library heap left below
+the PS2 stack, warns if it is smaller than retail's 112128 bytes, and fails if BSS overlaps
+the stack. Try the resulting image in PCSX2 before distributing it.
+
+Call `original(...)` inside a marked function to run the engine's previous implementation.
+The prepared copy keeps that function under a new name; member declarations are added to the
+copied class header. This supports ordinary functions and methods on an unqualified class.
+Constructors, destructors, operators and nested or namespace-qualified classes are refused
+when they need `original()`.
+
+An existing `.h` or `.hpp` under `engine/ps2/include/` can be replaced by putting the whole
+header at the same relative path in the mod's `engine/` folder. Two mods replacing one header
+clash. A `.cpp` with a new filename adds a translation unit and its linker sections. These
+files are compiled with the rest of the engine.
+
+To start an override from the engine's function:
+
+```sh
+dc2tk mod override engine my-mod 'CUserDataManager::AddMoney(int)'
+```
+
+The command copies the function into the mod's `engine/` folder with `PORT_OVERRIDE` added.
+It refuses an existing destination; add required includes before compiling. A bare function
+name works when it selects only one definition. The engine checkout stays untouched.
+
+Engine mods can be combined with edits to executable data tables. Their edited values are
+written into the prepared source initializers before compiling. If engine code also changes
+the initializer of a table edited through JSON, the build refuses the overlap. Function changes
+that leave that initializer intact can be combined with its JSON edits. Mods without engine
+files keep the existing executable byte patches and need no container.
+
+Native tables and the SDK declarations used for script compilation are regenerated from the
+prepared engine. A mod can replace a native table using a marked global definition and add
+its function in the same unit. Its script patches then compile against the generated native
+numbers. The generated headers are under `build/mod-sdk/include/` within the prepared copy;
+the installed SDK is kept.

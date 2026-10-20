@@ -3,9 +3,12 @@
 mod asset_tree;
 mod defs;
 mod engine;
+mod engine_natives;
+mod engine_tables;
 mod files;
 mod map_cmd;
 mod modding;
+mod native;
 mod options;
 mod setup;
 mod verify;

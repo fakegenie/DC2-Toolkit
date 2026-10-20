@@ -38,6 +38,12 @@ and the output in `src/target/`). The target folder is the repository's `build/`
 `./dc2tk` at the root run it, building it first when it is missing. The
 release profile keeps limited debug info (`debug = 1`), so backtraces name functions and lines.
 
+Native builds compile portable C/C++ adapters and upstream helper units at `-O2`; memory and
+kernel C code and the decompiled engine retain `-O0`. The GS raster, memory and CLUT sources
+compile together at `-O3` allowing optimization across those files. Keep
+`-fno-strict-aliasing`, `-fwrapv`, `-ffp-contract=off` and `-fno-strict-return` when changing these flags. The native boundary
+runner checks matrix, clipping and collision outputs across `-O0` and `-O2` on the same inputs.
+
 Debug builds of this workspace grow large, over 20 GB of incremental files in a day of work.
 Where disk is short, build with
 
@@ -163,6 +169,11 @@ finds its data (`dc2tk api-docs` from the folder gives the committed pages). Eve
 the `LICENCE` (MIT), and each dc2tk zip `THIRD-PARTY-LICENCES.md`, the licences of the crates
 built into that platform's executable, which `tools/third_party_licences.py` writes from cargo's
 resolve and the crates' sources; it fails when a crate ships no licence file.
+The package also carries `port/`, engine patches and Python preparation/SDK setup helpers.
+It carries neither the engine checkout nor a native game binary. `dc2tk build --native`
+drives clang on the user's machine; `tools/native_prepare.py` only transforms source with
+ChronicleTwo's parser. `python3 -I tools/test_native_prepare.py` checks mod replay, port
+replacement stripping and conflicting overrides without a disc.
 
 ```
 git tag v1.0.0 && git push origin v1.0.0
