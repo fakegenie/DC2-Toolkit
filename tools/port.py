@@ -11,9 +11,11 @@ aborts, and build/port/missing.txt lists them by library.
 
 import argparse
 import concurrent.futures
+import importlib.util
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -28,11 +30,12 @@ BINARY = OUT / "darkchronicle"
 
 UPSTREAM_ASM = ["mg_math.cpp", "collision_asm.cpp", "gameutil_asm.cpp", "mg_drawprim_asm.cpp"]
 FLAGS = [
-    "-O0", "-g", "-fno-pie", "-fno-pic", "-DPORT", "-DPAL",
+    "-O0", "-g", "-pthread", "-fno-pie", "-fno-pic", "-DPORT", "-DPAL", "-DPORT_SOUND",
     "-fms-extensions", "-fno-strict-aliasing", "-fwrapv", "-ffp-contract=off",
     "-fno-strict-return", "-ftrivial-auto-var-init=zero",
     "-Wno-c++11-narrowing", "-Wno-register", "-Wno-return-mismatch", "-w",
 ]
+LINK_FLAGS = ["-pthread"]
 LOCALISED = {"mainloop": ["MainBuffer"], "eventedit": ["_Z10VectMatMulPfS_PA4_f"]}
 ALIASES = {
     "BuffWorkData__2": "BuffWorkData",
@@ -61,10 +64,11 @@ def patched(relative, text, patches):
         if patch["file"] != relative:
             continue
         found = text.count(patch["find"])
-        if found != 1:
-            sys.exit(f"tools/engine-patches/port.json: its text for {relative} is there {found} times, not once:\n"
+        expected = patch.get("count", 1)
+        if expected < 1 or found != expected:
+            sys.exit(f"tools/engine-patches/port.json: its text for {relative} is there {found} times, expected {expected}:\n"
                      f"{patch['find']}")
-        text = text.replace(patch["find"], patch["replace"], 1)
+        text = text.replace(patch["find"], patch["replace"], expected)
     return text
 
 
@@ -76,6 +80,15 @@ def write_if_changed(path, text):
 
 
 def copy_engine():
+    override_path = ENGINE / "tools" / "kazarov" / "scripts" / "build" / "port_override.py"
+    spec = importlib.util.spec_from_file_location("port_override", override_path)
+    overrides = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(overrides)
+    replacements = {}
+    for source in sorted((PORT / "src").glob("*.cpp")):
+        names = overrides.tagged_names(source.read_text(encoding="utf-8"))
+        if names:
+            replacements[f"ps2/src/{source.name}"] = names
     patches = json.loads((ROOT / "tools" / "engine-patches" / "port.json").read_text(encoding="utf-8"))
     sources = [path for path in sorted((ENGINE / "ps2").rglob("*"))
                if path.is_file() and path.suffix in (".cpp", ".hpp", ".h", ".inc")
@@ -86,7 +99,10 @@ def copy_engine():
             sys.exit(f"tools/engine-patches/port.json changes {patch['file']}, which the engine does not have")
     for path in sources:
         relative = path.relative_to(ENGINE).as_posix()
-        write_if_changed(COPY / relative, patched(relative, path.read_text(encoding="utf-8"), patches))
+        text = patched(relative, path.read_text(encoding="utf-8"), patches)
+        if relative in replacements:
+            text = overrides.strip(text, replacements[relative], defined=("PORT", "PAL"), long_is_64=True)
+        write_if_changed(COPY / relative, text)
     return sorted((COPY / "ps2" / "src").glob("*.cpp"))
 
 
@@ -101,15 +117,19 @@ def up_to_date(source, target, depfile):
 def compile_one(source, name):
     target = OBJ / f"{name}.o"
     depfile = OBJ / f"{name}.d"
-    if up_to_date(source, target, depfile):
-        return name, None
+    command_file = OBJ / f"{name}.command.json"
     c = source.suffix == ".c"
     command = ["clang" if c else "clang++", "-std=c11" if c else "-std=c++26", "-c", *FLAGS,
+               *(["-O2"] if not source.is_relative_to(COPY) and source.name not in ("memory.c", "kernel.c") else []),
+               *(["-O3"] if name == "port_gs_bundle" else []),
                "-MMD", "-MF", str(depfile),
                *([] if c else ["-include", str(PORT / "include" / "port.h")]),
                f"-I{PORT / 'include'}", f"-I{COPY / 'ps2' / 'include'}", f"-I{COPY / 'ps2' / 'include' / 'sce'}",
                *([f"-I{ENGINE / 'port' / 'include'}"] if name.startswith("upstream_") else []),
                f"-I{ENGINE / 'port' / 'src'}", str(source), "-o", str(target)]
+    signature = json.dumps([command, LOCALISED.get(name, []), name == "main"])
+    if up_to_date(source, target, depfile) and command_file.exists() and command_file.read_text() == signature:
+        return name, None
     result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode != 0:
         return name, result.stderr
@@ -117,15 +137,25 @@ def compile_one(source, name):
         subprocess.run(["objcopy", f"--localize-symbol={symbol}", str(target)], check=True)
     if name.startswith("upstream_"):
         subprocess.run(["objcopy", "--weaken", str(target)], check=True)
+    if name == "main":
+        subprocess.run(["objcopy", "--redefine-sym=main=port_game_main", str(target)], check=True)
+    command_file.write_text(signature, encoding="utf-8")
     return name, None
 
 
 def compile_all(units):
     jobs = [(source, source.stem) for source in units]
     jobs += [(ENGINE / "port" / "src" / name, "upstream_" + Path(name).stem) for name in UPSTREAM_ASM]
-    jobs += [(source, "port_" + source.stem) for source in sorted((PORT / "src").glob("*.c*"))]
+    jobs.append((ENGINE / "tools" / "kazarov" / "src" / "cpp" / "sce" / "libvu0.cpp", "kazarov_vu0"))
+    grouped = ("gs_memory.c", "gs_clut.c", "gs_raster.c")
+    bundle = OUT / "gs_bundle.c"
+    write_if_changed(bundle, "".join(f'#include "{PORT / "src" / name}"\n' for name in grouped))
+    jobs += [(source, "port_" + source.stem) for source in sorted((PORT / "src").glob("*.c*"))
+             if source.name not in grouped]
+    jobs.append((bundle, "port_gs_bundle"))
     OBJ.mkdir(parents=True, exist_ok=True)
-    with concurrent.futures.ThreadPoolExecutor(os.cpu_count()) as pool:
+    workers = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count() or 1
+    with concurrent.futures.ThreadPoolExecutor(min(workers, len(jobs))) as pool:
         results = list(pool.map(lambda job: compile_one(*job), jobs))
     failed = [(name, errors) for name, errors in results if errors]
     for name, errors in failed:
@@ -137,7 +167,7 @@ def compile_all(units):
 
 def link(objects, extra):
     command = ["clang++", "-no-pie", "-o", str(BINARY), *map(str, objects), *map(str, extra),
-               "-Wl,--no-demangle", *(f"-Wl,--defsym={alias}={target}" for alias, target in ALIASES.items())]
+               "-Wl,--no-demangle", *(f"-Wl,--defsym={alias}={target}" for alias, target in ALIASES.items()), *LINK_FLAGS]
     return subprocess.run(command, capture_output=True, text=True)
 
 
@@ -182,11 +212,46 @@ def write_missing(names, readable):
     return groups
 
 
+def graphics_flags(prefix):
+    include = prefix / "usr/include"
+    if not (include / "SDL3/SDL.h").exists():
+        include = prefix / "include"
+    if (include / "SDL3/SDL.h").exists():
+        libraries = []
+        for relative in ("usr/lib/x86_64-linux-gnu", "lib/x86_64-linux-gnu",
+                         "usr/lib/x86_64-linux-gnu/pulseaudio", "lib"):
+            directory = prefix / relative
+            if directory.is_dir():
+                libraries.extend([f"-L{directory}", f"-Wl,-rpath,{directory}"])
+        for library in sorted(prefix.glob("usr/lib/x86_64-linux-gnu/pulseaudio/*.so")):
+            libraries.extend(["-Wl,--no-as-needed", str(library), "-Wl,--as-needed"])
+        return [f"-I{include}"], [*libraries, "-Wl,--disable-new-dtags", "-lSDL3"]
+    try:
+        cflags = subprocess.check_output(["pkg-config", "--cflags", "sdl3"], text=True)
+        libraries = subprocess.check_output(["pkg-config", "--libs", "sdl3"], text=True)
+        return shlex.split(cflags), shlex.split(libraries)
+    except (OSError, subprocess.CalledProcessError):
+        sys.exit("SDL3 development files missing: run python3 -I tools/port_sdk.py or pass --sdl PREFIX")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--run", action="store_true", help="run the port once it is built")
+    parser.add_argument("--graphics", action="store_true", help="enable the software GS and SDL3 display")
+    parser.add_argument("--movies", action="store_true", help="enable MPEG-2 movies with the local FFmpeg SDK")
+    parser.add_argument("--sdl", type=Path, default=OUT / "sdk", help="local SDL3 installation prefix")
     parser.add_argument("arguments", nargs="*", help="arguments for the port, with --run")
     options = parser.parse_args()
+    if options.movies:
+        prefix = OUT / "movie-sdk"
+        if not (prefix / "include/libavcodec/avcodec.h").exists():
+            sys.exit("FFmpeg SDK missing: run python3 -I tools/movie_sdk.py")
+        FLAGS.extend(["-DPORT_MOVIES", f"-I{prefix / 'include'}"])
+        LINK_FLAGS.extend([f"-L{prefix / 'lib'}", f"-Wl,-rpath,{prefix / 'lib'}", "-lavcodec", "-lavutil"])
+    if options.graphics:
+        cflags, libraries = graphics_flags(options.sdl.resolve())
+        FLAGS.extend(["-DPORT_GRAPHICS", *cflags])
+        LINK_FLAGS.extend(libraries)
     if not (ENGINE / "ps2" / "src").is_dir():
         sys.exit("no engine source in engine/: run `dc2tk engine fetch`")
     objects, units, others = compile_all(copy_engine())
@@ -196,15 +261,19 @@ def main():
         sys.exit(first.stderr)
     readable = demangled(names)
     groups = write_missing(names, readable)
-    final = link(objects, [write_stubs(names, readable)] if names else [])
+    extra = [write_stubs(names, readable)] if names else []
+    final = link(objects, extra)
     if final.returncode != 0:
         sys.exit(final.stderr)
-    print(f"{units} engine units and {others} other files compiled; {len(names)} symbols stubbed "
-          f"({', '.join(f'{group} {len(items)}' for group, items in sorted(groups.items(), key=lambda g: -len(g[1])))})")
+    write_if_changed(OUT / "objects.json", json.dumps([str(path) for path in [*objects, *extra]], indent=2) + "\n")
+    summary = f"{units} engine units and {others} other files compiled; {len(names)} symbols stubbed"
+    if groups:
+        summary += f" ({', '.join(f'{group} {len(items)}' for group, items in sorted(groups.items(), key=lambda g: -len(g[1])))})"
+    print(summary)
     print(f"linked {BINARY.relative_to(ROOT)}; what is missing is in {(OUT / 'missing.txt').relative_to(ROOT)}")
     if options.run:
         sys.stdout.flush()
-        code = subprocess.run([str(BINARY), *options.arguments]).returncode
+        code = subprocess.run([str(BINARY), *(["--graphics"] if options.graphics else []), *options.arguments]).returncode
         sys.exit(128 - code if code < 0 else code)
 
 

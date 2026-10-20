@@ -88,5 +88,606 @@
     "file": "ps2/src/mg_math.cpp",
     "find": "#include \"mg_math.hpp\"\n",
     "replace": "#include \"mg_math.hpp\"\nint Check_Point_Poly3(float x, float y, float x0, float y0, float x1, float y1, float x2, float y2);\nvoid MulMatrix3(float (*matrix)[4], float (*second)[4], float (*third)[4]);\n"
+  },
+  {
+    "file": "ps2/include/dataread.hpp",
+    "find": "char *name;",
+    "replace": "char * __ptr32 name;"
+  },
+  {
+    "file": "ps2/include/dataread.hpp",
+    "find": "STATIC_ASSERT(sizeof(DATA_HEADER) == 0xC);",
+    "replace": "PORT_RECORD_ASSERT(sizeof(DATA_HEADER) == 0xC);"
+  },
+  {
+    "file": "ps2/src/mg_texture.cpp",
+    "find": "bytes = count * 0x10;",
+    "replace": "bytes = count * sizeof(mgCTextureBlock);"
+  },
+  {
+    "file": "ps2/src/mg_texture.cpp",
+    "find": "bytes = count * 0x70;",
+    "replace": "bytes = count * sizeof(mgCTexture);"
+  },
+  {
+    "file": "ps2/src/mg_texture.cpp",
+    "find": "bytes = texture_max * 4;",
+    "replace": "bytes = texture_max * sizeof(*texture_stack);"
+  },
+  {
+    "file": "ps2/src/mg_texture.cpp",
+    "find": "bytes = hash_max * 8;",
+    "replace": "bytes = hash_max * sizeof(mgTEXTURE_HASH);"
+  },
+  {
+    "file": "ps2/src/mg_texture.cpp",
+    "find": "hash_max * 8, memory->Alloc",
+    "replace": "hash_max * sizeof(mgTEXTURE_HASH), memory->Alloc"
+  },
+  {
+    "file": "ps2/src/mg_texture.cpp",
+    "find": "bytes = hash_max * 4;",
+    "replace": "bytes = hash_max * sizeof(*hash_stack);"
+  },
+  {
+    "file": "ps2/src/mg_texture.cpp",
+    "find": "(i << 4) + (uptr) blocks",
+    "replace": "(i * sizeof(mgCTextureBlock)) + (uptr) blocks"
+  },
+  {
+    "file": "ps2/src/mg_texture.cpp",
+    "find": "(bucket << 2) + (uptr) this",
+    "replace": "(bucket * sizeof(*hash_table)) + (uptr) this"
+  },
+  {
+    "file": "ps2/src/mg_texture.cpp",
+    "find": "(index << 4) + (uptr) base",
+    "replace": "(index * sizeof(mgCTextureBlock)) + (uptr) base"
+  },
+  {
+    "file": "ps2/src/mg_texture.cpp",
+    "find": "(level << 2) + (uptr) texture",
+    "replace": "(level * sizeof(*texture->image)) + (uptr) texture"
+  },
+  {
+    "file": "ps2/src/mainloop.cpp",
+    "find": "InfoBuff[5000]",
+    "replace": "InfoBuff[5000 * sizeof(void *) / 4]"
+  },
+  {
+    "file": "ps2/src/mainloop.cpp",
+    "find": "InfoStack.stSetBuffer(InfoBuff, 5000);",
+    "replace": "InfoStack.stSetBuffer(InfoBuff, sizeof(InfoBuff) / sizeof(*InfoBuff));"
+  },
+  {
+    "file": "ps2/src/scene.cpp",
+    "find": "int offset = index * 4;",
+    "replace": "int offset = index * sizeof(*this->stack);"
+  },
+  {
+    "file": "ps2/src/scene.cpp",
+    "find": "((u8 *) this + offset + 8)",
+    "replace": "((u8 *) this + offset + offsetof(CScene, stack))"
+  },
+  {
+    "file": "ps2/src/scene.cpp",
+    "find": "offset += 4;",
+    "replace": "offset += sizeof(*this->stack);"
+  },
+  {
+    "file": "ps2/src/mg_dataset.cpp",
+    "find": "if ((frame_count * 0x110) & 0xF) {",
+    "replace": "if ((frame_count * sizeof(mgCFrame)) & 0xF) {"
+  },
+  {
+    "file": "ps2/src/mg_dataset.cpp",
+    "find": "blocks = ((frame_count * 0x110) >> 4) + 1;",
+    "replace": "blocks = ((frame_count * sizeof(mgCFrame)) >> 4) + 1;"
+  },
+  {
+    "file": "ps2/src/mg_dataset.cpp",
+    "find": "blocks = (frame_count * 0x110) >> 4;",
+    "replace": "blocks = (frame_count * sizeof(mgCFrame)) >> 4;"
+  },
+  {
+    "file": "ps2/src/mg_dataset.cpp",
+    "find": "if ((mds->object_num * 4) & 0xF) {",
+    "replace": "if ((mds->object_num * sizeof(mgCFrame *)) & 0xF) {"
+  },
+  {
+    "file": "ps2/src/mg_dataset.cpp",
+    "find": "blocks = ((mds->object_num * 4) >> 4) + 1;",
+    "replace": "blocks = ((mds->object_num * sizeof(mgCFrame *)) >> 4) + 1;"
+  },
+  {
+    "file": "ps2/src/mg_dataset.cpp",
+    "find": "blocks = (mds->object_num * 4) >> 4;",
+    "replace": "blocks = (mds->object_num * sizeof(mgCFrame *)) >> 4;"
+  },
+  {
+    "file": "ps2/include/inventmn.hpp",
+    "find": "char *name;     /**< Name of the idea. */",
+    "replace": "char * __ptr32 name;     /**< Name of the idea. */"
+  },
+  {
+    "file": "ps2/include/inventmn.hpp",
+    "find": "STATIC_ASSERT(sizeof(PIC_NAME_INFO) == 0x8);",
+    "replace": "PORT_RECORD_ASSERT(sizeof(PIC_NAME_INFO) == 0x8);"
+  },
+  {
+    "file": "ps2/src/mg_drawprim.cpp",
+    "find": "u_char           unk_0[0x58];",
+    "replace": "u_char           unk_0[offsetof(mgCDrawPrim, texture)];"
+  },
+  {
+    "file": "ps2/src/mg_drawprim.cpp",
+    "find": "packet_list = (mgSORT_PACKET ***) memory->Alloc(blocks);",
+    "replace": "packet_list = (mgSORT_PACKET ***) memory->Alloc(blocks * sizeof(*packet_list) / sizeof(int));"
+  },
+  {
+    "file": "ps2/src/mg_drawprim.cpp",
+    "find": "int *a = (int *) packet_list;",
+    "replace": "mgSORT_PACKET ***a = packet_list;"
+  },
+  {
+    "file": "ps2/src/mg_drawprim.cpp",
+    "find": "int *packet = (int *) sort_table;",
+    "replace": "mgSORT_PACKET **packet = sort_table;"
+  },
+  {
+    "file": "ps2/src/mg_drawprim.cpp",
+    "find": "packet_cursor = (mgSORT_PACKET ***) memory->Alloc(group_num / 4 + 1);",
+    "replace": "packet_cursor = (mgSORT_PACKET ***) memory->Alloc(group_num * sizeof(*packet_cursor) / 16 + 1);"
+  },
+  {
+    "file": "ps2/src/mg_drawprim.cpp",
+    "find": "packet_list[i] = (mgSORT_PACKET **) memory->Alloc(size / 4 + 1);",
+    "replace": "packet_list[i] = (mgSORT_PACKET **) memory->Alloc(size * sizeof(*packet_list[i]) / 16 + 1);"
+  },
+  {
+    "file": "ps2/src/mg_drawprim.cpp",
+    "find": "offset = group << 2;",
+    "replace": "offset = group * sizeof(*packet_list);"
+  },
+  {
+    "file": "ps2/src/mg_drawprim.cpp",
+    "find": "entry = &(*(mgSORT_PACKET ***) ((u_char *) packet_list + offset))[*(int *) ((u_char *) packet_num + offset) - 1];",
+    "replace": "entry = &(*(mgSORT_PACKET ***) ((u_char *) packet_list + offset))[packet_num[group] - 1];"
+  },
+  {
+    "file": "ps2/src/mg_drawprim.cpp",
+    "find": "for (i = 0; i < *(int *) ((u_char *) packet_num + offset); i++) {",
+    "replace": "for (i = 0; i < packet_num[group]; i++) {"
+  },
+  {
+    "file": "ps2/src/sceneload.cpp",
+    "find": "stack->Alloc(0x111)",
+    "replace": "stack->Alloc((sizeof(CEditMap) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/sceneload.cpp",
+    "find": "model_stack->Alloc(0x68)",
+    "replace": "model_stack->Alloc((sizeof(CCharacter2) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/sceneload.cpp",
+    "find": "memory->Alloc(0x68)",
+    "replace": "memory->Alloc((sizeof(CCharacter2) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/sceneload.cpp",
+    "find": "stack->Alloc(0x13)",
+    "replace": "stack->Alloc((sizeof(CMapSky) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/map.cpp",
+    "find": "list_bytes = max << 2;",
+    "replace": "list_bytes = max * sizeof(*draw_parts);"
+  },
+  {
+    "file": "ps2/src/mg_tanime.cpp",
+    "find": "TexAnimeStack->Alloc(0x21)",
+    "replace": "TexAnimeStack->Alloc((sizeof(mgCTextureAnime) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/funcpoint.cpp",
+    "find": "stack->Alloc(0x20)",
+    "replace": "stack->Alloc((sizeof(CList<CFuncPoint>) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/character.cpp",
+    "find": "memory->Alloc(12)",
+    "replace": "memory->Alloc((sizeof(CSWordAfterEffect) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/monster.cpp",
+    "find": "memory->Alloc(0xC)",
+    "replace": "memory->Alloc((sizeof(CSWordAfterEffect) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/maintex.cpp",
+    "find": "stack->Alloc(12)",
+    "replace": "stack->Alloc((sizeof(CSWordAfterEffect) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/event_func.cpp",
+    "find": "scene_stack->Alloc(12)",
+    "replace": "scene_stack->Alloc((sizeof(CSWordAfterEffect) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/event_func.cpp",
+    "find": "(slot << 2) + (uptr) chara + offsetof(CCharacter2, sword_effect)",
+    "replace": "(slot * sizeof(*chara->sword_effect)) + (uptr) chara + offsetof(CCharacter2, sword_effect)",
+    "count": 3
+  },
+  {
+    "file": "ps2/src/event_func.cpp",
+    "find": "memory->Alloc(0x68)",
+    "replace": "memory->Alloc((sizeof(CCharacter2) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/editmode.cpp",
+    "find": "memory->Alloc(0x68)",
+    "replace": "memory->Alloc((sizeof(CCharacter2) + 15) / 16)",
+    "count": 3
+  },
+  {
+    "file": "ps2/src/menudraw.cpp",
+    "find": "chara = new (model_stack.Alloc(0x105)) CActionChara;",
+    "replace": "chara = new (model_stack.Alloc((sizeof(CActionChara) + 15) / 16)) CActionChara;"
+  },
+  {
+    "file": "ps2/src/menuchr.cpp",
+    "find": "npc_chara = new (stack->Alloc(0x105)) CActionChara;",
+    "replace": "npc_chara = new (stack->Alloc((sizeof(CActionChara) + 15) / 16)) CActionChara;"
+  },
+  {
+    "file": "ps2/src/menuchr.cpp",
+    "find": "MenuActionChara[i] = new (stack->Alloc(0x105)) CActionChara;",
+    "replace": "MenuActionChara[i] = new (stack->Alloc((sizeof(CActionChara) + 15) / 16)) CActionChara;"
+  },
+  {
+    "file": "ps2/src/menuchr.cpp",
+    "find": "this->monster = new (this->stack.Alloc(0x105)) CActionChara;",
+    "replace": "this->monster = new (this->stack.Alloc((sizeof(CActionChara) + 15) / 16)) CActionChara;"
+  },
+  {
+    "file": "ps2/src/menusys.cpp",
+    "find": "MenuActionChara[i] = new (MenuItemMemory2.Alloc(0x105)) CActionChara;",
+    "replace": "MenuActionChara[i] = new (MenuItemMemory2.Alloc((sizeof(CActionChara) + 15) / 16)) CActionChara;"
+  },
+  {
+    "file": "ps2/src/menusys.cpp",
+    "find": "SpectolFrame = new (MenuItemMemory2.Alloc(0x105)) CActionChara;",
+    "replace": "SpectolFrame = new (MenuItemMemory2.Alloc((sizeof(CActionChara) + 15) / 16)) CActionChara;"
+  },
+  {
+    "file": "ps2/src/mg_tanime.cpp",
+    "find": "(group << 2) + (uptr) this + 0x64",
+    "replace": "(group * sizeof(*list)) + (uptr) this + offsetof(mgCTextureAnime, list)"
+  },
+  {
+    "file": "ps2/src/menuchr.cpp",
+    "find": "MenuChangeMemory.Alloc(0x2F)",
+    "replace": "MenuChangeMemory.Alloc((sizeof(CMenuCostumeSel) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/menuchr.cpp",
+    "find": "MosBookStack.Alloc(0x9A)",
+    "replace": "MosBookStack.Alloc((sizeof(CMosBookMenu) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/menushop.cpp",
+    "find": "MenuLocalStack.Alloc(0x23)",
+    "replace": "MenuLocalStack.Alloc((sizeof(CShopMenu) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/menusys.cpp",
+    "find": "MenuItemMemory2.Alloc(0x21)",
+    "replace": "MenuItemMemory2.Alloc((sizeof(CRepairManager) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/mapselect.cpp",
+    "find": "MenuStack->Alloc(0x22)",
+    "replace": "MenuStack->Alloc((SELECT_MAP_MAX * sizeof(char *) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/mapselect.cpp",
+    "find": "stack->Alloc(0x382)",
+    "replace": "stack->Alloc((EVENT_VIEW_MAX * sizeof(EVENT_VIEW_INFO) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/mdslist.cpp",
+    "find": "memory->Alloc(0x68)",
+    "replace": "memory->Alloc((sizeof(CCharacter2) + 15) / 16)",
+    "count": 2
+  },
+  {
+    "file": "ps2/src/effscript.cpp",
+    "find": "new (memory->Alloc(0x68)) CCharacter2",
+    "replace": "new (memory->Alloc((sizeof(CCharacter2) + 15) / 16)) CCharacter2"
+  },
+  {
+    "file": "ps2/src/effscript.cpp",
+    "find": "work_memory->Alloc(0x68)",
+    "replace": "work_memory->Alloc((sizeof(CCharacter2) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/fishing.cpp",
+    "find": "memory->Alloc(0x68)",
+    "replace": "memory->Alloc((sizeof(CCharacter2) + 15) / 16)",
+    "count": 7
+  },
+  {
+    "file": "ps2/src/fishing.cpp",
+    "find": "EsaStack.Alloc(0x68)",
+    "replace": "EsaStack.Alloc((sizeof(CCharacter2) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/character.cpp",
+    "find": "(mgIMG_FILE_HEADER **) ((u8 *) this + offset + 0x2C4)",
+    "replace": "&images[j]"
+  },
+  {
+    "file": "ps2/src/dngmenu.cpp",
+    "find": "MenuTreeMapStack.Alloc(0x2FC0)",
+    "replace": "MenuTreeMapStack.Alloc((sizeof(CMenuTreeMap) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/dngmenu.cpp",
+    "find": "MenuTreeMapStack.Alloc(0x13)",
+    "replace": "MenuTreeMapStack.Alloc((sizeof(CDngFreeMap) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/automap.cpp",
+    "find": "mem->Alloc(0x62)",
+    "replace": "mem->Alloc((AUTOMAP_ROOM_INFO_MAX * sizeof(AUTOMAP_ROOM_INFO) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/title.cpp",
+    "find": "DataBuffer.Alloc(0x1C)",
+    "replace": "DataBuffer.Alloc((sizeof(TITLE_INFO) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/title.cpp",
+    "find": "DataBuffer.Alloc(0x112)",
+    "replace": "DataBuffer.Alloc((sizeof(CMemoryCardManager) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/editmenu.cpp",
+    "find": "MenuGeoramaStack.Alloc(0x1B92)",
+    "replace": "MenuGeoramaStack.Alloc((sizeof(CMenuGeorama) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/editmenu.cpp",
+    "find": "MenuGeoramaStack.Alloc(0x152)",
+    "replace": "MenuGeoramaStack.Alloc((sizeof(CRemovalMenu) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/editexception.cpp",
+    "find": "memory->Alloc(7)",
+    "replace": "memory->Alloc((sizeof(mgC3DSprite) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/editexception.cpp",
+    "find": "memory->Alloc(0x22)",
+    "replace": "memory->Alloc((4 * sizeof(CGeyserEffect) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/editeff.cpp",
+    "find": "memory->Alloc(0x42)",
+    "replace": "memory->Alloc((sizeof(CPaintEffect) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/editeff.cpp",
+    "find": "CurPartsBuff.Alloc(0x33)",
+    "replace": "CurPartsBuff.Alloc((sizeof(CMapParts) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/movieviewlp.cpp",
+    "find": "main_stack->Alloc(0x2396)",
+    "replace": "main_stack->Alloc((sizeof(CMovie) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/movieviewlp.cpp",
+    "find": "main_stack->Alloc(0x32)",
+    "replace": "main_stack->Alloc((64 * sizeof(MOVIE_LIST_ENTRY) + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/dng_event.cpp",
+    "find": "(mgCMemory *) (monster_man + offset + 4)",
+    "replace": "&ActiveMonster->memory[i]"
+  },
+  {
+    "file": "ps2/src/dng_object.cpp",
+    "find": "offset += 0x190;",
+    "replace": "offset += sizeof(CRocketLauncher);",
+    "count": 2
+  },
+  {
+    "file": "ps2/src/dng_object.cpp",
+    "find": "offset += 0x130;",
+    "replace": "offset += sizeof(CLaserGun);",
+    "count": 2
+  },
+  {
+    "file": "ps2/src/editmap.cpp",
+    "find": "s8 *part = (s8 *) edit_parts + offset;",
+    "replace": "CEditParts *part = &edit_parts[i];"
+  },
+  {
+    "file": "ps2/src/editmap.cpp",
+    "find": "int is_free = part[0x70] == 0;",
+    "replace": "int is_free = part->name[0] == 0;"
+  },
+  {
+    "file": "ps2/src/villagermngr.cpp",
+    "find": "*(CVillagerPlaceInfo **) ((u8 *) (time * sizeof(void *)) + (uptr) schedule + alternative_offset + 8)",
+    "replace": "schedule->place[alternative][time]"
+  },
+  {
+    "file": "ps2/src/villagermngr.cpp",
+    "find": "*(CVillagerPlaceInfo **) ((u8 *) (time * sizeof(void *)) + (uptr) schedule + fallback_offset + 8)",
+    "replace": "schedule->place[fallback_alternative][time]"
+  },
+  {
+    "file": "ps2/src/villagermngr.cpp",
+    "find": "*(CVillagerPlaceInfo **) ((u8 *) places + output_position)",
+    "replace": "places[found]"
+  },
+  {
+    "file": "ps2/src/villagermngr.cpp",
+    "find": "*(CVillagerPlaceInfo **) ((u8 *) places + fallback_output_position)",
+    "replace": "places[found]"
+  },
+  {
+    "file": "ps2/src/event_func.cpp",
+    "find": "(RS_STACKDATA *) ((uptr) stack + 0x18)",
+    "replace": "stack + 3"
+  },
+  {
+    "file": "ps2/src/event_func.cpp",
+    "find": "(RS_STACKDATA *) ((uptr) stack + 0x30)",
+    "replace": "stack + 6"
+  },
+  {
+    "file": "ps2/src/event_func.cpp",
+    "find": "(RS_STACKDATA *) ((u8 *) stack + 0x18)",
+    "replace": "stack + 3"
+  },
+  {
+    "file": "ps2/src/map.cpp",
+    "find": "count * 0x30;",
+    "replace": "count * sizeof(CObjAnime);"
+  },
+  {
+    "file": "ps2/src/map.cpp",
+    "find": "count * 0x680;",
+    "replace": "count * sizeof(CMapTreasureBox);"
+  },
+  {
+    "file": "ps2/include/userdata.hpp",
+    "find": "char *image; /**< Byte view of the photo's 64x64 packed 16-bit pixels. */",
+    "replace": "char * __ptr32 image; /**< Byte view of the photo's 64x64 packed 16-bit pixels. */"
+  },
+  {
+    "file": "ps2/include/userdata.hpp",
+    "find": "STATIC_ASSERT(sizeof(USER_PICTURE_INFO) == 0x18);",
+    "replace": "PORT_RECORD_ASSERT(sizeof(USER_PICTURE_INFO) == 0x18);"
+  },
+  {
+    "file": "ps2/include/userdata.hpp",
+    "find": "STATIC_ASSERT(sizeof(CInventUserData) == 0x3CE60);",
+    "replace": "PORT_RECORD_ASSERT(sizeof(CInventUserData) == 0x3CE60);"
+  },
+  {
+    "file": "ps2/include/userdata.hpp",
+    "find": "STATIC_ASSERT(sizeof(CUserDataManager) == 0x457A0);",
+    "replace": "PORT_RECORD_ASSERT(sizeof(CUserDataManager) == 0x457A0);"
+  },
+  {
+    "file": "ps2/include/savedata.hpp",
+    "find": "STATIC_ASSERT(sizeof(CSaveData) == 0x65930);",
+    "replace": "PORT_RECORD_ASSERT(sizeof(CSaveData) == 0x65930);"
+  },
+  {
+    "file": "ps2/include/memcard.hpp",
+    "find": "STATIC_ASSERT(sizeof(SAVEDATA_FORMAT) == 0x659C0);",
+    "replace": "PORT_RECORD_ASSERT(sizeof(SAVEDATA_FORMAT) == 0x659C0);"
+  },
+  {
+    "file": "ps2/include/inventmn.hpp",
+    "find": "STATIC_ASSERT(sizeof(CDC2AlbumData) == 0x64CB0);",
+    "replace": "PORT_RECORD_ASSERT(sizeof(CDC2AlbumData) == 0x64CB0);"
+  },
+  {
+    "file": "ps2/src/automap.cpp",
+    "find": "for (int j = 0; PartsInfoData[j].name != NULL; j++) {",
+    "replace": "for (int j = 0; j < AUTOMAP_PARTS_INFO_NUM && PartsInfoData[j].name != NULL && PartsInfoData[j].name[0] != 0; j++) {"
+  },
+  {
+    "file": "ps2/include/runscript.hpp",
+    "find": "STATIC_ASSERT(sizeof(RS_CALLDATA) == 0xC);",
+    "replace": "STATIC_ASSERT(sizeof(RS_CALLDATA) == 0xC);\n\nconstexpr int RS_MONSTER_MEMORY_QUADWORDS = 4000 + (128 * sizeof(RS_STACKDATA) + 512 * sizeof(RS_CALLDATA) - 7168 + 15) / 16;"
+  },
+  {
+    "file": "ps2/src/dng_event.cpp",
+    "find": "memory->stAlloc64(4000)",
+    "replace": "memory->stAlloc64(RS_MONSTER_MEMORY_QUADWORDS)"
+  },
+  {
+    "file": "ps2/src/dng_event.cpp",
+    "find": "slot->stSetBuffer(buffer, 4000)",
+    "replace": "slot->stSetBuffer(buffer, RS_MONSTER_MEMORY_QUADWORDS)"
+  },
+  {
+    "file": "ps2/src/dng_event.cpp",
+    "find": "memory->stAlloc64(0xFA0)",
+    "replace": "memory->stAlloc64(RS_MONSTER_MEMORY_QUADWORDS)"
+  },
+  {
+    "file": "ps2/src/dng_event.cpp",
+    "find": "(slot)->stSetBuffer((u_long128 *) buffer, 0xFA0)",
+    "replace": "(slot)->stSetBuffer((u_long128 *) buffer, RS_MONSTER_MEMORY_QUADWORDS)"
+  },
+  {
+    "file": "ps2/src/dng_debug.cpp",
+    "find": "stack->stAlloc64(0xFA0)",
+    "replace": "stack->stAlloc64(RS_MONSTER_MEMORY_QUADWORDS)"
+  },
+  {
+    "file": "ps2/src/dng_debug.cpp",
+    "find": "memory->stSetBuffer(buffer, 0xFA0)",
+    "replace": "memory->stSetBuffer(buffer, RS_MONSTER_MEMORY_QUADWORDS)"
+  },
+  {
+    "file": "ps2/src/event_func.cpp",
+    "find": "monster_stack->stAlloc64(0xFA0)",
+    "replace": "monster_stack->stAlloc64(RS_MONSTER_MEMORY_QUADWORDS)"
+  },
+  {
+    "file": "ps2/src/event_func.cpp",
+    "find": "memory->stSetBuffer(buffer, 0xFA0)",
+    "replace": "memory->stSetBuffer(buffer, RS_MONSTER_MEMORY_QUADWORDS)"
+  },
+  {
+    "file": "ps2/include/mg_memory.hpp",
+    "find": "u_long128      *data;",
+    "replace": "u_long128 * __ptr32 data;"
+  },
+  {
+    "file": "ps2/include/mg_memory.hpp",
+    "find": "mgMEMORY_BLOCK *next;",
+    "replace": "mgMEMORY_BLOCK * __ptr32 next;"
+  },
+  {
+    "file": "ps2/include/mg_memory.hpp",
+    "find": "STATIC_ASSERT(sizeof(mgMEMORY_BLOCK) == 0x10);",
+    "replace": "PORT_RECORD_ASSERT(sizeof(mgMEMORY_BLOCK) == 0x10);"
+  },
+  {
+    "file": "ps2/include/effscript.hpp",
+    "find": "STATIC_ASSERT(sizeof(_EFF_SCRIPT) == 0x150);",
+    "replace": "STATIC_ASSERT(sizeof(_EFF_SCRIPT) == 0x150);\n\nconstexpr int EFF_SPT_RUNTIME_QUADWORDS = (sizeof(_EFF_SCRIPT) + 15) / 16 + 2 + (sizeof(CCharacter2) + 15) / 16 + 2 + (64 * sizeof(RS_STACKDATA) + 15) / 16 + (2 * sizeof(RS_CALLDATA) + 15) / 16 + 3;"
+  },
+  {
+    "file": "ps2/src/effscript.cpp",
+    "find": "base[index]->work_size = 0x7D;\n        base[index]->work_size += 0x24;",
+    "replace": "base[index]->work_size = EFF_SPT_RUNTIME_QUADWORDS;"
+  },
+  {
+    "file": "ps2/src/effscript.cpp",
+    "find": "base->work_size = base->work_size + 0x7D;\n        base->work_size = base->work_size + 0x24;",
+    "replace": "base->work_size += EFF_SPT_RUNTIME_QUADWORDS;"
+  },
+  {
+    "file": "ps2/src/effscript.cpp",
+    "find": "count * (script->chara->GetCopySize() + 0x68)",
+    "replace": "count * (script->chara->GetCopySize() + align16_blocks(sizeof(CCharacter2))) + 3"
+  },
+  {
+    "file": "ps2/src/effscript.cpp",
+    "find": "memory->Alloc(sizeof(RS_CALLDATA) * 2 / 16)",
+    "replace": "memory->Alloc((sizeof(RS_CALLDATA) * 2 + 15) / 16)"
   }
 ]

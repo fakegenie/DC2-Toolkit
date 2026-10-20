@@ -4,6 +4,7 @@
 /out/
 /mods/
 /backups/
+/saves/
 *.stb
 *.STB
 /*.asm
