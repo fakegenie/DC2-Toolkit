@@ -8,28 +8,139 @@ the submodule, `engine/...`.
 
 ### Where things stand
 
-| Milestone | State |
-|---|---|
-| E1 the engine as a submodule, built and verified | done |
-| E2 a build that an edited engine relinks in | built; the PCSX2 boot is the user's to try |
-| E3 engine mods for the ISO | next: tasks below |
-| E4 executable tables and natives from source | after E3 |
-| P0 compile spike | done; `tools/port.py` reproduces it |
-| P1 headless boot | next: tasks below |
-| P2 to P6 | later, in order |
+Reviewed 2026-10-20, after an agent worked overnight from the tasks this file held. Its work
+(about 15,700 new lines and 1,850 changed) is committed on the branch `engine`. "Checked in
+review" means rerun on 2026-10-20; the rest is the overnight agent's record, with its evidence
+under `build/` (not in git).
 
-The E and P tracks are independent until P6. Work on the branch `engine`; never push, merge or
-change `main` without the user.
+| Milestone | Built | Checked in review | Open |
+|---|---|---|---|
+| E1 the engine as a submodule | yes | `engine verify dc2.iso`: every section retail's | |
+| E2 a build an edited engine relinks in | yes | | the PCSX2 boot of the 50,000-money edit |
+| E3 engine mods for the ISO | yes, with `original()`, replaced headers, new units and `mod override engine` | Rust tests; `tools/test_engine_mods.py` | PCSX2 play; fixes 3, 4, 13 |
+| E4 executable tables and natives from source | yes, every table but `data:parts` | Rust tests | `data:parts`; fixes 4, 5, 14 |
+| P0 compile spike | yes | | |
+| P1 headless boot | yes | boots `dc2.iso` to the language selector | |
+| P2 graphics | DMA, VIF, VU1 interpreter, software GS, SDL3 window | `tools/port.py --graphics --movies` builds clean (149 units, 34 files, no stubs); `port/tests/run.py --iso dc2.iso` passes | PAL speed; PCSX2 comparison; a real display |
+| P3 input | SDL keyboard and gamepad as a DualShock 2 | | a human playing it |
+| P4 sound | SPU2 voices, ADSR, reverb, the sound RPCs | the port suite's sound and MIDI checks | listening against retail; a real audio device |
+| P5 saves and movies | memory cards as folders; MPEG-2 movies | the port suite's card checks; the retail logo (150 frames) and tutorial (1,275) movies decode | console-made saves |
+| P6 native mods | `dc2tk build --native`, the executable hash check, `mod check` with clang | `tools/test_native_prepare.py` | PCSX2 parity; fixes 3, 6, 11 |
+
+What the overnight agent recorded, and which the review did not rerun:
+
+- **Play, through a replay harness** (`port/tests/gameplay.py`, controller reports injected at
+  the input boundary, SDL's dummy video and audio drivers): the castle tutorial and its soldiers;
+  Palm Brinks and Cedric's workshop; a save through the game's own menu and Continue in a new
+  process (416,192-byte saves, the retail record layout); the circus clowns; the whole opening
+  movie, `OPEN1.PSS`; Underground Channel floor one with combat, item use and the key. Melee hits
+  in the corridor and the floor's exit are unchecked. Approaching the gate crashed (SIGSEGV); the
+  effect-heap substitutions in `port.json` fix the cause found in the core dump, but no run has
+  reached the gate since.
+- **Native bugs found and fixed by play:** a texture whose TEX0 stride is zero; the minimap's
+  `PartsInfoData` loop running past its end; monster script arenas too small for native record
+  sizes; streamed audio stuck at END; effect and subcharacter heap reservations too small.
+- **E3, E4 and P6 together:** one fixture mod (a dungeon override, free and member `original()`,
+  a replaced header, a new unit, a Donny shop edit, a new native and a texture) builds both the
+  ISO and the native binary; the binary records the ISO executable's hash, the native call
+  returns its status, and the replaced title picture shows.
+- **The golden run** (`tools/golden.sh`) passed on the full disc: 18,874 files match the baseline
+  and every image built with nothing edited keeps retail's executable.
+- **Speed:** the software GS runs below 50 frames a second. Measurements, traces and a serial
+  reference renderer are under `build/validation/gs-performance`.
+- **The machine rebooted** at 21:24 on 2026-10-19 during a long trace capture, cause unknown.
+  Docker's images were gone afterwards (rebuilt in review). Run one heavy workload at a time on
+  four CPUs (`taskset -c 0-3`, `DC2TK_GS_THREADS=4`).
+- **No PCSX2 or PS2 BIOS** is available on this machine (the user confirmed), so every comparison
+  with PCSX2 is the user's.
+
+Save checkpoints to resume play from, in `build/validation/crash-recovery/`: `first-game-save`
+(Palm Brinks), `before-circus-save`, `underground-entrance-save` and
+`first-floor-selection-save`.
+
+### Fixes, in order
+
+The review read every new file and found no decompiled code copied into the repository: the 137
+substitutions in `port.json` are one to four lines each, and the port's 10 replaced engine
+functions (8 in the movie code, `WaitVSync`, `mgSetRotateThread`) and its asm replacements are
+written fresh. These are what it found to fix:
+
+1. **Done:** the overnight work is committed on `engine`, unchanged from what the review checked:
+   the native tables' parser, the port, engine mods for the ISO and the port, and this plan.
+   `build/` stays out of git; it holds the evidence above.
+2. **The port's allocator.** `port/src/memory.c:174-245` replaces `malloc`, `free`, `calloc`,
+   `realloc`, `posix_memalign` and `aligned_alloc` for the whole process with a 64 MB arena at
+   `0x08000000` that SDL, PulseAudio, Mesa and libavcodec share; `memalign`, `valloc` and
+   `pvalloc` still reach glibc, so a library calling them hands our `free` a foreign pointer;
+   `free` walks every block under a spinlock the GS workers also take; the startup check accepts
+   an `_end` up to `0x10000000` though the arena needs it below `0x08000000`; and an exhausted
+   arena returns NULL without a word. Only the engine needs low addresses: give the engine's
+   objects their own allocator (`objcopy --redefine-sym` of `malloc`, `free`, `operator new` and
+   `delete` in engine objects, as `main` already becomes `port_game_main`), leave the rest of the
+   process on glibc, check `_end` against the arena, and stop with a message when it runs out.
+3. **`mod check` always builds the native port** for engine mods (`modding/check.rs:57-66`),
+   which fails on Windows, macOS and any Linux without SDL3, and costs a full native compile.
+   Make the native check `--native`, as `build` has it.
+4. **Units whose tables are written as source lose Satan's Fiddle's profile**
+   (`engine.rs:526-547`), so a `data:monsters` edit beside any engine mod recompiles all of
+   `monster.cpp` without retail's codegen. Keep the profile for units whose only change is
+   tables, and after the link compare each edited table's bytes in the built ELF (found through
+   the `.xMAP`) with the bytes the byte-patch path would have written.
+5. **`data:parts` has no source path** (`engine_tables.rs:35-196`): `PartsInfoData`, the part
+   names at `0x36C708` and `MiniMapInfoData`. It is refused loudly today; implement it, with a
+   test that pins it.
+6. **`--native`'s default path** (`modding/build.rs:63`) is relative to the current folder, not
+   the repository's `build/`; and `--native FILE --dry-run` ignores FILE.
+7. **One native build.** `tools/port.py` and `src/crates/dc2tk/src/native.rs` each carry the
+   flags, aliases, localised symbols, the GS bundle and Kazarov's `libvu0.cpp`. Keep them in
+   dc2tk and make `tools/port.py` a thin call to `dc2tk build --native` (or drop it), so they
+   cannot drift.
+8. **CPU use.** `gs_raster.c:166-169` sizes its workers from the online CPUs, not the allowed
+   affinity; `tools/movie_sdk.py:76` runs `make -j8`. Both should follow the affinity.
+9. **Debugging in the shipping binary:** the screenshot hook (`present.c:56-68`,
+   `DC2TK_SCREENSHOT`), the GS tuning variables (`DC2TK_GS_BAND_PIXELS`, `_BALANCE`, `_BATCH`)
+   and statistics, `cdvd.c`'s 1 MB index scanned on every read to log archive members, and the
+   log line for every file opened. Move them into the test build (as the replay wrapper is) or
+   behind one logging switch.
+10. **`dma_chain.c:44-66` parses `/proc/self/maps` on every DMA kick** and fails past 1,024
+    regions. The port lays out the memory itself; record the valid ranges once at start.
+11. **`port/tests/run.py:59-80`** writes patched engine sources into a temporary folder under
+    `/tmp`; write them under `build/port/tests/` instead. `tools/port.py:129` gives every unit
+    `-I engine/port/src`, which only the four upstream asm units need. `-DPORT_SOUND` is always
+    on, so its conditionals switch nothing: remove them.
+12. **The effect-heap substitutions** (`port.json` #132-136): with PS2 sizes the new formula gives
+    166 quadwords against retail's 161; #135 adds an unexplained `+ 3` no test covers; #136
+    changes nothing on x86-64. Make the formula give retail's count with PS2 sizes, test the
+    `+ 3` or drop it, and drop #136.
+13. **Build copies** have no lock (two builds of one mod set share `build/engine/mods-<hash>`, and
+    every native build shares `build/port/native-*`), and old `mods-*` copies are never removed.
+    Header mods without a fetched engine fail with a confusing message instead of "run
+    `dc2tk engine fetch`".
+14. **The native tables' parser now masks strings and comments** (a fix: Shift-JIS bytes in
+    `_SHOT`'s strings ran it into later functions), which changes `_SHOT`'s accessors from the
+    committed 42 to one. Regenerate `definitions/natives/` with `dc2tk natives engine` and say so
+    in the commit; script bytes do not change.
+15. **Style:** `native.rs` lacks its `//!` line; `build.rs:63-66` uses `help = "..."` where the
+    crate uses `///`; `python_in_container` runs Python without `-I`; `tools/native_prepare.py`,
+    `tools/test_native_prepare.py` and `port/tests/native_save.py` lack the usage docstring.
+16. **Disk:** `build/` is 33 GB, 22 GB of it `build/validation` (traces and captures). Once the
+    work is committed, keep the save checkpoints and delete the traces.
+
+### Gates only the user can run
+
+- E2, E3, E4: the modded images in PCSX2 or on a PS2.
+- P2 to P6: the port in a real window with real sound (this machine has run it only with SDL's
+  dummy drivers), compared with PCSX2; a human playing it; sustained 50 frames a second.
 
 ### Read first
 
 - This file, then [src/docs/development.md](src/docs/development.md) (dc2tk's rule and checks)
   and [src/README.md](src/README.md) (the crates).
-- `src/crates/dc2tk/src/engine.rs`: `dc2tk engine build/verify/fetch`, the copy step and the patch
-  substitutions.
-- `tools/engine-patches/ps2.json` and `port.json`: every change made to the engine's files, as
-  exact text substitutions.
-- `tools/port.py`: the port's build until P6 moves it into dc2tk.
+- `src/crates/dc2tk/src/engine.rs` (the copies, patches and container builds), `engine_tables.rs`
+  (executable tables as source), `engine_natives.rs`, `native.rs` (`build --native`).
+- `tools/engine-patches/ps2.json` and `port.json`, `tools/engine_mods.py` (`original()`, headers,
+  new units, `mod override engine`) and `tools/native_prepare.py`.
+- `port/src`, and `port/tests/run.py` for what each part is checked by.
 - ChronicleTwo's `engine/docs/vu1/*.md`, `engine/docs/SOUND_DAT.md`, `engine/docs/MWCC.md` and
   `engine/docs/SATANSFIDDLE.md` when a task reaches them.
 
@@ -38,66 +149,81 @@ change `main` without the user.
 - **No decompiled code in this repository.** The engine stays in the submodule, and nobody edits
   `engine/`. Every build works on a copy under `build/`. What has to change in the engine's files
   is a substitution in `tools/engine-patches/*.json`, and only token-sized ones in game source
-  (`void` to `int`, one declaration, one literal), never a function body. A larger change is a
-  function replaced on the copy. Test mods written for checks use bodies of our own, never a copy
-  of a decompiled one.
+  (a type, a size, one declaration, one literal), never a function body. A larger change is a
+  function replaced on the copy, written fresh. Test mods use bodies of our own, never a copy of
+  a decompiled one. Decompiled source is written only under `build/`.
 - **dc2tk's rule:** a disc image built with nothing edited is retail's, byte for byte
   (development.md). With no engine change, the disc keeps retail's `SCES_511.90`. After any change
   to the PS2 patches, `dc2tk engine verify` must still say every section is retail's.
 - **The port runs the game as the PS2 did:** retail formats read from the ISO, the original `.stb`
   scripts on the original VM, PAL timing at 50 Hz, the GS's own resolution. No 60 fps, no
-  converted data, no replaced textures, no other scripting language, nothing from ChronicleTwo's
-  `port/` but the four asm files `tools/port.py` names. Kazarov's `src/cpp/sce` (MIT) may be read
-  for how a library behaves.
+  converted data, no replaced textures, no other scripting language. From ChronicleTwo's `port/`
+  only the four asm files are built, and from Kazarov's `src/cpp/sce` only `libvu0.cpp` (MIT);
+  the rest of `sce` may be read for how a library behaves.
+- **Test code stays out of the shipping binary:** the replay harness, traces and profiling link
+  only into the test builds.
 - **Code:** functions and plain data; no classes, wrappers or higher-order helpers in code of our
   own. No comments, except what the conventions need to work: the one-line `//!` module doc and
   clap's `///` help text in Rust, and a usage docstring at the top of a Python tool. The port is
-  C (C11) except where an engine type makes C++ necessary.
+  C (C11) except where an engine type or a mangled name makes C++ necessary.
 - **Prose** (docs, commit messages) is plain and direct, in the style of the existing docs and
   `git log`.
-- **Ask the user** before installing anything system-wide (SDL3 for P2) and before anything that
-  needs sudo.
+- **Ask the user** before installing anything system-wide and before anything that needs sudo.
+  Never push, merge or change `main` without the user.
 
 ### This machine
 
 - Linux x86-64 with clang 21, binutils, Python 3 and Docker. No Rust, cmake, ninja, pkg-config or
-  SDL3. No disc image and no PCSX2: gates that need either are the user's to run.
-- **Rust runs in Docker.** The image `dc2tk-rust` (rust:1-trixie with rustfmt and clippy) is
-  built. Run cargo as:
+  system SDL3. The retail disc is `dc2.iso` in the repository root; a retail `SCES_511.90` alone is
+  also at `/home/dev/projects/decomp-bench/artifacts/chronicletwo/rom/pal/extracted/iso/`.
+- **Rust runs in Docker**, in the image `dc2tk-rust`. If it is missing, make it:
 
   ```
-  docker run --rm --user $(id -u):$(id -g) -e CARGO_HOME=/cargo -e CARGO_INCREMENTAL=0 \
-      -v "$HOME/.cache/dc2tk-cargo:/cargo" -v "$PWD:$PWD" -w "$PWD/src" dc2tk-rust cargo build --release
+  printf 'FROM rust:1-trixie\nRUN rustup component add rustfmt clippy\n' | docker build -t dc2tk-rust -
   ```
 
-  from the repository root (`mkdir -p ~/.cache/dc2tk-cargo` first). The binary lands in
-  `build/release/dc2tk`, which `./dc2tk` runs.
-- **Kazarov's image** `kazarov-dev:01b70a4a6008` is built; `dc2tk engine` finds it by itself.
-- **The retail executable** (no ISO) is at
-  `/home/dev/projects/decomp-bench/artifacts/chronicletwo/rom/pal/extracted/iso/SCES_511.90`
-  (SHA-256 `41dec168…`, as ChronicleTwo expects). `dc2tk engine build/verify` take it in place of
-  a disc.
-- **Times:** `engine verify` from nothing takes about 5 minutes and an unchanged rebuild under a
-  second; one edited unit relinks in about 14 s. `tools/port.py` builds the port in about 6 s.
+  then run cargo from the repository root (`mkdir -p ~/.cache/dc2tk-cargo` once):
+
+  ```
+  docker run --rm --cpuset-cpus=0-3 --user $(id -u):$(id -g) -e CARGO_HOME=/cargo \
+      -e CARGO_INCREMENTAL=0 -v "$HOME/.cache/dc2tk-cargo:/cargo" -v "$PWD:$PWD" -w "$PWD/src" \
+      dc2tk-rust cargo build --release
+  ```
+
+  The binary lands in `build/release/dc2tk`, which `./dc2tk` runs.
+- **Kazarov's image** `kazarov-dev:01b70a4a6008` is made by `dc2tk engine` when missing (a few
+  minutes).
+- **The port's SDKs**, both under `build/port/`: `python3 -I tools/port_sdk.py` copies SDL3 and
+  its libraries out of Kazarov's image (Debian's, linked by absolute rpath, so the binary runs
+  only here); `python3 -I tools/movie_sdk.py` builds FFmpeg 8.0.1's MPEG-2 decoder from the
+  checksummed release, as shared libraries.
+- **Running the port:** `python3 -I tools/port.py --graphics --movies`, then
+  `SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy DC2TK_GS_THREADS=4 build/port/darkchronicle
+  --graphics dc2.iso` headless. Keys: WASD move, F/H/T/G camera, arrows the D-pad, I/J/K/L
+  triangle/square/cross/circle, Q/E L1/R1, 1/3 L2/R2, C/V L3/R3, Enter Start, Backspace Select.
+  Saves go to `DC2_SAVE_ROOT` (default `./saves`, ignored by git).
+- **The replay harness:** `python3 -I port/tests/gameplay.py --profile` links
+  `build/port/replay/darkchronicle`; `DC2TK_REPLAY_FIELDS`, `DC2TK_REPLAY_SKIP` and
+  `DC2TK_REPLAY_FIGHT` steer it. Routes are in `build/validation/crash-recovery/routes.md`.
+- **The scratch folder under `/tmp` is cleared by a reboot.**
+- **Times:** `engine verify` from nothing about 5 minutes; one edited unit relinks in about 14 s;
+  `tools/port.py --graphics --movies` from clean objects 11 s on four CPUs.
 
 ### Checks
 
 - `cargo fmt --all`, then `cargo clippy --release -p <crate> --no-deps --all-targets -- -D warnings`
-  for each crate changed, then `cargo test --release -p <crate>`.
+  for each crate changed, then `cargo test --release -p <crate>` for each, one at a time (a
+  failing crate stops cargo before the next).
 - Two failures predate this work and are not yours to fix: the `dc2tk-disc` test
   `a_disc_is_not_written_over_the_image_it_is_made_from` fails on Linux, and clippy 1.99 reports
   `single_element_loop` in `dc2tk-assets` (hence `--no-deps` and `-p`).
-- `./dc2tk engine verify <SCES_511.90>` after touching `ps2.json` or the copy step.
-- `python3 -I tools/port.py` after touching `port.json`, `port/` or `tools/port.py`; `--run`
-  runs the result.
-
-### Without a disc image
-
-E3 and E4 can be built and checked here: build the engine, then read the link map
-(`build/engine/<copy>/build/pal/SCES_511.90.xMAP`) and disassemble the changed function
-(`llvm-objdump-21 -d --triple=mipsel-unknown-linux-gnu --start-address=… --stop-address=…`), as
-E2's test edit was checked. P1 can be built up to the first file the game reads; past that it
-needs the ISO, which the user can put at `dc2.iso` in the repository root (`*.iso` is ignored).
+- `./dc2tk engine verify dc2.iso` after touching `ps2.json` or the copy step.
+- `python3 -I tools/test_engine_mods.py` and `python3 -I tools/test_native_prepare.py`: engine-mod
+  and native preparation, without Docker or a disc.
+- `python3 -I port/tests/run.py --iso dc2.iso`: the port's boundary checks and the retail movies.
+- `python3 -I tools/port.py --graphics --movies` after touching `port.json`, `port/` or
+  `tools/port.py`, and a headless boot to the language selector.
+- `tools/golden.sh` for anything that can reach what dc2tk writes (development.md).
 
 ## The shape
 
@@ -111,23 +237,22 @@ PCSX2, on a PS2 and natively.
 
 - **The engine stays upstream.** ChronicleTwo (MIT) is a submodule at `engine/`, pinned to a
   commit, with its own Kazarov submodule. No decompiled code is committed here and nobody edits
-  the checkout: builds change a copy under `build/`. Changes to its build scripts, and the few
-  token-sized substitutions clang needs in its game source, live here as patches in
-  `tools/engine-patches/`; no decompiled function is ever copied here, and what the port or a mod
-  needs different beyond that is done by replacing functions on the copy.
+  the checkout: builds change a copy under `build/`. Changes to its build scripts, and the
+  token-sized substitutions clang and the 64-bit port need in its game source, live here as
+  patches in `tools/engine-patches/`; no decompiled function is ever copied here, and what the
+  port or a mod needs different beyond that is done by replacing functions on the copy.
 - **Releases carry no engine.** Neither engine source nor a native binary: users build the port
   with dc2tk, clang and SDL3, as they build an edited executable with dc2tk and Docker. A release
-  zip has `engine.commit` and `tools/engine-patches/`.
+  zip has `engine.commit`, `tools/engine-patches/`, the Python helpers and `port/`.
 - **The port is minimal and runs the game as the PS2 did** (see Rules). ChronicleTwo's own port
   (519 overridden game functions, Luau, a converted `data.zip`) is not used.
 - **Mods can change engine code**, and the change works in the ISO build and in the port.
-- **The port is emulated at the SDK and IOP boundary.** The game's 149 units compile unchanged
-  and call the `sce*` functions they call on a PS2; the port supplies those functions and the
-  hardware behind them.
+- **The port is emulated at the SDK and IOP boundary.** The game's 149 units compile with token
+  substitutions and call the `sce*` functions they call on a PS2; the port supplies those
+  functions and the hardware behind them.
 - **Saves** are a folder per memory card. **Movies** decode with libavcodec, linked dynamically.
 - Engine builds for the ISO need Docker on every OS (Docker Desktop on Windows); the port is Linux
-  x86-64 only. `tools/port.py` builds the port until P6, when dc2tk drives clang itself, without
-  CMake.
+  x86-64 only, built by `dc2tk build --native`, which drives clang itself, without CMake.
 
 ## Part 1: the engine in dc2tk
 
@@ -169,101 +294,52 @@ nothing loads).
 
 ### A build mode for edited engines
 
-Upstream has only the matching build. An edited engine meets these:
-
 | Hazard | Where | State |
 |---|---|---|
-| Absolute symbols: `CHA_DEV_FONT_PIECE_*` and `D_1F64A00` (crt0's BSS end and heap start) | `engine/ps2/config/pal/SCES_511.90.lcf:1474-1481` | done in `ps2.json`: the font pieces dropped (libdev's object defines them), `D_1F64A00 = __bss_end` |
-| Every retail-named data section gets alignment 1 and is padded to retail; an object whose size changed is skipped silently | `engine/scripts/build/postprocess_object.py:1791-1792` | done in `ps2.json`: the compiler's alignment is kept |
-| The default target verifies against retail | `engine/ps2/CMakeLists.txt:263-268` | done: `engine build` builds the `elf` target |
-| `_stack` is fixed at `0x01F80000`; retail BSS ends at `0x01F64A00`, and the C library's heap is the 110 KB between | `SCES_511.90.lcf:1452-1455` | kept; E3 task 9 reports the gap |
-| A Satan's Fiddle profile row whose function changed is a compile error | `engine/scripts/build/satansfiddle.json` | E3 task 5 |
-| External vtables must equal retail; dng_main has checks of its own | `postprocess_object.py:460-477, 619-641` | E3 task 6, when an edit reaches them |
+| Absolute symbols: `CHA_DEV_FONT_PIECE_*` and `D_1F64A00` (crt0's BSS end and heap start) | `engine/ps2/config/pal/SCES_511.90.lcf:1474-1481` | `ps2.json`: the font pieces dropped (libdev's object defines them), `D_1F64A00 = __bss_end` |
+| Every retail-named data section gets alignment 1 and is padded to retail | `engine/scripts/build/postprocess_object.py:1791-1792` | `ps2.json`: the compiler's alignment is kept |
+| The default target verifies against retail | `engine/ps2/CMakeLists.txt:263-268` | `engine build` builds the `elf` target |
+| `_stack` is fixed at `0x01F80000`; the C library's heap is the 110 KB between retail's BSS end and it | `SCES_511.90.lcf:1452-1455` | every engine build reports the gap and fails when BSS reaches the stack |
+| A Satan's Fiddle profile row whose function changed is a compile error | `engine/scripts/build/satansfiddle.json` | the rows of every unit a mod changes are dropped (fix 4: not for table-only units) |
+| External vtables must equal retail; dng_main has checks of its own | `postprocess_object.py:460-477, 619-641` | `edited-units.txt` lists the changed units; no edit has reached these checks yet |
 | crt0 clears BSS from `StopCamera__9mgCCamera`, retail's first BSS symbol | the split `crt0.s` | new BSS placed before that symbol would not be cleared; watch for it |
 
 ### Putting the executable on the disc
 
-Done: `rebuild::replace_iso_file` (`src/crates/dc2tk-disc/src/rebuild.rs`) writes a root file in
-place when it fits its sectors and otherwise past the end of the volume, rewriting its directory
-record and the volume size (not the UDF entry, which the PS2 does not read).
-`dc2tk build ... --executable FILE` uses it to put an engine-built executable on an image, and
-refuses when the mods also patch tables inside the executable (E4).
+`rebuild::replace_iso_file` (`src/crates/dc2tk-disc/src/rebuild.rs`) writes a root file in place
+when it fits its sectors and otherwise past the end of the volume, rewriting its directory record
+and the volume size (not the UDF entry, which the PS2 does not read). `dc2tk build` uses it for
+an engine-mod build's executable and for `--executable FILE`.
 
 ## Engine changes in mods
 
-### In a mod folder
+As built; the user guide is [docs/guide/mods.md](docs/guide/mods.md#engine-files).
 
-```
-mods/my-mod/
-  mod.json
-  engine/
-    userdata.cpp      functions for the engine's userdata.cpp
-```
-
-- A file in `engine/` is named after a unit of `engine/ps2/src`, and its functions go into that
-  unit.
+- A mod's `engine/<unit>.cpp` extends that unit of `engine/ps2/src`; a new name adds a unit.
 - A function marked `PORT_OVERRIDE` replaces the engine's function of the same name and
-  signature, as in ChronicleTwo's port: `PORT_OVERRIDE int CUserDataManager::AddMoney(int amount)
-  { ... }`. A function without the mark is new.
-- Two mods replacing one function clash, as script patches do.
-- Later in E3: `original()` to call the engine's own version, a header a mod replaces, a new unit,
-  and `dc2tk mod override engine`.
+  signature; an unmarked one is new. Kazarov's `port_override.py` (MIT, plain Python) does the
+  stripping, run in the container.
+- `original(...)` inside a replacement calls the engine's own version, kept on the copy under a
+  new name; not for constructors, destructors, operators or nested and namespace-qualified
+  classes.
+- A whole header at its `engine/ps2/include/` path replaces that header.
+- `dc2tk mod override engine <mod> <function>` copies the engine's function into the mod, marked;
+  it writes to the user's `mods/`, never this repository.
+- Two mods replacing one function or one header clash, naming both.
+- Each mod set has a copy, `build/engine/mods-<hash>/`, the hash over each mod's name, files and
+  bytes. `build --mod` builds it (also with `--dry-run`) and puts its executable on the image;
+  `mod check --disc` builds it too.
+- **Executable tables:** with no engine mod, table edits stay byte patches on retail's executable
+  and need no Docker. With one, `engine_tables.rs` writes the edited values into the copy's
+  initializers (every table but `data:parts`, fix 5), and refuses when a mod's engine code also
+  changes an initializer a JSON edit reaches. The port always builds tables from source.
+- **Natives:** the native tables and the SDK declarations scripts compile against are regenerated
+  from the prepared copy (`engine_natives.rs`, under `build/mod-sdk/include/` in the copy), so a
+  mod can add a native and call it from its scripts. Both targets compile the same table.
 
-Kazarov's `engine/tools/kazarov/scripts/build/port_override.py` (MIT, plain Python, no libclang)
-does the replacing: `list DIR -o FILE` writes the names a folder's marked definitions link under,
-and `strip --overrides FILE [--private-functions] [--private-variables] SRC OUT` writes a unit
-without the definitions those names replace.
-
-### One prepared copy, two compilers
-
-For a mod set dc2tk prepares `build/engine/mods-<hash>/` (ISO) and the port's copy:
-
-1. copy the engine with the patches;
-2. apply the mods' engine files;
-3. write the edited executable tables as source (E4);
-4. regenerate the native tables from the copy (E4).
-
-Then:
-
-- **ISO:** MWCC in the container, link, and the executable onto the image.
-- **Port:** clang on the host (`port.json` applied, then the mods), linked with `port/`.
-
-At P6, `dc2tk build extracted/scripts dc2.iso -o modded.iso --native darkchronicle --mod my-mod`
-writes both. The binary records the SHA-256 of the executable built beside it; at start the port
-reads `SCES_511.90` from the ISO it is given and warns when it differs. A stock binary records
-retail's hash.
-
-### Tables inside the executable
-
-Mods that edit the monster table, spectrumising, Donny's shop, the character tables, gifts,
-Spheda, breeding and parts of the inventions and fishing tables get byte patches on
-`SCES_511.90` today (`src/crates/dc2tk-assets/src/elf.rs`, `exe_tables.rs`). The port never runs
-that file. When the engine is built from source, dc2tk writes each edited table as a replacement
-definition of its global (`dony_shoplist`, `etcitem_spectol_table`, ...;
-`engine/ps2/src/menushop.cpp:243`, `gamedata.cpp:17`) with the JSON's values, and both compilers
-build it: one C writer per table `exe_tables.rs`, `monster_data.rs`, `invention_data.rs` and
-`fishing_data.rs` patch.
-
-ISO builds with no engine changes keep the byte patches and need no Docker. Tables read from disc
-files (items, weapons, shop lists) need nothing: the port reads them from the ISO.
-
-### What engine code in a mod keeps to
-
-`dc2tk mod check` compiles a mod's engine files with MWCC and, from P6, with clang, and checks
-that it:
-
-- is C++ that MWCC 3.0 accepts: nothing from C++11 on;
-- has no inline MIPS or VU0 asm, no hardware register addresses and no fixed RAM addresses, and
-  reaches everything by symbol;
-- calls only `sce*` functions the port implements (the port's link names any others);
-- replaces no function the port itself replaces;
-- leaves room below the PS2 stack.
-
-### Natives
-
-The native tables (`event_func.cpp`, `runscript_opcodes.cpp`, `actscript.cpp`, `effscript.cpp`)
-come from the prepared copy, so a mod can add a native in its engine code and call it from its own
-scripts through the regenerated SDK headers. Both targets compile the same table.
+What engine code in a mod keeps to: C++ that MWCC 3.0 accepts; no inline asm, hardware register
+addresses or fixed RAM addresses; only `sce*` functions the port implements; no function
+`port/src` replaces; room below the PS2 stack.
 
 ## Part 2: the native Linux port
 
@@ -274,195 +350,88 @@ executable links as assembly, the IOP modules it loads, and the DMA, VIF, VU1, G
 drive. The game reads its files with `sceCdRead` from the ISO it is given, so whatever dc2tk
 builds runs on it.
 
-### What is there
+### How it is built
 
-- `tools/engine-patches/port.json`: 18 substitutions on the engine's copy (below).
-- `port/include/port.h`: the header forced into every engine unit. It defines the `PORT_*`
-  macros, reads `types.h` with `u_long` as 64 bits, turns `PORT_RECORD_ASSERT` into
-  `static_assert`, and keeps the PAL values of `PAL_TIMING`.
-- `port/src/link_fixups.cpp`: `CameraCtrlParam::operator=`, which the engine declares and never
-  defines.
-- `tools/port.py`: copies `engine/ps2` to `build/port/copy/` with `port.json` applied; compiles
-  the 149 units, ChronicleTwo's four asm files (`engine/port/src/mg_math.cpp`, `collision_asm.cpp`,
-  `gameutil_asm.cpp`, `mg_drawprim_asm.cpp`, their symbols made weak so the engine's own
-  definitions win) and every `port/src/*.c` and `*.cpp`, only what changed; makes the two
-  duplicate symbols local and aliases the four the engine names differently; links
-  `build/port/darkchronicle` non-PIE, with every symbol nothing defines yet as a stub that prints
-  its name and aborts; and lists those in `build/port/missing.txt` by library.
+`dc2tk build extracted/scripts dc2.iso --native [FILE] [--movies]` (and, until fix 7,
+`tools/port.py`):
 
-Today: 192 stubs (libvu0 26, eekernel 22, libmc 17, sifrpc/sifcmd/IOP heap 15, libcdvd 14,
-libvifpk 12, libgraph 11, libpad 11, libgifpk 10, the engine's own asm 10, libmpeg 9, sifdev 8,
-split data 7, libdma 6, libdev 5, MW runtime 4, modmsin 3, libsdr 2), and the binary runs until
-`unimplemented: sceVu0UnitMatrix`, called from a static constructor. Each P1 task removes stubs;
-a function is done when it leaves `missing.txt`.
+- copies `engine/ps2` with `port.json` applied (137 substitutions: 13 for clang, 5 declarations of
+  guarded-out asm functions, 5 pointer widths, 9 record asserts, 90 native sizes, strides and
+  typed indexing, 9 monster script arenas, 5 effect heap, 1 minimap bound), then strips the
+  functions `port/src` replaces, then replays the chosen mods;
+- compiles the 149 units at `-O0`, ChronicleTwo's four asm files (weakened, so the engine's own
+  definitions win), Kazarov's `libvu0.cpp`, and `port/src` (C at `-O2`, `memory.c` and `kernel.c`
+  at `-O0`, the GS raster, memory and CLUT files together at `-O3`);
+- makes `MainBuffer` and the second `VectMatMul` local, aliases the four names the engine spells
+  differently, renames the game's `main` to `port_game_main`, and links non-PIE with SDL3 (and
+  libavcodec with `--movies`). Nothing is left unresolved.
+
+At start `port/src/main.c` maps the memory, reads the VU1 microcode and the first DMA chain from
+the ISO's `SCES_511.90` by its symbol table, checks that executable's hash against the one the
+build recorded, and runs the game's `main` on a fiber.
 
 ### Choices
 
 - **x86-64.** `u_long128` is `unsigned __int128`, which clang has only on 64-bit targets, and the
   PS2's `long` is 64 bits as Linux x86-64's is.
 - **Every address the game sees lies below 256 MB, as on the PS2.** The game makes DMA addresses
-  with `& 0x0FFFFFFF` (mg_visual 131 and 739, mg_shadow 259, mg_sprite 526, movie), so a pointer
-  above `0x10000000` breaks even where nothing truncates it. Linked non-PIE, the whole image from
-  `.text` to `_end` is about 35 MB at `0x400000`, and the game's heap is `main_buffer`, a 26 MB
-  `.bss` array in mainloop.o. Fiber stacks and the few host-heap allocations the game makes
-  (`new CEffectCtrl`, effect.cpp:1088) must be low too. Code that keeps pointers in `u32` and
-  `int` fields (189 implicit narrowings, 115 explicit `(uptr)` casts) then works unchanged.
-- **The uncached segments exist.** mg_visual (689, 703, 720, 764) and mg_shadow (239) write
-  packets through `pointer | 0x20000000`, and DMA tags carry `0x30000000` addresses. Before the
-  static constructors run, the binary's `.data` and `.bss` move into a memfd mapped at their own
-  addresses and again at `+0x20000000` and `+0x30000000`. The scratchpad is mapped at
-  `0x70000000`.
-- **Upstream's `PORT` macro and headers.** A guard of our own would mean editing upstream files.
-  The copy compiles with `-DPORT -DPAL` and ChronicleTwo's MWCC-tolerance flags (in
-  `tools/port.py`). `PORT` alone switches the 95 `PAL_TIMING` sites to NTSC values, which
-  `port.h` undoes. `PORT` changes no disc record's layout: its 52 `PORT_RECORD_ASSERT`s hold on
-  x86-64, and `uptr` fields appear only in structs that never touch the disc.
+  with `& 0x0FFFFFFF`, so a pointer above `0x10000000` breaks even where nothing truncates it.
+  Linked non-PIE, the image from `.text` to `_end` ends near `0x05D20000`, the fiber stacks
+  included. The game's heap is `main_buffer`, a 26 MB `.bss` array. Host allocations use a 64 MB
+  arena at `0x08000000` (fix 2).
+- **The uncached segments exist.** Before the static constructors run, the binary's `.data` and
+  `.bss` move into a memfd mapped at their own addresses and again at `+0x20000000` and
+  `+0x30000000`. The scratchpad is mapped at `0x70000000`.
+- **Upstream's `PORT` macro and headers**, with `-DPORT -DPAL`. `PORT` alone switches the 95
+  `PAL_TIMING` sites to NTSC values, which `port.h` undoes. Its 52 `PORT_RECORD_ASSERT`s hold on
+  x86-64, and further record widths are pinned by `port/tests/records.cpp`.
 - **The MWCC asm**: 54 functions are guarded out under `PORT`. 44 come from ChronicleTwo's four
-  files. The other 10 are the port's own C: mg_frame's 7 (`mgCFrame::GetBBoardMatrix`,
-  `GetDrawRect`, `GetLWMatrix`, `GetLWMatrixTopBottom`, `mgInsideScreen`, `test1`, `test2`;
-  upstream's are tied to its glTF renderer), `ClipBoxXZ`, `PlaneNormalXZ`, and `SendDMA`, which
-  starts the DMA emulation. Each is written from the engine's asm (`engine/ps2/src`, inside
-  `#ifndef PORT`) and what calls it.
-- **`port.json`** holds what clang needs: `virtual void Draw()` to `int` in `dng_event.hpp` and
-  `dng_hud.hpp` and their two definitions (MWCC gave them a new vtable slot; clang refuses the
-  override); an explicit `operator=` for `CFuncPoint` in `mapload.hpp`; block-scope anonymous
-  unions holding non-trivial types in gyorace, menucapt, menucls1 and sceneevent made storage and a
-  reference; MWCC's varargs builtins in dbg_font made `va_list`; the 128-bit literal in mg_visual
-  (twice); and declarations of the guarded-out functions whose callers remain, in collision,
-  editmap2, gameutil, mg_frame and mg_math.
-- **Split data comes from the disc.** The VU1 microcode (`Vu_progmain`, `Vu_prog0`,
-  `Vu_prog_sdw`, `Vu_prog_3dsp`, `Vu_prog_wtr`), the first DMA chain (`My_dma_start0`) and `_gp`
-  have no source. The port reads the first six from the `SCES_511.90` on the ISO it runs, by its
-  symbol table, into the stub storage `tools/port.py` makes for them (to be made the right size).
-- **Functions the port replaces** are replaced on the copy by the same step mods use. The known
-  case is the movie code, which writes IPU DMA registers directly (`movie.cpp:226-227, 766-918`).
-- **VU1 is an interpreter** running the microprograms the game uploads itself. ChronicleTwo's
-  `engine/docs/vu1/` (3,000 lines of specs) is what it is checked against. Hand-written C for
-  prog0 only if profiling asks.
-- **The GS is a software rasteriser** over a 4 MB local memory array: render to texture, CLUTs,
-  `sceGsStoreImage` readback and the water's frame-buffer reads come with it, and SDL3 only shows
-  a texture. If speed falls short, rasterising in bands on several threads comes first.
-- **Sound is emulated at the RPC boundary**, with no IOP processor. The modules are LIBSD and
-  SDRDRV, MODMIDI and MODHSYN (Sony's HD/BD/SQ synthesiser and sequencer), EZMIDI and EZBGM
-  (`engine/ps2/src/main.cpp:103-130`). The EE side of each protocol is in `sound.cpp`,
-  `ezmidi.cpp` and `ezbgm.cpp`; the formats are already worked out in `dc2tk-assets`
-  (`soundbank.rs`, `music.rs`) and [docs/internals/](docs/internals/README.md). SPU2 reverb comes
-  after the voices.
-- **Movies are skipped at first**: the movie ends as it starts. At P5 they decode with
-  libavcodec's MPEG-2 decoder, linked dynamically (LGPL), the port's only dependency besides
-  SDL3; the PSS demultiplexing and the sound beside the video are the port's own.
+  files; the port writes mg_frame's 7, `ClipBoxXZ`, `PlaneNormalXZ` and `SendDMA`.
+- **VU1 is an interpreter** running the microprograms the game uploads itself, with SSE2 for whole
+  vectors and two recognised blocks of prog0 run directly once every instruction word matches.
+  It has known numerical and timing limits; `engine/docs/vu1/` is what it is checked against.
+- **The GS is a software rasteriser** over a 4 MB local memory array, drawing in row bands on
+  worker threads, batched; output is checked against a serial reference by recorded traces.
+- **Sound is emulated at the RPC boundary**, with no IOP processor: LIBSD and SDRDRV, MODMIDI and
+  MODHSYN, EZMIDI and EZBGM, over a 48-voice SPU2 with ADSR, Gaussian interpolation, nine reverb
+  presets and SDL output. An audit of 841 retail banks and 435 sequences found no unsupported
+  feature.
+- **Movies** are demultiplexed by the port and decoded by libavcodec's MPEG-2 decoder.
 
 ### Modules
 
-Line counts are estimates.
-
-| File | What | Lines |
+| Files | What | Lines |
 |---|---|---|
-| `main.c` | SDL3, the game's `main` on a fiber, 50 Hz pacing | 300 |
-| `memory.c`, `kernel.c` | Low memory, mirrors, scratchpad, EE threads as ucontext fibers, semaphores, VBlank handlers | 800 |
-| `cdvd.c` | ISO 9660, `cdrom0:` paths, `sceCdRead`, `sceOpen` | 400 |
-| `sce/*.c` | libdma, libgraph, libvifpk, libgifpk, libvu0, libpad (SDL gamepad and keyboard, DualShock 2 analog), libmc (a folder per card) | 1,500 |
-| `dma.c`, `vif.c` | DMA chains; VIF1 UNPACK, MSCAL, MSCNT, DIRECT | 700 |
-| `vu1.c` | VU1 interpreter | 2,000 |
-| `gs.c`, `present.c` | GS registers, swizzled memory, rasteriser, blending and tests, the displayed buffer to SDL | 4,000 |
-| `spu2.c`, `iop_sound.c` | 48 ADPCM voices with ADSR; the sdrdrv, CSL and ez* handlers | 2,500 |
+| `main.c`, `memory.c`, `kernel.c`, `runtime.c` | start, low memory and mirrors, the allocator, EE threads as fibers, semaphores, VBlank, MW runtime | 620 |
+| `cdvd.c`, `executable.c`, `split_data.c`, `devices.c` | the ISO, `cdrom0:` files, the executable's symbols, split data, SIF devices | 600 |
+| `packets.c`, `graphics.c`, `dma_chain.c`, `dma.cpp`, `vif.c` | libvifpk, libgifpk, libgraph, DMA, VIF1 | 790 |
+| `vu1.c` | VU1 | 710 |
+| `gs.c`, `gs_memory.c`, `gs_clut.c`, `gs_raster.c`, `present.c` | the GS and the window | 2,050 |
+| `iop.c`, `iop_sound.c`, `iop_midi.c`, `spu2.c` | the IOP's sound modules and the SPU2 | 1,410 |
+| `input.c`, `memory_card.c`, `movie.cpp`, `movie_decode.c` | pads, cards, movies | 960 |
+| `frame.cpp`, `collision.cpp`, `mglib.cpp`, `link_fixups.cpp` | asm and engine replacements | 250 |
+
+About 7,900 lines with headers; the tests are about 6,100 more.
 
 ## Milestones
 
-Each has a gate. A gate that needs the ISO or PCSX2 is the user's to run when the work is built.
+Each has a gate. A gate that needs PCSX2, a PS2, a display or a listener is the user's.
 
-1. **E1 Submodule.** Done 2026-10-19: `dc2tk engine verify` finds every section from `.text` to
-   `.bss` retail's.
-2. **E2 Modding build mode.** Built 2026-10-19 (the hazard table). A test edit (new games start
-   with 50,000 money, through two calls that grow `CUserDataManager::Initialize`) relinked with
-   4,857 `.text` symbols moved; the growth fitted the slack before the next section, so no data
-   moved. Gate, the user's: that edit boots in PCSX2 with `build --executable`.
-3. **E3 Engine mods for the ISO.** Gate: a mod replacing a dungeon function plays in PCSX2 (the
-   user's); here, the link map and disassembly show the replacement, and `engine verify` still
-   passes.
-   1. Find each chosen mod's `engine/*.cpp`. A file not named after a unit of `engine/ps2/src` is
-      an error naming the mod and the file. Unit-test it with a mods folder in a temporary
-      directory.
-   2. Give each mod set a copy of its own: `build/engine/mods-<hash>/`, the hash the first 12 hex
-      digits of a SHA-256 over each engine file's mod name, path and bytes, in order. Reuse
-      `engine.rs`'s `prepare` with `ps2.json`.
-   3. Run Python in the container: a function beside `run_in_container` that runs
-      `python3 <args>` in Kazarov's image with the copy mounted, for `port_override.py`.
-   4. For each unit some mod changes: `port_override.py list` over a folder holding that mod's
-      file for the unit, to `build/mod-overrides/<unit>.<mod>.txt` in the copy. If two mods list
-      a name, stop and name both mods and the function. Then `strip --overrides <all of them
-      joined> --private-functions --private-variables ps2/src/<unit>.cpp ps2/src/<unit>.cpp`, and
-      append `\n#define PORT_OVERRIDE\n` and each mod's file, in mod order, to the unit.
-   5. Remove from the copy's `scripts/build/satansfiddle.json` every row whose `translation_unit`
-      (or `name`, in the `translation_units` list) is a unit a mod changes. Those units no longer
-      match retail, and a row whose function changed stops the compile.
-   6. Write the changed units' names to `edited-units.txt` at the copy's root. If a POST step
-      raises for one of them (vtables, dng_main), add a substitution to `ps2.json` that skips that
-      check for units listed there, then run `engine verify` to show the unedited build is
-      unchanged.
-   7. `dc2tk build --mod X`, when a chosen mod has engine files: build the mod set's copy (target
-      `elf`), and put its `SCES_511.90` on the image with `replace_iso_file`, as `--executable`
-      does; refuse when the mods also patch executable tables (E4) and when `--executable` is
-      given. `--dry-run` builds the engine too, as the check of a mod's engine code.
-   8. `dc2tk mod check` builds the engine copy when the mod has engine files.
-   9. After an engine build, read `__bss_end` from the link map and print what is left between it
-      and the stack at `0x01F80000` (the stack is the 512 KB above): the C library's heap, about
-      110 KB in retail. Fail when it is negative, and warn when it is less than retail's.
-   10. Docs: a section on engine files in `docs/guide/mods.md`, and the commands in
-       `docs/guide/commands.md`.
-   11. Then, each with its own check: `original()` (keep the engine's definition renamed
-       `<name>__original` instead of stripping it, and `#define original <name>__original` around
-       the mod's function; a member function's renamed declaration goes into the copied class
-       header), a header a mod replaces (whole file; two mods on one header clash), a new unit
-       (its object added to `main_o_files` and the linker script's lists), and
-       `dc2tk mod override engine <mod> <function>` (the function's text from the copy into the
-       mod, marked `PORT_OVERRIDE`; it lands in the user's `mods/`, never in this repository).
-4. **E4 Tables and natives.** Executable tables written as source, natives from the prepared copy.
-   Gate: a shop edit and a native a mod adds work on the ISO.
-5. **P0 Compile spike.** Done 2026-10-19; `tools/port.py` is its result.
-6. **P1 Headless boot.** Gate: with the ISO, `python3 -I tools/port.py --run dc2.iso` logs the
-   files the title screen loads. Each task's check: the binary runs past the stubs the task
-   removes, and `missing.txt` no longer lists them.
-   1. libvu0: add Kazarov's `engine/tools/kazarov/src/cpp/sce/libvu0.cpp` (MIT) to
-      `tools/port.py`'s upstream list if it compiles on its own; otherwise write the 26 functions
-      in `port/src/vu0.c` from it.
-   2. `port/src/memory.c`, in a `__attribute__((constructor(101)))` that runs before the
-      engine's static constructors: move the binary's `.data` and `.bss` (from `__data_start` or
-      the first writable page to `_end`, page-aligned) into a memfd mapped at their own addresses
-      and at `+0x20000000` and `+0x30000000`; map 16 KB at `0x70000000`; `mallopt(M_MMAP_MAX, 0)`
-      so every host allocation comes from the brk heap, which sits low after `.bss`. A check
-      writes through `pointer | 0x20000000` and reads the plain pointer.
-   3. The MW runtime: `mwInit` (nothing to do), `fptosi`, `fptoui` and `__construct_new_array`,
-      each written in C from its split assembly in the E1 copy
-      (`build/engine/pal/ps2/asm/pal/lib/mwcc/*.s`).
-   4. `port/src/kernel.c`: the eekernel functions in `missing.txt` (threads as ucontext fibers on
-      stacks that are `.bss` arrays, so they are low; semaphores; INTC and DMAC handlers kept in a
-      table and called by the VBlank; `FlushCache`, `DIntr` and `EIntr` doing nothing; `Exit__2`
-      exiting). `main` runs the game's `main` on a fiber. Kazarov's
-      `src/cpp/sce/eekernel_threads.cpp` shows the semantics.
-   5. `port/src/cdvd.c`: the disc image named on the command line, read with ISO 9660; libcdvd's
-      `sceCdInit`, `sceCdSearchFile`, `sceCdRead` (synchronous) and `sceCdSync`, the `sceCdSt*`
-      streaming reporting nothing for now; sifdev's `sceOpen`, `sceRead`, `sceLseek`, `sceClose`
-      on `cdrom0:\PATH;1` names. Every file opened is logged with its size: the gate's log.
-   6. The IOP: `sceSifLoadModule` and the reboot succeeding, `sceSifBindRpc` giving a bound
-      client, `sceSifCallRpc` answering with zeros, `sceSdRemote` doing nothing, until P4.
-   7. Graphics without a screen: libvifpk and libgifpk's packet builders written for real (they
-      only write memory), `sceDmaSend` and `sceGsSyncPath` doing nothing, `sceGsSyncV` waiting
-      out 1/50 s and running the VBlank handlers. libgraph's setup functions record what they are
-      given.
-   8. libpad reporting a DualShock 2 with nothing pressed; libmc reporting no card; libdev and
-      modmsin doing nothing; libmpeg reporting the movie at its end.
-   9. The split data: from the ISO's `SCES_511.90`, the six symbols' bytes by its symbol table
-      into storage of their size (change `tools/port.py`'s stub size to fit them).
-7. **P2 Graphics.** Gate: the title screen in a window, compared with PCSX2. Ask the user to
-   install SDL3's development package first. In order: the DMA chain walker behind `sceDmaSend`
-   and `SendDMA`; VIF1 (UNPACK, STCYCL, MSCAL, MSCNT, DIRECT); the VU1 interpreter, checked
-   against `engine/docs/vu1/`; the GS (registers, the swizzled 4 MB memory, the rasteriser,
-   blending and tests); presenting the displayed buffer in an SDL3 window, scaled to its aspect.
-8. **P3 Input.** Gate: New Game, Palm Brinks, the first dungeon floor.
-9. **P4 Sound.** Gate: effects, music and voices.
-10. **P5 Saves and movies.** Gate: a save made natively loads again; the opening movie plays.
-11. **P6 Engine mods natively.** `--native` in `dc2tk build` (the port's build moved from
-    `tools/port.py` into dc2tk, from the same copy), the executable hash check, `mod check` with
-    clang. Gate: one mod with an engine change, a native called from a script, a table edit and a
-    texture plays the same in PCSX2 and natively.
+1. **E1 Submodule.** Done.
+2. **E2 Modding build mode.** Built. Gate, the user's: the 50,000-money edit boots in PCSX2.
+3. **E3 Engine mods for the ISO.** Built. Gate, the user's: a mod replacing a dungeon function
+   plays in PCSX2. Fixes 3, 4, 13 first.
+4. **E4 Tables and natives.** Built but `data:parts` (fix 5) and the table byte check (fix 4).
+   Gate, the user's: a shop edit and a mod's native work in PCSX2.
+5. **P0 Compile spike.** Done.
+6. **P1 Headless boot.** Done: the ISO boots to the language selector.
+7. **P2 Graphics.** Built. Gate: the title screen in a window, compared with PCSX2, and 50 frames
+   a second sustained. Next: fix 2 and 10, then speed (profile a recorded trace; the raster
+   loop and GS memory access take most of the time).
+8. **P3 Input.** Built. Gate: New Game, Palm Brinks, the first dungeon floor, played by a person.
+   Next: replay from `first-floor-selection-save` past the gate where it crashed, and melee hits.
+9. **P4 Sound.** Built. Gate: effects, music and voices, heard against retail.
+10. **P5 Saves and movies.** Built. Gate: a save made natively loads again (passed by replay); the
+    opening movie plays (passed by replay); a save from a PS2 loads.
+11. **P6 Engine mods natively.** Built. Gate: one mod with an engine change, a native called from
+    a script, a table edit and a texture plays the same in PCSX2 and natively. Fixes 3, 6, 7.
