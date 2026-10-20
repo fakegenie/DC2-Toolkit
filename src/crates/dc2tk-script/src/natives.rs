@@ -145,7 +145,7 @@ impl Patterns {
         let names: Vec<&str> = ACCESSORS.iter().map(|(name, _)| *name).collect();
         Patterns {
             enum_value: build(r"(?m)^\s*([A-Z][A-Z0-9_]*)\s*=\s*(-?(?:0x[0-9a-fA-F]+|[0-9]+))\s*,"),
-            table_row: build(r"\{\s*([A-Za-z0-9_]+)\s*,\s*([A-Za-z0-9_]+)\s*\}"),
+            table_row: build(r"\{\s*([A-Za-z0-9_]+)\s*,\s*(-?(?:0[xX][0-9a-fA-F]+|[A-Za-z0-9_]+))\s*\}"),
             // the word boundary before the name is checked by hand (accessors)
             accessor_call: build(&format!(r"({})\s*\(", names.join("|"))),
         }
@@ -155,7 +155,48 @@ impl Patterns {
 /// A source file's text, with what is not UTF-8 replaced and \r\n read as \n.
 fn read_source(path: &Path) -> Result<String> {
     let bytes = files::read(path)?;
-    Ok(String::from_utf8_lossy(&bytes).replace("\r\n", "\n"))
+    Ok(source_tokens(&String::from_utf8_lossy(&bytes).replace("\r\n", "\n")))
+}
+
+fn source_tokens(text: &str) -> String {
+    let mut bytes = text.as_bytes().to_vec();
+    let mut at = 0;
+    while at < bytes.len() {
+        let start = at;
+        if bytes[at..].starts_with(b"//") {
+            while at < bytes.len() && bytes[at] != b'\n' {
+                at += 1;
+            }
+        } else if bytes[at..].starts_with(b"/*") {
+            at += 2;
+            while at < bytes.len() && !bytes[at..].starts_with(b"*/") {
+                at += 1;
+            }
+            at = (at + 2).min(bytes.len());
+        } else if bytes[at] == b'"' || bytes[at] == b'\'' {
+            let quote = bytes[at];
+            at += 1;
+            while at < bytes.len() {
+                if bytes[at] == b'\\' {
+                    at = (at + 2).min(bytes.len());
+                } else if bytes[at] == quote {
+                    at += 1;
+                    break;
+                } else {
+                    at += 1;
+                }
+            }
+        } else {
+            at += 1;
+            continue;
+        }
+        for byte in &mut bytes[start..at] {
+            if *byte != b'\n' {
+                *byte = b' ';
+            }
+        }
+    }
+    String::from_utf8(bytes).expect("source masking preserves UTF-8")
 }
 
 /// The enum constants a header defines (NAME = value,), by name; a later one wins.
@@ -173,17 +214,40 @@ fn parse_enum_values(patterns: &Patterns, text: &str) -> Result<HashMap<String, 
 
 /// The (function, number) rows of an RS_EXTFUNC_INFO array, without the NULL that ends it.
 fn parse_table_rows(patterns: &Patterns, text: &str, array: &str) -> Result<Vec<(String, String)>> {
-    let pattern = format!(r"(?s)static RS_EXTFUNC_INFO {}\[[0-9]*\] = \{{(.*?)\n\}};", regex::escape(array));
+    let pattern = format!(
+        r"(?s)\b(?:static\s+)?RS_EXTFUNC_INFO\s+{}\s*\[\s*[0-9]*\s*\]\s*=\s*\{{(.*?)\}}\s*;",
+        regex::escape(array)
+    );
     let table = regex::Regex::new(&pattern).expect("the table pattern compiles");
     let Some(found) = table.captures(text) else {
         return Err(crate::Error::invalid(format!("table {array} not found")));
     };
-    Ok(patterns
-        .table_row
-        .captures_iter(&found[1])
-        .filter(|row| &row[1] != "NULL")
-        .map(|row| (row[1].to_string(), row[2].to_string()))
-        .collect())
+    let body = &found[1];
+    let mut rows = Vec::new();
+    let mut end = 0;
+    let mut terminated = false;
+    for row in patterns.table_row.captures_iter(body) {
+        let whole = row.get(0).expect("a match has a whole");
+        if !body[end..whole.start()].chars().all(|c| c.is_whitespace() || c == ',') {
+            return Err(crate::Error::invalid(format!("table {array}: unsupported native row")));
+        }
+        if terminated {
+            return Err(crate::Error::invalid(format!("table {array}: native row follows the NULL terminator")));
+        }
+        if &row[1] == "NULL" {
+            terminated = true;
+        } else {
+            rows.push((row[1].to_string(), row[2].to_string()));
+        }
+        end = whole.end();
+    }
+    if !body[end..].chars().all(|c| c.is_whitespace() || c == ',') {
+        return Err(crate::Error::invalid(format!("table {array}: unsupported native row")));
+    }
+    if !terminated {
+        return Err(crate::Error::invalid(format!("table {array}: missing NULL terminator")));
+    }
+    Ok(rows)
 }
 
 /// Whether the character before a byte offset is a C identifier's, so a name there would not
@@ -264,14 +328,77 @@ fn accessors(patterns: &Patterns, body: &str) -> Vec<String> {
     found
 }
 
+fn capacity(spec: &Spec, source: &str, values: &HashMap<String, i128>) -> Result<Option<i128>> {
+    let name = match spec.table {
+        "event" => "EVENT_EXT_FUNC_NUM",
+        "monster" => "RS_MONSTER_EXT_LIMIT",
+        "action" => "ACTION_EXT_FUNC_MAX",
+        "arg" => "EVENT_ARG_FUNC_NUM",
+        "effect" => {
+            let pattern = regex::Regex::new(r"\bext_func_info\s*\[[^\]]+\]\s*\.\s*no\s*>=\s*([A-Za-z0-9_]+)")
+                .expect("the effect native capacity pattern compiles");
+            let found = pattern.captures(source).ok_or_else(|| {
+                crate::Error::invalid(format!("{}: native dispatch capacity not found in {}", spec.table, spec.source))
+            })?;
+            let name = &found[1];
+            let limit = values.get(name).copied().or_else(|| crate::index::integer(name).map(i128::from));
+            let dispatch = checked_capacity(spec, name, limit)?;
+            let pattern = regex::Regex::new(r"\bext_func\s*\[\s*([A-Za-z0-9_]+)\s*\]\s*\)\s*\(")
+                .expect("the effect native storage pattern compiles");
+            let found = pattern.captures(source).ok_or_else(|| {
+                crate::Error::invalid(format!("{}: native dispatch storage not found in {}", spec.table, spec.source))
+            })?;
+            let name = &found[1];
+            let limit = values.get(name).copied().or_else(|| crate::index::integer(name).map(i128::from));
+            let storage = checked_capacity(spec, name, limit)?;
+            return Ok(Some(dispatch.min(storage)));
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(checked_capacity(spec, name, values.get(name).copied())?))
+}
+
+fn checked_capacity(spec: &Spec, name: &str, limit: Option<i128>) -> Result<i128> {
+    let Some(limit) = limit else {
+        return Err(crate::Error::invalid(format!("{}: no value for native dispatch capacity {name}", spec.table)));
+    };
+    if limit <= 0 || limit > i32::MAX as i128 {
+        return Err(crate::Error::invalid(format!(
+            "{}: invalid native dispatch capacity {name} = {limit}",
+            spec.table
+        )));
+    }
+    Ok(limit)
+}
+
 fn build_with(patterns: &Patterns, root: &Path, spec: &Spec) -> Result<Generated> {
     let source = read_source(&root.join(spec.source))?;
     let values = parse_enum_values(patterns, &read_source(&root.join(spec.header))?)?;
-    let mut natives = Vec::new();
+    let capacity = capacity(spec, &source, &values)?;
+    let mut natives: Vec<GeneratedNative> = Vec::new();
     for (func, number) in parse_table_rows(patterns, &source, spec.array)? {
-        let Some(&no) = values.get(&number) else {
+        let Some(no) = values.get(&number).copied().or_else(|| crate::index::integer(&number).map(i128::from)) else {
             return Err(crate::Error::invalid(format!("{}: no value for {}", spec.table, number)));
         };
+        if no < 0 || no > i32::MAX as i128 {
+            return Err(crate::Error::invalid(format!("{}: native {func} has invalid number {no}", spec.table)));
+        }
+        if let Some(limit) = capacity {
+            if no >= limit {
+                return Err(crate::Error::invalid(format!(
+                    "{}: native {func} ({no}) exceeds dispatch capacity {limit}",
+                    spec.table
+                )));
+            }
+        }
+        for earlier in &natives {
+            if earlier.no == no || earlier.name == func {
+                return Err(crate::Error::invalid(format!(
+                    "{}: native {func} ({no}) conflicts with {} ({})",
+                    spec.table, earlier.name, earlier.no
+                )));
+            }
+        }
         let calls = function_body(&source, &func).map(|body| accessors(patterns, body));
         natives.push(GeneratedNative { no, name: func, accessors: calls });
     }
@@ -370,6 +497,104 @@ static RS_EXTFUNC_INFO ext_func_info[3] = {
             table.natives,
             vec![native(3, "_SET_FLAG", &["int", "float"]), native(12, "_GET_FLAG", &["string", "out"])]
         );
+    }
+
+    #[test]
+    fn added_native_uses_a_literal_number_from_the_prepared_source() {
+        let root = std::env::temp_dir().join(format!("dc2tk-script-added-native-{}", std::process::id()));
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("include")).unwrap();
+        let source = "int _MOD_NATIVE(RS_STACKDATA *stack, int count) { return GetStackInt(stack); }\n\
+            static RS_EXTFUNC_INFO ext_func_info[] = { {_MOD_NATIVE, 0x384}, {NULL, -1} };\n";
+        fs::write(root.join("src/test.cpp"), source).unwrap();
+        fs::write(root.join("include/test.hpp"), "").unwrap();
+        let table = build_table(&root, &SPEC).unwrap();
+        fs::remove_dir_all(&root).unwrap();
+        assert_eq!(table.natives, vec![native(900, "_MOD_NATIVE", &["int"])]);
+    }
+
+    #[test]
+    fn duplicate_native_numbers_are_refused() {
+        let root = std::env::temp_dir().join(format!("dc2tk-script-duplicate-native-{}", std::process::id()));
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("include")).unwrap();
+        let source = "static RS_EXTFUNC_INFO ext_func_info[] = { {_FIRST, 900}, {_SECOND, 900}, {NULL, -1} };";
+        fs::write(root.join("src/test.cpp"), source).unwrap();
+        fs::write(root.join("include/test.hpp"), "").unwrap();
+        let error = build_table(&root, &SPEC).unwrap_err().to_string();
+        fs::remove_dir_all(&root).unwrap();
+        assert!(error.contains("_SECOND (900) conflicts with _FIRST (900)"));
+    }
+
+    #[test]
+    fn source_tokens_ignore_comments_and_quoted_braces() {
+        let text = "int _F(RS_STACKDATA *s) { puts(\"} GetStackFloat(s)\"); /* } */ GetStackInt(s); }";
+        let source = source_tokens(text);
+        let body = function_body(&source, "_F").unwrap();
+        assert_eq!(accessors(&Patterns::new(), body), ["int"]);
+        let source =
+            source_tokens("static RS_EXTFUNC_INFO ext_func_info[] = { /* {_OLD, 1}, */ {_NEW, 2}, {NULL, -1} };");
+        assert_eq!(
+            parse_table_rows(&Patterns::new(), &source, "ext_func_info").unwrap(),
+            [("_NEW".into(), "2".into())]
+        );
+    }
+
+    #[test]
+    fn native_rows_after_the_null_terminator_are_refused() {
+        let source = "static RS_EXTFUNC_INFO table[] = {{_OLD, 1}, {NULL, -1}, {_NEW, 900}};";
+        let error = parse_table_rows(&Patterns::new(), source, "table").unwrap_err().to_string();
+        assert!(error.contains("native row follows the NULL terminator"));
+        let source = "static RS_EXTFUNC_INFO table[] = {{NULL, -1}, {NULL, -1}};";
+        let error = parse_table_rows(&Patterns::new(), source, "table").unwrap_err().to_string();
+        assert!(error.contains("native row follows the NULL terminator"));
+    }
+
+    #[test]
+    fn native_table_requires_a_null_terminator() {
+        let source = "static RS_EXTFUNC_INFO table[] = {{_OLD, 1}};";
+        let error = parse_table_rows(&Patterns::new(), source, "table").unwrap_err().to_string();
+        assert!(error.contains("missing NULL terminator"));
+        let source = "static RS_EXTFUNC_INFO table[] = {};";
+        let error = parse_table_rows(&Patterns::new(), source, "table").unwrap_err().to_string();
+        assert!(error.contains("missing NULL terminator"));
+    }
+
+    #[test]
+    fn native_numbers_must_fit_the_prepared_headers_dispatch_capacity() {
+        let root = std::env::temp_dir().join(format!("dc2tk-script-native-capacity-{}", std::process::id()));
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("include")).unwrap();
+        let spec = Spec { table: "event", ..SPEC };
+        let source = "static RS_EXTFUNC_INFO ext_func_info[] = {{_LAST, 255}, {NULL, -1}};";
+        fs::write(root.join(spec.source), source).unwrap();
+        fs::write(root.join(spec.header), "enum Limits {\nEVENT_EXT_FUNC_NUM = 256,\n};").unwrap();
+        assert_eq!(build_table(&root, &spec).unwrap().natives[0].no, 255);
+        let source = "static RS_EXTFUNC_INFO ext_func_info[] = {{_ADDED, 256}, {NULL, -1}};";
+        fs::write(root.join(spec.source), source).unwrap();
+        let error = build_table(&root, &spec).unwrap_err().to_string();
+        assert!(error.contains("_ADDED (256) exceeds dispatch capacity 256"));
+        fs::write(root.join(spec.header), "enum Limits {\nEVENT_EXT_FUNC_NUM = 257,\n};").unwrap();
+        assert_eq!(build_table(&root, &spec).unwrap().natives[0].no, 256);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn effect_capacity_comes_from_the_prepared_dispatch_check() {
+        let spec = Spec { table: "effect", ..SPEC };
+        let values = HashMap::new();
+        let source = "static int (*ext_func[256])(RS_STACKDATA *, int); ext_func_info[index].no >= 256";
+        assert_eq!(capacity(&spec, source, &values).unwrap(), Some(256));
+        let source = "static int (*ext_func[256])(RS_STACKDATA *, int); ext_func_info[index].no >= 512";
+        assert_eq!(capacity(&spec, source, &values).unwrap(), Some(256));
+        let source = "static int (*ext_func[512])(RS_STACKDATA *, int); ext_func_info[index].no >= 512";
+        assert_eq!(capacity(&spec, source, &values).unwrap(), Some(512));
+        assert!(capacity(&spec, "", &values).is_err());
+        let mut values = HashMap::new();
+        values.insert("EFFECT_LIMIT".to_string(), 1024);
+        let source = "static int (*ext_func[EFFECT_LIMIT])(RS_STACKDATA *, int); \
+            ext_func_info[index].no >= EFFECT_LIMIT";
+        assert_eq!(capacity(&spec, source, &values).unwrap(), Some(1024));
     }
 
     #[test]

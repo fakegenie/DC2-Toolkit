@@ -984,8 +984,7 @@ impl Model {
             )
         };
         // later signatures win: the reachable ones come last
-        let (near, far): (Vec<(&String, &Node)>, Vec<(&String, &Node)>) =
-            self.shared.shapes.iter().partition(|(print, _)| reachable.contains(print));
+        let (near, far) = self.shared.shapes.iter().partition::<Vec<_>, _>(|(print, _)| reachable.contains(print));
         let signatures = far.into_iter().chain(near).filter_map(signature).collect();
         let globals = library
             .user_paths
