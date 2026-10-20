@@ -724,6 +724,8 @@ extern const DebugCommand debug_core_commands[] = {
     {NULL, NULL, 0, NULL},
 };
 
+extern "C" int debug_build(void) { return 1; }
+
 extern "C" void debug_start(void) {
     debug_log_start();
     const char *port_text = getenv("DC2TK_DEBUG_PORT");

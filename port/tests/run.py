@@ -30,7 +30,7 @@ def main():
     cases = [
         ("devices", [*c_flags, "-Wno-unused-parameter", "port/tests/devices.c", "port/src/devices.c", "port/src/iop.c", "port/src/audio.c", "port/src/midi.c", "port/src/spu2.c", "port/src/cdvd.c", "port/src/overrides.c", "-lm", "port/src/hooks.c"]),
         ("graphics", [*c_flags, *NO_PIE, *SEGMENTS, "port/tests/graphics.c", "port/src/graphics.c", "port/src/packets.c", "port/src/memory.c", "port/src/hooks.c"]),
-        ("kernel", [*c_flags, *NO_PIE, "port/tests/kernel.c"]),
+        ("kernel", [*c_flags, *NO_PIE, "port/tests/kernel.c", "port/src/fiber.c"]),
         ("memory", [*c_flags, *NO_PIE, *SEGMENTS, "-pthread", "port/tests/memory.c", "port/src/memory.c", "port/src/hooks.c"]),
         ("runtime", [*c_flags, "port/tests/runtime.c"]),
         ("sound", [*c_flags, "port/tests/sound.c", "port/src/audio.c", "port/src/midi.c", "port/src/spu2.c", "-lm"]),

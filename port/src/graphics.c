@@ -218,7 +218,7 @@ int sceDmaPutEnv(const void *environment) {
 
 int sceDmaSend(void *channel, void *data) {
     uint32_t *registers = channel;
-    registers[12] = (uint32_t)(uintptr_t)data & UINT32_C(0x7fffffff);
+    registers[12] = port_address(data) & UINT32_C(0x7fffffff);
     registers[8] = 0;
     registers[0] = (registers[0] & ~UINT32_C(0x10c)) | 5;
     (void)data;

@@ -1,4 +1,5 @@
 #include "port_packets.h"
+#include "port_window.h"
 #include <stddef.h>
 #include <string.h>
 
@@ -62,7 +63,7 @@ void sceVif1PkCnt(PortVifPacket *packet, int flags) {
 }
 
 void sceVif1PkCall(PortVifPacket *packet, PortQword *address, uint32_t flags) {
-    vif_dma(packet, UINT32_C(0x50000000) | flags, (uint32_t)(uintptr_t)address & UINT32_C(0x9fffffff));
+    vif_dma(packet, UINT32_C(0x50000000) | flags, port_address(address) & UINT32_C(0x9fffffff));
 }
 
 uint32_t *sceVif1PkEnd(PortVifPacket *packet, uint32_t flags) {
@@ -137,7 +138,7 @@ uint32_t *sceGifPkEnd(PortGifPacket *packet, int data0, int data1, int flags) {
 
 void sceGifPkRef(PortGifPacket *packet, PortQword *address, int count, int data0, int data1, int flags) {
     gif_dma(packet, UINT32_C(0x30000000) | (uint32_t)count | (uint32_t)flags,
-            (uint32_t)(uintptr_t)address & UINT32_C(0x9fffffff), data0, data1);
+            port_address(address) & UINT32_C(0x9fffffff), data0, data1);
     packet->dma = NULL;
 }
 

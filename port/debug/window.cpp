@@ -73,6 +73,9 @@ void debug_window_toggle(void) {
 }
 
 void debug_window_start(void) {
+#ifdef SDL_PLATFORM_IOS
+    return;
+#endif
     SDL_GPUDevice *device = render_device();
     window = SDL_CreateWindow("Dark Chronicle Debug", 1100, 820, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (!window || !SDL_ClaimWindowForGPUDevice(device, window)) {

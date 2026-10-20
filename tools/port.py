@@ -8,13 +8,20 @@ aborts, and build/port/missing.txt lists them by library.
     python3 -I tools/port.py            build
     python3 -I tools/port.py --run      build, then run it
     python3 -I tools/port.py --debug    also link build/port/darkchronicle-debug with port/debug and Dear ImGui
+    python3 -I tools/port.py --ios simulator
+                                        build build/port/ios-simulator/DarkChronicle.app with dc2.iso inside
+    python3 -I tools/port.py --ios device
+                                        build build/port/ios-device/DarkChronicle.app, signed for an iPhone
 """
 
 import argparse
 import concurrent.futures
+import datetime
+import hashlib
 import importlib.util
 import json
 import os
+import plistlib
 import re
 import shlex
 import shutil
@@ -34,6 +41,8 @@ IMGUI = OUT / "imgui-sdk"
 IMGUI_SOURCES = ["imgui.cpp", "imgui_draw.cpp", "imgui_tables.cpp", "imgui_widgets.cpp", "imgui_demo.cpp",
                  "imgui_impl_sdl3.cpp", "imgui_impl_sdlgpu3.cpp"]
 SDL_CFLAGS = []
+TARGET = []
+LINKER = "clang++"
 DARWIN = sys.platform == "darwin"
 PREFIX = "_" if DARWIN else ""
 OBJCOPY = (shutil.which("llvm-objcopy") or "/opt/homebrew/opt/llvm/bin/llvm-objcopy") if DARWIN else "objcopy"
@@ -50,6 +59,46 @@ LINK_FLAGS = ["-pthread"]
 if DARWIN:
     LINK_FLAGS += ["-Wl,-segaddr,__PS2,0x110000000", "-Wl,-segprot,__PS2,rw,rw",
                    "-Wl,-segaddr,__PS2SPR,0x170000000", "-Wl,-segprot,__PS2SPR,rw,rw"]
+IOS = {
+    "simulator": {"sdk": "iphonesimulator", "target": "arm64-apple-ios17.0-simulator", "platform": "iPhoneSimulator"},
+    "device": {"sdk": "iphoneos", "target": "arm64-apple-ios17.0", "platform": "iPhoneOS"},
+}
+PROFILES = [Path.home() / "Library/Developer/Xcode/UserData/Provisioning Profiles",
+            Path.home() / "Library/MobileDevice/Provisioning Profiles"]
+PROFILE_PROJECT = """// !$*UTF8*$!
+{
+    archiveVersion = 1;
+    classes = {};
+    objectVersion = 56;
+    objects = {
+        D0000000000000000000000A = {isa = PBXBuildFile; fileRef = D0000000000000000000000B; };
+        D0000000000000000000000B = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = main.c; sourceTree = "<group>"; };
+        D0000000000000000000000C = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Profile.app; sourceTree = BUILT_PRODUCTS_DIR; };
+        D0000000000000000000000D = {isa = PBXGroup; children = (D0000000000000000000000B, D0000000000000000000000E); sourceTree = "<group>"; };
+        D0000000000000000000000E = {isa = PBXGroup; children = (D0000000000000000000000C); name = Products; sourceTree = "<group>"; };
+        D0000000000000000000000F = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (D0000000000000000000000A); runOnlyForDeploymentPostprocessing = 0; };
+        D00000000000000000000010 = {isa = PBXNativeTarget; buildConfigurationList = D00000000000000000000011; buildPhases = (D0000000000000000000000F); buildRules = (); dependencies = (); name = Profile; productName = Profile; productReference = D0000000000000000000000C; productType = "com.apple.product-type.application"; };
+        D00000000000000000000011 = {isa = XCConfigurationList; buildConfigurations = (D00000000000000000000012); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
+        D00000000000000000000012 = {isa = XCBuildConfiguration; buildSettings = {
+            CODE_SIGN_STYLE = Automatic;
+            DEVELOPMENT_TEAM = @TEAM@;
+            GENERATE_INFOPLIST_FILE = YES;
+            IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+            PRODUCT_BUNDLE_IDENTIFIER = @IDENTIFIER@;
+            PRODUCT_NAME = Profile;
+            SDKROOT = iphoneos;
+            TARGETED_DEVICE_FAMILY = "1,2";
+        }; name = Debug; };
+        D00000000000000000000013 = {isa = PBXProject; buildConfigurationList = D00000000000000000000014; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = D0000000000000000000000D; productRefGroup = D0000000000000000000000E; projectDirPath = ""; projectRoot = ""; targets = (D00000000000000000000010); };
+        D00000000000000000000014 = {isa = XCConfigurationList; buildConfigurations = (D00000000000000000000015); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
+        D00000000000000000000015 = {isa = XCBuildConfiguration; buildSettings = {SDKROOT = iphoneos; }; name = Debug; };
+    };
+    rootObject = D00000000000000000000013;
+}
+"""
+IOS_FRAMEWORKS = ["AVFoundation", "AudioToolbox", "CoreBluetooth", "CoreGraphics", "CoreHaptics", "CoreMedia",
+                  "CoreMotion", "CoreVideo", "Foundation", "GameController", "Metal", "OpenGLES", "QuartzCore", "UIKit",
+                  "UniformTypeIdentifiers"]
 LOCALISED = {"mainloop": ["MainBuffer"], "eventedit": ["_Z10VectMatMulPfS_PA4_f"]}
 ALIASES = {
     "BuffWorkData__2": "BuffWorkData",
@@ -139,13 +188,15 @@ def compile_one(source, name):
     target = OBJ / f"{name}.o"
     depfile = OBJ / f"{name}.d"
     command_file = OBJ / f"{name}.command.json"
-    c = source.suffix == ".c"
+    c = source.suffix in (".c", ".m")
     if name.startswith("imgui_"):
         return compile_command(source, target, depfile, command_file,
-                               ["clang++", "-std=c++17", "-c", "-O2", "-g", "-w", "-MMD", "-MF", str(depfile),
+                               ["clang++", *TARGET, "-std=c++17", "-c", "-O2", "-g", "-w", "-MMD", "-MF", str(depfile),
                                 f"-I{IMGUI}", *SDL_CFLAGS, str(source), "-o", str(target)], [])
     debug = [f"-I{IMGUI}", f"-I{PORT / 'debug'}"] if name.startswith("debug_") else []
-    command = ["clang" if c else "clang++", "-std=c11" if c else "-std=c++26", "-c", *FLAGS, *debug,
+    compiler = LINKER.replace("clang++", "clang") if source.suffix == ".m" else "clang" if c else "clang++"
+    objc = ["-fobjc-arc"] if source.suffix == ".m" else []
+    command = [compiler, *TARGET, *objc, "-std=c11" if c else "-std=c++26", "-c", *FLAGS, *debug,
                *(["-O2"] if not source.is_relative_to(COPY) and source.name not in ("memory.c", "kernel.c") else []),
                "-MMD", "-MF", str(depfile),
                *([] if c else ["-include", str(PORT / "include" / "port.h")]),
@@ -185,6 +236,8 @@ def compile_all(units, debug=False):
     jobs += [(ENGINE / "port" / "src" / name, "upstream_" + Path(name).stem) for name in UPSTREAM_ASM]
     jobs.append((ENGINE / "tools" / "kazarov" / "src" / "cpp" / "sce" / "libvu0.cpp", "kazarov_vu0"))
     jobs += [(source, "port_" + source.stem) for source in sorted((PORT / "src").glob("*.c*"))]
+    if TARGET:
+        jobs += [(source, "port_" + source.stem) for source in sorted((PORT / "src").glob("*.m"))]
     if debug:
         jobs += [(source, "debug_" + source.stem) for source in sorted((PORT / "debug").glob("*.c*"))]
         jobs += [(IMGUI / name, "imgui_" + Path(name).stem) for name in IMGUI_SOURCES]
@@ -200,12 +253,12 @@ def compile_all(units, debug=False):
     return [OBJ / f"{name}.o" for _source, name in jobs], len(units), len(jobs) - len(units)
 
 
-def link(objects, extra, binary=BINARY):
+def link(objects, extra, binary):
     if DARWIN:
         platform = [f"-Wl,-alias,_{target},_{alias}" for alias, target in ALIASES.items()]
     else:
         platform = ["-no-pie", "-Wl,--no-demangle", *(f"-Wl,--defsym={alias}={target}" for alias, target in ALIASES.items())]
-    command = ["clang++", "-o", str(binary), *map(str, objects), *map(str, extra), *platform, *LINK_FLAGS]
+    command = [LINKER, *TARGET, "-o", str(binary), *map(str, objects), *map(str, extra), *platform, *LINK_FLAGS]
     return subprocess.run(command, capture_output=True, text=True)
 
 
@@ -238,7 +291,7 @@ def write_stubs(names, readable):
     source = OUT / "stubs.c"
     source.write_text("\n".join(lines) + "\n", encoding="utf-8")
     target = OUT / "stubs.o"
-    subprocess.run(["clang", "-c", "-O0", *([] if DARWIN else ["-fno-pie"]), "-w", str(source), "-o", str(target)], check=True)
+    subprocess.run(["clang", *TARGET, "-c", "-O0", *([] if DARWIN else ["-fno-pie"]), "-w", str(source), "-o", str(target)], check=True)
     return target
 
 
@@ -289,20 +342,138 @@ def movie_flags(prefix):
         sys.exit("FFmpeg SDK missing: run python3 -I tools/movie_sdk.py")
 
 
+def ios_flags(kind):
+    settings = IOS[kind]
+    prefix = ROOT / "build" / "port" / "ios-sdk" / kind
+    if not (prefix / "lib" / "libSDL3.a").exists():
+        sys.exit("iOS SDL3 and FFmpeg missing: run python3 -I tools/ios_sdk.py")
+    sysroot = subprocess.check_output(["xcrun", "--sdk", settings["sdk"], "--show-sdk-path"], text=True).strip()
+    TARGET.extend(["-target", settings["target"], "-isysroot", sysroot])
+    frameworks = [flag for name in IOS_FRAMEWORKS for flag in ("-framework", name)]
+    return [f"-I{prefix / 'include'}"], [f"-L{prefix / 'lib'}", "-lSDL3", "-lavcodec", "-lavutil", *frameworks]
+
+
+def app_info(kind, identifier):
+    settings = IOS[kind]
+    return {
+        "CFBundleDevelopmentRegion": "en",
+        "CFBundleDisplayName": "Dark Chronicle",
+        "CFBundleExecutable": "DarkChronicle",
+        "CFBundleIdentifier": identifier,
+        "CFBundleInfoDictionaryVersion": "6.0",
+        "CFBundleName": "DarkChronicle",
+        "CFBundlePackageType": "APPL",
+        "CFBundleShortVersionString": "1.0",
+        "CFBundleVersion": "1",
+        "CFBundleSupportedPlatforms": [settings["platform"]],
+        "DTPlatformName": settings["sdk"],
+        "LSRequiresIPhoneOS": True,
+        "LSSupportsOpeningDocumentsInPlace": True,
+        "MinimumOSVersion": "17.0",
+        "UIDeviceFamily": [1, 2],
+        "UIFileSharingEnabled": True,
+        "UILaunchScreen": {},
+        "UIRequiresFullScreen": True,
+        "UIStatusBarHidden": True,
+        "UISupportedInterfaceOrientations": ["UIInterfaceOrientationLandscapeLeft", "UIInterfaceOrientationLandscapeRight"],
+    }
+
+
+def bundle(kind, executable, disc, identifier):
+    app = OUT / "DarkChronicle.app"
+    app.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(executable, app / "DarkChronicle")
+    (app / "Info.plist").write_bytes(plistlib.dumps(app_info(kind, identifier), fmt=plistlib.FMT_BINARY))
+    copy = app / "dc2.iso"
+    if not copy.exists() or copy.stat().st_size != disc.stat().st_size or copy.stat().st_mtime < disc.stat().st_mtime:
+        copy.unlink(missing_ok=True)
+        subprocess.run(["cp", "-c", str(disc), str(copy)], check=True)
+    if kind == "simulator":
+        subprocess.run(["codesign", "--force", "--sign", "-", "--timestamp=none", str(app)], check=True)
+    return app
+
+
+def profile_contents(path):
+    data = subprocess.run(["security", "cms", "-D", "-i", str(path)], capture_output=True, check=True).stdout
+    return plistlib.loads(data)
+
+
+def find_profile(team, identifier):
+    now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+    paths = [path for folder in PROFILES for path in folder.glob("*.mobileprovision")]
+    for path in sorted(paths, key=lambda path: path.stat().st_mtime, reverse=True):
+        contents = profile_contents(path)
+        if contents["Entitlements"].get("application-identifier") == f"{team}.{identifier}" and contents["ExpirationDate"] > now:
+            return path, contents
+    return None, None
+
+
+def request_profile(team, identifier):
+    folder = OUT / "profile"
+    project = folder / "Profile.xcodeproj"
+    project.mkdir(parents=True, exist_ok=True)
+    (folder / "main.c").write_text("int main(void) { return 0; }\n", encoding="utf-8")
+    text = PROFILE_PROJECT.replace("@TEAM@", team).replace("@IDENTIFIER@", identifier)
+    (project / "project.pbxproj").write_text(text, encoding="utf-8")
+    subprocess.run(["xcodebuild", "-project", str(project), "-target", "Profile", "-sdk", "iphoneos",
+                    "-allowProvisioningUpdates", "-allowProvisioningDeviceRegistration", f"SYMROOT={folder / 'build'}",
+                    "build"], check=True, stdout=subprocess.DEVNULL)
+
+
+def signing_identity(contents):
+    wanted = {hashlib.sha1(certificate).hexdigest().upper() for certificate in contents["DeveloperCertificates"]}
+    listing = subprocess.check_output(["security", "find-identity", "-v", "-p", "codesigning"], text=True)
+    for words in (line.split() for line in listing.splitlines()):
+        if len(words) > 1 and words[1] in wanted:
+            return words[1]
+    sys.exit("no signing identity in the keychain matches the provisioning profile's certificates")
+
+
+def sign_for_device(app, team, identifier):
+    path, contents = find_profile(team, identifier)
+    if not path:
+        request_profile(team, identifier)
+        path, contents = find_profile(team, identifier)
+    if not path:
+        sys.exit(f"Xcode made no provisioning profile for {team}.{identifier}; sign in to Xcode with that team's Apple ID")
+    shutil.copyfile(path, app / "embedded.mobileprovision")
+    entitlements = OUT / "entitlements.plist"
+    entitlements.write_bytes(plistlib.dumps(contents["Entitlements"]))
+    subprocess.run(["codesign", "--force", "--sign", signing_identity(contents), "--entitlements", str(entitlements),
+                    "--generate-entitlement-der", "--timestamp=none", str(app)], check=True)
+    return contents["ExpirationDate"]
+
+
 def main():
+    global OUT, OBJ, BINARY, DEBUG_BINARY, LINKER
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--run", action="store_true", help="run the port once it is built")
     parser.add_argument("--graphics", action="store_true", help="accepted for compatibility; the port always opens a window")
     parser.add_argument("--movies", action="store_true", help="enable MPEG-2 movies with the local FFmpeg SDK")
     parser.add_argument("--debug", action="store_true", help="also link the debug build with its window and API")
     parser.add_argument("--sdl", type=Path, default=OUT / "sdk", help="local SDL3 installation prefix")
+    parser.add_argument("--ios", choices=sorted(IOS), help="build DarkChronicle.app for the iOS simulator or an iPhone")
+    parser.add_argument("--disc", type=Path, default=ROOT / "dc2.iso", help="the disc image bundled into the iOS app")
+    parser.add_argument("--bundle-id", default="dc2toolkit.darkchronicle", help="the iOS app's bundle identifier")
+    parser.add_argument("--team", help="the Apple development team that signs the iPhone app, as Xcode lists it")
     parser.add_argument("arguments", nargs="*", help="arguments for the port, with --run")
     options = parser.parse_args()
-    if options.movies:
-        cflags, libraries = movie_flags(OUT / "movie-sdk")
-        FLAGS.extend(["-DPORT_MOVIES", *cflags])
-        LINK_FLAGS.extend(libraries)
-    cflags, libraries = graphics_flags(options.sdl.resolve())
+    if options.ios == "device" and not options.team:
+        parser.error("--ios device needs --team: the team ID from Xcode's Signing & Capabilities")
+    if options.ios:
+        OUT = ROOT / "build" / "port" / f"ios-{options.ios}"
+        OBJ = OUT / "obj"
+        BINARY = OUT / "darkchronicle"
+        DEBUG_BINARY = OUT / "darkchronicle-debug"
+        LINKER = subprocess.check_output(["xcrun", "--find", "clang++"], text=True).strip()
+        cflags, libraries = ios_flags(options.ios)
+        FLAGS.append("-DPORT_MOVIES")
+    else:
+        if options.movies:
+            movie_cflags, movie_libraries = movie_flags(OUT / "movie-sdk")
+            FLAGS.extend(["-DPORT_MOVIES", *movie_cflags])
+            LINK_FLAGS.extend(movie_libraries)
+        cflags, libraries = graphics_flags(options.sdl.resolve())
     SDL_CFLAGS.extend(cflags)
     FLAGS.extend(["-DPORT_GRAPHICS", *cflags])
     LINK_FLAGS.extend(libraries)
@@ -313,14 +484,14 @@ def main():
     every, units, others = compile_all(copy_engine(), options.debug)
     debug_objects = [path for path in every if path.stem.startswith(("debug_", "imgui_"))]
     objects = [path for path in every if path not in debug_objects]
-    first = link(objects, [])
+    first = link(objects, [], BINARY)
     names = undefined(first.stderr, objects)
     if first.returncode != 0 and not names:
         sys.exit(first.stderr)
     readable = demangled(names)
     groups = write_missing(names, readable)
     extra = [write_stubs(names, readable)] if names else []
-    final = link(objects, extra)
+    final = link(objects, extra, BINARY)
     if final.returncode != 0:
         sys.exit(final.stderr)
     write_if_changed(OUT / "objects.json", json.dumps([str(path) for path in [*objects, *extra]], indent=2) + "\n")
@@ -335,6 +506,12 @@ def main():
     print(f"linked {BINARY.relative_to(ROOT)}; what is missing is in {(OUT / 'missing.txt').relative_to(ROOT)}")
     if options.debug:
         print(f"linked {DEBUG_BINARY.relative_to(ROOT)}")
+    if options.ios:
+        app = bundle(options.ios, DEBUG_BINARY if options.debug else BINARY, options.disc.resolve(), options.bundle_id)
+        print(f"bundled {app.relative_to(ROOT)}")
+        if options.ios == "device":
+            print(f"signed for team {options.team}; the profile expires {sign_for_device(app, options.team, options.bundle_id)}")
+        return
     if options.run:
         sys.stdout.flush()
         code = subprocess.run([str(BINARY), *(["--graphics"] if options.graphics else []), *options.arguments]).returncode

@@ -8,6 +8,8 @@ __attribute__((weak)) void port_kernel_yield(void) {}
 
 __attribute__((weak)) void debug_start(void) {}
 
+__attribute__((weak)) int debug_build(void) { return 0; }
+
 __attribute__((weak)) int debug_event(const void *event) {
     (void)event;
     return 0;

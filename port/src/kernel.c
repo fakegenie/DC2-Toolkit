@@ -1,11 +1,10 @@
-#define _XOPEN_SOURCE 700
+#include "port_fiber.h"
 #include "port_kernel.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <ucontext.h>
 
 enum { THREAD_LIMIT = 32, SEMA_LIMIT = 64, HANDLER_LIMIT = 64, STACK_SIZE = 1024 * 1024 };
 enum { UNUSED, DORMANT, READY, RUNNING, WAITING };
@@ -32,7 +31,7 @@ struct SemaParam {
 };
 
 static struct {
-    ucontext_t context;
+    PortFiber context;
     void (*entry)(void *);
     void *argument;
     uint64_t order;
@@ -49,7 +48,7 @@ static unsigned int dmac_enabled;
 static uint64_t queue_order;
 static int running;
 static int interrupt_active;
-static ucontext_t host_context;
+static PortFiber host_context;
 static int (*game_entry)(void);
 static int game_result;
 static int host_requested;
@@ -87,10 +86,7 @@ static void schedule(void) {
     }
     running = next;
     threads[next].state = RUNNING;
-    if (next != previous && swapcontext(&threads[previous].context, &threads[next].context) < 0) {
-        perror("port: thread switch");
-        exit(1);
-    }
+    if (next != previous) port_fiber_switch(&threads[previous].context, &threads[next].context);
 }
 
 static void preempt(void) {
@@ -130,12 +126,8 @@ int CreateThread(struct ThreadParam *param) {
 
 int StartThread(int id, void *argument) {
     if (id < 2 || id >= THREAD_LIMIT || threads[id].state != DORMANT) return -1;
-    if (getcontext(&threads[id].context) < 0) return -1;
-    threads[id].context.uc_stack.ss_sp = stacks[id];
-    threads[id].context.uc_stack.ss_size = STACK_SIZE;
-    threads[id].context.uc_link = NULL;
     threads[id].argument = argument;
-    makecontext(&threads[id].context, thread_entry, 0);
+    port_fiber_make(&threads[id].context, stacks[id], STACK_SIZE, thread_entry);
     ready(id);
     preempt();
     return id;
@@ -327,7 +319,7 @@ static void main_entry(void) {
     game_result = game_entry();
     threads[1].state = DORMANT;
     running = 0;
-    setcontext(&host_context);
+    port_fiber_switch(&threads[1].context, &host_context);
     abort();
 }
 
@@ -336,24 +328,17 @@ int port_kernel_run(int (*entry)(void)) {
     running = 1;
     threads[1].priority = 1;
     threads[1].state = RUNNING;
-    if (getcontext(&threads[1].context) < 0) return 1;
-    threads[1].context.uc_stack.ss_sp = stacks[1];
-    threads[1].context.uc_stack.ss_size = STACK_SIZE;
-    threads[1].context.uc_link = &host_context;
-    makecontext(&threads[1].context, main_entry, 0);
-    if (swapcontext(&host_context, &threads[1].context) < 0) return 1;
+    port_fiber_make(&threads[1].context, stacks[1], STACK_SIZE, main_entry);
+    port_fiber_switch(&host_context, &threads[1].context);
     while (host_requested) {
         host_requested = 0;
         debug_host();
-        if (swapcontext(&host_context, &threads[running].context) < 0) return 1;
+        port_fiber_switch(&host_context, &threads[running].context);
     }
     return game_result;
 }
 
 void port_kernel_host(void) {
     host_requested = 1;
-    if (swapcontext(&threads[running].context, &host_context) < 0) {
-        perror("port: host switch");
-        exit(1);
-    }
+    port_fiber_switch(&threads[running].context, &host_context);
 }

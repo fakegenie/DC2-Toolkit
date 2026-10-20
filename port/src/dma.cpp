@@ -7,7 +7,7 @@ extern int start_dma;
 extern "C" void *sceDmaGetChan(int channel);
 
 void SendDMA(void *packet, int size) {
-    std::uintptr_t address = reinterpret_cast<std::uintptr_t>(packet) & 0x0fffffff;
+    std::uintptr_t address = port_address(packet) & 0x0fffffff;
     std::uintptr_t scratch = buff_id ? 0x70002000 : 0x70000000;
     std::memcpy(reinterpret_cast<void *>(PORT_WINDOW + address), reinterpret_cast<void *>(PORT_WINDOW + scratch),
                 static_cast<std::size_t>(size) * 16);

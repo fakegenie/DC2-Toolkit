@@ -39,7 +39,7 @@ template <typename T> struct ps2_pointer {
     operator T *() const { return address ? reinterpret_cast<T *>(PORT_WINDOW + address) : nullptr; }
     T *operator->() const { return *this; }
     ps2_pointer &operator=(T *pointer) {
-        address = static_cast<unsigned int>(reinterpret_cast<__UINTPTR_TYPE__>(pointer));
+        address = pointer ? static_cast<unsigned int>(reinterpret_cast<__UINTPTR_TYPE__>(pointer) - PORT_WINDOW) : 0u;
         return *this;
     }
     ps2_pointer &operator+=(__PTRDIFF_TYPE__ count) {

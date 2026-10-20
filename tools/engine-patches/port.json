@@ -906,5 +906,10 @@
     "file": "ps2/src/dataread.cpp",
     "find": "int LoadFile2(char *path, void *buffer, int *out_size, int mode) {",
     "replace": "int LoadFile2Retail(char *path, void *buffer, int *out_size, int mode) {"
+  },
+  {
+    "file": "ps2/src/dataread.cpp",
+    "find": "        entry->name += base;",
+    "replace": "        entry->name = (char *) (base + entry->name_offset);"
   }
 ]

@@ -14,6 +14,12 @@ enum { KEY_MESH = 1 << 22, KEY_CULL_SHIFT = 23, KEY_WIRE = 1 << 25, KEY_SAMPLES_
        RECORD_LIMIT = 32768 };
 enum { KEY_KEEP = (3 << 15) | KEY_MESH | (3 << 23) | (3 << KEY_SAMPLES_SHIFT) };
 enum { SCALE_LIMIT = 4, SAMPLE_LIMIT = 8, WIDEN_LIMIT = 1024 };
+#ifdef SDL_PLATFORM_IOS
+#define WINDOW_FLAGS (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY)
+#else
+#define WINDOW_FLAGS SDL_WINDOW_RESIZABLE
+#endif
+
 enum { WINDOW_WIDTH = 960, WINDOW_HEIGHT = 720, TARGET_WIDTH = 640, TARGET_HEIGHT = 512, DEPTH_TILE = 64 };
 
 enum {
@@ -196,7 +202,7 @@ int render_init(void) {
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) render_error("video");
     device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_MSL | SDL_GPU_SHADERFORMAT_SPIRV, 0, NULL);
     if (!device) render_error("device");
-    window = SDL_CreateWindow("Dark Chronicle", WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_RESIZABLE);
+    window = SDL_CreateWindow("Dark Chronicle", WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_FLAGS);
     if (!window || !SDL_ClaimWindowForGPUDevice(device, window)) render_error("window");
     SDL_GPUPresentMode modes[] = {SDL_GPU_PRESENTMODE_MAILBOX, SDL_GPU_PRESENTMODE_IMMEDIATE};
     for (int i = 0; i < 2; ++i) {

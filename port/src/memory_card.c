@@ -74,10 +74,21 @@ int port_memory_card_init(const char *root) {
     return cards[0] >= 0 ? 0 : -101;
 }
 
+static const char *default_root(void) {
+    static char path[1024];
+    const char *home = getenv("HOME");
+    struct stat info;
+    if (!home) return "saves";
+    snprintf(path, sizeof path, "%s/Library/Mobile Documents/com~apple~CloudDocs/Dark Chronicle", home);
+    if (stat(path, &info) || !S_ISDIR(info.st_mode)) return "saves";
+    snprintf(path, sizeof path, "%s/Library/Mobile Documents/com~apple~CloudDocs/Dark Chronicle/saves", home);
+    return path;
+}
+
 int sceMcInit(void) {
     if (initialized) return cards[0] >= 0 ? 0 : -101;
     const char *root = getenv("DC2_SAVE_ROOT");
-    return port_memory_card_init(root && root[0] ? root : "saves");
+    return port_memory_card_init(root && root[0] ? root : default_root());
 }
 
 static int request(int command) {

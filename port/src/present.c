@@ -28,12 +28,18 @@ int port_present_init(int enabled) {
     return 1;
 }
 
+static void wait_for_foreground(void) {
+    SDL_Event event;
+    while (SDL_WaitEvent(&event) && event.type != SDL_EVENT_DID_ENTER_FOREGROUND) {}
+}
+
 void port_present_frame(void) {
     if (!started) return;
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
         if (debug_event(&event)) continue;
         if (event.type == SDL_EVENT_QUIT) exit(0);
+        if (event.type == SDL_EVENT_DID_ENTER_BACKGROUND) wait_for_foreground();
         if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(render_window()))
             exit(0);
     }

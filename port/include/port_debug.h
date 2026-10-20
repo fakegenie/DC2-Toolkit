@@ -7,6 +7,7 @@ extern "C" {
 #endif
 
 void debug_start(void);
+int debug_build(void);
 int debug_event(const void *event);
 void debug_field(void);
 void debug_frame_enter(void);

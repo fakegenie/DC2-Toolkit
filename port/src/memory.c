@@ -15,11 +15,11 @@
 #ifdef __APPLE__
 #include <crt_externs.h>
 #include <mach/mach.h>
-#include <mach/mach_vm.h>
 #include <mach-o/dyld.h>
 #include <mach-o/getsect.h>
 #include <mach-o/ldsyms.h>
 #include <spawn.h>
+#include <TargetConditionals.h>
 #endif
 
 enum { ARENA_SIZE = 64 * 1024 * 1024 };
@@ -182,7 +182,7 @@ __attribute__((used, section("__PS2,__window,zerofill"))) static unsigned char w
 __attribute__((used, section("__PS2SPR,__scratchpad,zerofill"))) static unsigned char scratchpad[16384];
 
 static void disable_address_randomisation(void) {
-    if (!_dyld_get_image_vmaddr_slide(0)) return;
+    if (!TARGET_OS_OSX || !_dyld_get_image_vmaddr_slide(0) || getenv("DC2TK_ASLR")) return;
     char path[4096];
     uint32_t length = sizeof path;
     posix_spawnattr_t attributes;
@@ -195,9 +195,9 @@ static void disable_address_randomisation(void) {
 }
 
 static void mirror(uintptr_t start, size_t size, uintptr_t offset, const char *operation) {
-    mach_vm_address_t target = start + offset;
+    vm_address_t target = start + offset;
     vm_prot_t current, maximum;
-    if (mach_vm_remap(mach_task_self(), &target, size, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, mach_task_self(), start, FALSE,
+    if (vm_remap(mach_task_self(), &target, size, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, mach_task_self(), start, FALSE,
                       &current, &maximum, VM_INHERIT_NONE) != KERN_SUCCESS || target != start + offset) {
         fprintf(stderr, "%s failed\n", operation);
         _exit(1);
