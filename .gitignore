@@ -14,3 +14,4 @@
 __pycache__/
 /site/
 /THIRD-PARTY-LICENCES.md
+.DS_Store

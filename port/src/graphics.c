@@ -1,26 +1,21 @@
 #define _POSIX_C_SOURCE 200809L
 #include "port_graphics.h"
+#include "port_window.h"
 #ifdef PORT_SOUND
-#include "iop_sound.h"
+#include "audio.h"
 #endif
-#include <errno.h>
 #include <stddef.h>
 #include <string.h>
 #include <time.h>
-#ifdef PORT_GRAPHICS
-#include "dma_chain.h"
-#include "gs.h"
 #include "port_present.h"
-#include "vif.h"
-#include <stdio.h>
-#include <stdlib.h>
-#endif
+#include "port_stats.h"
 
 extern void port_kernel_vblank(void);
 
 PortGraphicsState port_graphics;
 static int (*vblank_callback)(int);
 static uint64_t next_field;
+uint64_t port_field_period = UINT64_C(20000000);
 static uint32_t dma_channels[10][36];
 static unsigned char dma_environment[24];
 static int dma_enabled;
@@ -33,34 +28,40 @@ static uint64_t monotonic_ns(void) {
 
 static void graphics_field(void) {
     port_graphics.fields++;
-    *(volatile uint64_t *)0x12001000 = (port_graphics.fields & 1) << 13;
-    *(volatile uint32_t *)0x10000000 += 312;
+    *(volatile uint64_t *)(PORT_WINDOW + 0x12001000) = (port_graphics.fields & 1) << 13;
+    *(volatile uint32_t *)(PORT_WINDOW + 0x10000000) += 312;
     port_kernel_vblank();
     if (vblank_callback) vblank_callback((int)(port_graphics.fields & 1));
 #ifdef PORT_SOUND
-    port_sound_frame();
+    audio_frame();
 #endif
-#ifdef PORT_GRAPHICS
     port_present_frame();
-#endif
+}
+
+static void sleep_until(uint64_t deadline) {
+    uint64_t start = monotonic_ns();
+    for (uint64_t now = start; now < deadline; now = monotonic_ns()) {
+        struct timespec pause = {(time_t)((deadline - now) / UINT64_C(1000000000)),
+                                 (long)((deadline - now) % UINT64_C(1000000000))};
+        nanosleep(&pause, NULL);
+    }
+    port_stats.wait_ns += monotonic_ns() - start;
 }
 
 void port_graphics_tick(void) {
     uint64_t now = monotonic_ns();
-    if (!next_field) next_field = now + UINT64_C(20000000);
+    if (!next_field) next_field = now + port_field_period;
     if (now < next_field) return;
-    next_field += UINT64_C(20000000);
-    if (now >= next_field) next_field = now + UINT64_C(20000000);
+    next_field += port_field_period;
+    if (now >= next_field) next_field = now + port_field_period;
     graphics_field();
 }
 
 int sceGsSyncV(int mode) {
     if (mode == 1) return (int)(port_graphics.fields & 1);
     uint64_t now = monotonic_ns();
-    if (!next_field) next_field = now + UINT64_C(20000000);
-    struct timespec deadline = {(time_t)(next_field / UINT64_C(1000000000)),
-                               (long)(next_field % UINT64_C(1000000000))};
-    while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &deadline, NULL) == EINTR) {}
+    if (!next_field) next_field = now + port_field_period;
+    sleep_until(next_field);
     port_graphics_tick();
     return (int)(port_graphics.fields & 1);
 }
@@ -76,20 +77,12 @@ void sceGsResetGraph(short mode, short inter, short output, short frame_mode) {
     port_graphics.frame_mode = frame_mode;
 }
 
-void sceGsResetPath(void) {
-#ifdef PORT_GRAPHICS
-    port_vif_reset();
-#endif
-}
+void sceGsResetPath(void) {}
 
 int sceGsSyncPath(int mode, unsigned short timeout) {
     (void)mode;
     (void)timeout;
-#ifdef PORT_GRAPHICS
-    return port_gs_sync();
-#else
     return 0;
-#endif
 }
 
 static uint64_t gs_test(int test) {
@@ -146,13 +139,6 @@ void sceGsSwapDBuff(const void *buffer, int id) {
     port_graphics.buffer = id & 1;
     memcpy(port_graphics.display, db + (id & 1) * 5, sizeof(port_graphics.display));
     memcpy(port_graphics.draw, db + 10 + (id & 1) * 30, sizeof(port_graphics.draw));
-#ifdef PORT_GRAPHICS
-    const uint64_t *tag = db + 10 + (id & 1) * 30;
-    if (port_gif_submit(tag, 16 + (tag[0] & 0x7fff) * 16) < 0) {
-        fprintf(stderr, "graphics: %s\n", port_gs_error());
-        exit(1);
-    }
-#endif
 }
 
 void sceGsSetHalfOffset(void *environment, short x, short y, short field) {
@@ -195,30 +181,17 @@ void sceGsSetDefStoreImage(uint64_t *packet, short bp, short bw, short psm, shor
 }
 
 void sceGsExecLoadImage(const void *packet, const void *source) {
-#ifdef PORT_GRAPHICS
-    const uint64_t *words = packet;
-    unsigned size = image_qwords((int)(words[2] >> 56) & 63, (short)words[6], (short)(words[6] >> 32)) * 16;
-    if (port_gs_image_load(packet, source, size) < 0) {
-        fprintf(stderr, "graphics: %s\n", port_gs_error());
-        exit(1);
-    }
-#else
     (void)packet;
     (void)source;
-#endif
 }
 
 void sceGsExecStoreImage(const uint64_t *packet, void *destination) {
     int psm = (int)(packet[4] >> 24) & 63;
-    unsigned size = image_qwords(psm, (short)packet[8], (short)(packet[8] >> 32)) * 16;
-#ifdef PORT_GRAPHICS
-    if (port_gs_image_store(packet, destination, size) < 0) {
-        fprintf(stderr, "graphics: %s\n", port_gs_error());
-        exit(1);
-    }
-#else
+    int width = (short)packet[8], height = (short)(packet[8] >> 32);
+    unsigned size = image_qwords(psm, width, height) * 16;
     memset(destination, 0, size);
-#endif
+    if (psm == 48 || psm == 49)
+        port_depth_download((short)packet[6], (short)(packet[6] >> 16), width, height, destination);
 }
 
 void *sceDmaGetChan(int channel) {
@@ -248,17 +221,7 @@ int sceDmaSend(void *channel, void *data) {
     registers[12] = (uint32_t)(uintptr_t)data & UINT32_C(0x7fffffff);
     registers[8] = 0;
     registers[0] = (registers[0] & ~UINT32_C(0x10c)) | 5;
-#ifdef PORT_GRAPHICS
-    for (unsigned index = 0; index < 10; index++) {
-        if (registers != dma_channels[index]) continue;
-        if (port_dma_chain(index, data, (registers[0] & 0x40) != 0) < 0) {
-            fprintf(stderr, "graphics DMA %u: %s; GS: %s\n", index, port_dma_error(), port_gs_error());
-            exit(1);
-        }
-        return 0;
-    }
-    return -1;
-#endif
+    (void)data;
     return 0;
 }
 

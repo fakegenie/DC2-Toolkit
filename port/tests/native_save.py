@@ -19,9 +19,6 @@ def main():
         objects += [out / "obj" / ("upstream_" + pathlib.Path(name).stem + ".o") for name in native.UPSTREAM_ASM]
         objects += [out / "obj/kazarov_vu0.o"]
         objects += [out / "obj" / ("port_" + source.stem + ".o") for source in sorted((root / "port/src").glob("*.c*"))]
-        bundle = out / "obj/port_gs_bundle.o"
-        if bundle.exists():
-            objects.append(bundle)
     memcard = [path for path in objects if path.stem in ["memcard", "engine_memcard"]]
     mainloop = [path for path in objects if path.stem in ["mainloop", "engine_mainloop"]]
     if len(memcard) != 1 or len(mainloop) != 1:
@@ -33,8 +30,6 @@ def main():
     if command[0] not in ["clang", "clang++"]:
         command.insert(0, "clang++")
     replaced = ["mainloop", "engine_mainloop", "port_main", "port_memory_card"]
-    if any(path.stem == "port_gs_bundle" for path in objects):
-        replaced += ["port_gs_memory", "port_gs_clut", "port_gs_raster"]
     objects = [path for path in objects if path.stem not in replaced and not (path.parent.name == "port" and path.stem in ["main", "memory_card"])]
     with tempfile.TemporaryDirectory(prefix="dc2-native-save-") as temporary:
         temporary = pathlib.Path(temporary)
@@ -44,17 +39,20 @@ def main():
         sources = [index for index, value in enumerate(command) if pathlib.Path(value).name == "memcard.cpp"]
         assert len(sources) == 1
         command[sources[0]] = str(root / "port/tests/native_save.cpp")
+        command.append(f'-DSYMBOL_PREFIX="{native.PREFIX}"')
         command[command.index("-o") + 1] = str(temporary / "test.o")
         subprocess.run(command, cwd=root, check=True)
-        subprocess.run(["objcopy", "--globalize-symbol=_ZL14ActiveSaveData", str(mainloop[0]), str(temporary / "mainloop.o")], check=True)
-        subprocess.run(["clang", "-std=c11", "-Wall", "-Wextra", "-Werror", "-fno-pie", "-Iport/include", "-c", "port/src/memory_card.c", "-o", str(temporary / "memory_card.o")], cwd=root, check=True)
+        subprocess.run([native.OBJCOPY, f"--globalize-symbol={native.PREFIX}_ZL14ActiveSaveData", str(mainloop[0]), str(temporary / "mainloop.o")], check=True)
+        subprocess.run(["clang", "-std=c11", "-Wall", "-Wextra", "-Werror", *([] if native.DARWIN else ["-fno-pie"]), "-Iport/include", "-c", "port/src/memory_card.c", "-o", str(temporary / "memory_card.o")], cwd=root, check=True)
         libraries = []
         if "-DPORT_GRAPHICS" in command:
             _, libraries = native.graphics_flags(out / "sdk")
         if "-DPORT_MOVIES" in command:
-            libraries += [f"-L{out}/movie-sdk/lib", f"-Wl,-rpath,{out}/movie-sdk/lib", "-lavcodec", "-lavutil"]
+            libraries += native.movie_flags(out / "movie-sdk")[1]
         binary = temporary / "native_save"
-        subprocess.run(["clang++", "-no-pie", "-pthread", "-o", str(binary), *[str(path) for path in objects], str(temporary / "test.o"), str(temporary / "mainloop.o"), str(temporary / "memory_card.o"), *(f"-Wl,--defsym={alias}={target}" for alias, target in native.ALIASES.items()), *libraries], cwd=root, check=True)
+        link = [f"-Wl,-alias,_{target},_{alias}" for alias, target in native.ALIASES.items()] if native.DARWIN else \
+            ["-no-pie", *(f"-Wl,--defsym={alias}={target}" for alias, target in native.ALIASES.items())]
+        subprocess.run(["clang++", "-o", str(binary), *[str(path) for path in objects], str(temporary / "test.o"), str(temporary / "mainloop.o"), str(temporary / "memory_card.o"), *link, *native.LINK_FLAGS, *libraries], cwd=root, check=True)
         saves = temporary / "saves"
         subprocess.run([str(binary), "save", str(saves)], cwd=root, check=True, timeout=15)
         image = (saves / "card0/BESCES-51190dkcl0/BESCES-51190dkcl0").read_bytes()

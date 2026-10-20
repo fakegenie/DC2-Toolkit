@@ -92,7 +92,7 @@
   {
     "file": "ps2/include/dataread.hpp",
     "find": "char *name;",
-    "replace": "char * __ptr32 name;"
+    "replace": "ps2_pointer<char> name;"
   },
   {
     "file": "ps2/include/dataread.hpp",
@@ -207,7 +207,7 @@
   {
     "file": "ps2/include/inventmn.hpp",
     "find": "char *name;     /**< Name of the idea. */",
-    "replace": "char * __ptr32 name;     /**< Name of the idea. */"
+    "replace": "ps2_pointer<char> name;     /**< Name of the idea. */"
   },
   {
     "file": "ps2/include/inventmn.hpp",
@@ -474,6 +474,16 @@
     "replace": "memory->Alloc((4 * sizeof(CGeyserEffect) + 15) / 16)"
   },
   {
+    "file": "ps2/src/editexception.cpp",
+    "find": "float ratio[2];",
+    "replace": "float ratio[MAP_TIME_BAND_NUM];"
+  },
+  {
+    "file": "ps2/src/menucommon.cpp",
+    "find": "        i += 4;\n        memory->Align64();",
+    "replace": "        i += sizeof(char *);\n        memory->Align64();"
+  },
+  {
     "file": "ps2/src/editeff.cpp",
     "find": "memory->Alloc(0x42)",
     "replace": "memory->Alloc((sizeof(CPaintEffect) + 15) / 16)"
@@ -568,7 +578,7 @@
   {
     "file": "ps2/include/userdata.hpp",
     "find": "char *image; /**< Byte view of the photo's 64x64 packed 16-bit pixels. */",
-    "replace": "char * __ptr32 image; /**< Byte view of the photo's 64x64 packed 16-bit pixels. */"
+    "replace": "ps2_pointer<char> image; /**< Byte view of the photo's 64x64 packed 16-bit pixels. */"
   },
   {
     "file": "ps2/include/userdata.hpp",
@@ -653,12 +663,12 @@
   {
     "file": "ps2/include/mg_memory.hpp",
     "find": "u_long128      *data;",
-    "replace": "u_long128 * __ptr32 data;"
+    "replace": "ps2_pointer<u_long128> data;"
   },
   {
     "file": "ps2/include/mg_memory.hpp",
     "find": "mgMEMORY_BLOCK *next;",
-    "replace": "mgMEMORY_BLOCK * __ptr32 next;"
+    "replace": "ps2_pointer<mgMEMORY_BLOCK> next;"
   },
   {
     "file": "ps2/include/mg_memory.hpp",
@@ -689,5 +699,197 @@
     "file": "ps2/src/effscript.cpp",
     "find": "memory->Alloc(sizeof(RS_CALLDATA) * 2 / 16)",
     "replace": "memory->Alloc((sizeof(RS_CALLDATA) * 2 + 15) / 16)"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "static const u_int timer0_count = 0x10000000;",
+    "replace": "static const uptr timer0_count = PORT_WINDOW + 0x10000000;"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "static const u_int timer0_mode = 0x10000010;",
+    "replace": "static const uptr timer0_mode = PORT_WINDOW + 0x10000010;"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "static const u_int gs_csr = 0x12001000;",
+    "replace": "static const uptr gs_csr = PORT_WINDOW + 0x12001000;"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "static const u_int gs_pmode = 0x12000000;",
+    "replace": "static const uptr gs_pmode = PORT_WINDOW + 0x12000000;"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "static const u_int gs_dispfb1 = 0x12000070;",
+    "replace": "static const uptr gs_dispfb1 = PORT_WINDOW + 0x12000070;"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "static const u_int gs_display1 = 0x12000080;",
+    "replace": "static const uptr gs_display1 = PORT_WINDOW + 0x12000080;"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "static const u_int gs_dispfb2 = 0x12000090;",
+    "replace": "static const uptr gs_dispfb2 = PORT_WINDOW + 0x12000090;"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "static const u_int gs_display2 = 0x120000A0;",
+    "replace": "static const uptr gs_display2 = PORT_WINDOW + 0x120000A0;"
+  },
+  {
+    "file": "ps2/src/sceneload.cpp",
+    "find": "static const u_int timer0_count = 0x10000000;",
+    "replace": "static const uptr timer0_count = PORT_WINDOW + 0x10000000;"
+  },
+  {
+    "file": "ps2/src/mg_visual.cpp",
+    "find": "    return (u_int *) (buff_id ? 0x70002000 : 0x70000000);",
+    "replace": "    return (u_int *) (PORT_WINDOW + (buff_id ? 0x70002000 : 0x70000000));"
+  },
+  {
+    "file": "ps2/src/mg_visual.cpp",
+    "find": "    *(u_int *) 0x1000E010 = 0x100;",
+    "replace": "    *(u_int *) (PORT_WINDOW + 0x1000E010) = 0x100;"
+  },
+  {
+    "file": "ps2/src/dataread.cpp",
+    "find": "        CacheAddress = (u_long128 *) align_size((uptr) address, 64);",
+    "replace": "        CacheAddress = (u_long128 *) (((uptr) address + 63) & ~(uptr) 63);"
+  },
+  {
+    "file": "ps2/src/runscript_opcodes.cpp",
+    "find": "    object_index += object_base;\n    CHARA_ENTRY_OBJECT *object = (CHARA_ENTRY_OBJECT *) object_index;",
+    "replace": "    CHARA_ENTRY_OBJECT *object = (CHARA_ENTRY_OBJECT *) (object_base + object_index);"
+  },
+  {
+    "file": "ps2/src/inventmn.cpp",
+    "find": "            textures[i]->image[0] = (u_long128 *) info[i].image;",
+    "replace": "            textures[i]->image[0] = (u_long128 *) (char *) info[i].image;"
+  },
+  {
+    "file": "ps2/src/dataread.cpp",
+    "find": "    printf(\"%s %d %d\\n\", entry->name, entry->sector, size_to_sector(entry->size));",
+    "replace": "    printf(\"%s %d %d\\n\", (char *) entry->name, entry->sector, size_to_sector(entry->size));"
+  },
+  {
+    "file": "ps2/src/inventmn.cpp",
+    "find": "                    sprintf(line, \"%3d: %s\", pic_name_info_top[i].neta_id, pic_name_info_top[i].name);",
+    "replace": "                    sprintf(line, \"%3d: %s\", pic_name_info_top[i].neta_id, (char *) pic_name_info_top[i].name);"
+  },
+  {
+    "file": "ps2/include/sound.hpp",
+    "find": "    void LoadHdBd(int port, int hd, int hd_size, int bd, int bd_size);",
+    "replace": "    void LoadHdBd(int port, uptr hd, int hd_size, uptr bd, int bd_size);"
+  },
+  {
+    "file": "ps2/include/sound.hpp",
+    "find": "    void LoadHdBd2(int port, int hd, int hd_size, int bd, int bd_size);",
+    "replace": "    void LoadHdBd2(int port, uptr hd, int hd_size, uptr bd, int bd_size);"
+  },
+  {
+    "file": "ps2/include/sound.hpp",
+    "find": "    int LoadHdBdAdd(int port, int hd, int hd_size, int bd, int bd_size);",
+    "replace": "    int LoadHdBdAdd(int port, uptr hd, int hd_size, uptr bd, int bd_size);"
+  },
+  {
+    "file": "ps2/include/sound.hpp",
+    "find": "    int LoadSeq(int port, int address, int size);",
+    "replace": "    int LoadSeq(int port, uptr address, int size);"
+  },
+  {
+    "file": "ps2/include/sound.hpp",
+    "find": "int TransHdBd(int hd, int hd_size, int bd, int bd_size);",
+    "replace": "int TransHdBd(uptr hd, int hd_size, uptr bd, int bd_size);"
+  },
+  {
+    "file": "ps2/src/sound.cpp",
+    "find": "int TransHdBd(int hd, int hd_size, int bd, int bd_size) {",
+    "replace": "int TransHdBd(uptr hd, int hd_size, uptr bd, int bd_size) {"
+  },
+  {
+    "file": "ps2/src/sound.cpp",
+    "find": "void CSound::LoadHdBd(int port, int hd, int hd_size, int bd, int bd_size) {",
+    "replace": "void CSound::LoadHdBd(int port, uptr hd, int hd_size, uptr bd, int bd_size) {"
+  },
+  {
+    "file": "ps2/src/sound.cpp",
+    "find": "void CSound::LoadHdBd2(int port, int hd, int hd_size, int bd, int bd_size) {",
+    "replace": "void CSound::LoadHdBd2(int port, uptr hd, int hd_size, uptr bd, int bd_size) {"
+  },
+  {
+    "file": "ps2/src/sound.cpp",
+    "find": "int CSound::LoadHdBdAdd(int port, int hd, int hd_size, int bd, int bd_size) {",
+    "replace": "int CSound::LoadHdBdAdd(int port, uptr hd, int hd_size, uptr bd, int bd_size) {"
+  },
+  {
+    "file": "ps2/src/sound.cpp",
+    "find": "int CSound::LoadSeq(int port, int address, int size) {",
+    "replace": "int CSound::LoadSeq(int port, uptr address, int size) {"
+  },
+  {
+    "file": "ps2/include/ezmidi.hpp",
+    "find": "int ezMidi(int command, int argument);",
+    "replace": "int ezMidi(int command, sptr argument);"
+  },
+  {
+    "file": "ps2/src/ezmidi.cpp",
+    "find": "int ezMidi(int command, int argument) {",
+    "replace": "int ezMidi(int command, sptr argument) {"
+  },
+  {
+    "file": "ps2/include/ezbgm.hpp",
+    "find": "int ezBgm(int command, int argument);",
+    "replace": "int ezBgm(int command, sptr argument);"
+  },
+  {
+    "file": "ps2/src/ezbgm.cpp",
+    "find": "int ezBgm(int command, int argument) {",
+    "replace": "int ezBgm(int command, sptr argument) {"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "void mgInit(int screen_mode, int video_mode) {",
+    "replace": "void mgInitRetail(int screen_mode, int video_mode) {"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "void mgEndFrame(mgCDrawManager *manager) {",
+    "replace": "void mgEndFrameRetail(mgCDrawManager *manager) {"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "void mgSetPkTextureRepeat(sceGsClamp clamp) {",
+    "replace": "void mgSetPkTextureRepeatRetail(sceGsClamp clamp) {"
+  },
+  {
+    "file": "ps2/src/sceneseq.cpp",
+    "find": "float time = (now_frame - key[now_key].frame) / key[now_key].length;",
+    "replace": "float time = (now_frame - key[now_key].frame) / (key[now_key].length + (key[now_key].length == 0));",
+    "count": 2
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "void mgSetPkFrameBuffer(int fbp, int width, int height, int psm) {",
+    "replace": "void mgSetPkFrameBufferRetail(int fbp, int width, int height, int psm) {"
+  },
+  {
+    "file": "ps2/src/scene.cpp",
+    "find": "        return slot->name;\n    }\n\n    return 0;",
+    "replace": "        return slot->name;\n    }\n\n    return (char *) \"\";"
+  },
+  {
+    "file": "ps2/src/dng_main.cpp",
+    "find": "BuffScriptData.stSetBuffer(MainBuffer->stAlloc64(20000), 20000);",
+    "replace": "BuffScriptData.stSetBuffer(MainBuffer->stAlloc64(24000), 24000);"
+  },
+  {
+    "file": "ps2/src/inventmn.cpp",
+    "find": "0x210",
+    "replace": "0x400",
+    "count": 2
   }
 ]

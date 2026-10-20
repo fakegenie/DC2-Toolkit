@@ -29,7 +29,7 @@ static int clamp(int value) {
     return value;
 }
 
-void port_spu_reset(void) {
+void spu_reset(void) {
     memset(ram, 0, sizeof(ram));
     memset(voices, 0, sizeof(voices));
     memset(effects, 0, sizeof(effects));
@@ -43,14 +43,13 @@ void port_spu_reset(void) {
     }
 }
 
-int port_spu_transfer(unsigned address, void *data, size_t size, int read) {
-    if (!data || address > sizeof(ram) || size > sizeof(ram) - address) return -1;
-    if (read) memcpy(data, ram + address, size);
-    else memcpy(ram + address, data, size);
-    return (int)size;
+int spu_ram_write(unsigned address, const void *data, size_t size) {
+    if (!data || address > sizeof(ram) || size > sizeof(ram) - address) return 0;
+    memcpy(ram + address, data, size);
+    return 1;
 }
 
-void port_spu_start(unsigned voice, unsigned address, unsigned pitch, int left, int right, unsigned adsr1, unsigned adsr2) {
+void spu_voice_start(unsigned voice, unsigned address, unsigned pitch, int left, int right, unsigned adsr1, unsigned adsr2) {
     if (voice >= 48) return;
     memset(voices[voice].interpolation, 0, sizeof(voices[voice].interpolation));
     voices[voice].start = address;
@@ -70,59 +69,51 @@ void port_spu_start(unsigned voice, unsigned address, unsigned pitch, int left, 
     voices[voice].stage = 1;
 }
 
-void port_spu_route(unsigned voice, unsigned route) { if (voice < 48) voices[voice].route = route & 15; }
+void spu_voice_route(unsigned voice, unsigned route) { if (voice < 48) voices[voice].route = route & 15; }
 
-void port_spu_stop(unsigned voice) {
+void spu_voice_stop(unsigned voice) {
     if (voice < 48 && voices[voice].stage) { voices[voice].stage = 4; voices[voice].counter = 0; }
 }
 
-int port_spu_active(unsigned voice) { return voice < 48 && voices[voice].stage != 0; }
+int spu_voice_active(unsigned voice) { return voice < 48 && voices[voice].stage != 0; }
 
-int port_spu_level(unsigned voice) { return voice < 48 ? voices[voice].envelope : 0; }
+int spu_voice_level(unsigned voice) { return voice < 48 ? voices[voice].envelope : 0; }
 
 static int direct_volume(unsigned value) { return (value & 0x4000) ? (int)(value & 0x7fff) - 0x8000 : (int)(value & 0x7fff); }
 
-void port_spu_param(unsigned entry, unsigned value) {
-    unsigned core = entry & 1;
-    unsigned voice = ((entry >> 1) & 31) + core * 24;
-    unsigned reg = (entry >> 8) & 31;
-    if (reg == 8) { mixer[core] = value & (core ? 0xfff : 0xff0); return; }
-    if (reg == 13 || reg == 14) { external_gain[core][reg - 13] = (int16_t)value; return; }
-    if (reg == 15 || reg == 16) { input_gain[core][reg - 15] = (int16_t)value; return; }
-    if (reg == 9 || reg == 10) { master[core][reg - 9] = direct_volume(value); return; }
-    if (reg == 11 || reg == 12) { effects[core].depth[reg - 11] = (int16_t)value; return; }
-    if (voice >= core * 24 + 24) return;
-    if (reg == 0) voices[voice].left = direct_volume(value);
-    if (reg == 1) voices[voice].right = direct_volume(value);
-    if (reg == 2) voices[voice].pitch = value & 0x3fff;
-    if (reg == 3) voices[voice].adsr1 = value;
-    if (reg == 4) voices[voice].adsr2 = value;
+void spu_voice_volume(unsigned voice, int left, int right) {
+    if (voice >= 48) return;
+    voices[voice].left = left;
+    voices[voice].right = right;
 }
 
-void port_spu_addr(unsigned entry, unsigned value) {
-    unsigned core = entry & 1;
-    unsigned voice = ((entry >> 1) & 31) + core * 24;
-    if ((entry >> 8) == 0x1d) { effects[core].end = value & 0x1fffff; return; }
-    if (voice >= core * 24 + 24) return;
-    if ((entry >> 8) == 0x20) voices[voice].start = value;
-    if ((entry >> 8) == 0x21) voices[voice].loop = value;
+void spu_voice_pitch(unsigned voice, unsigned pitch) { if (voice < 48) voices[voice].pitch = pitch & 0x3fff; }
+
+void spu_voice_adsr2(unsigned voice, unsigned adsr2) { if (voice < 48) voices[voice].adsr2 = adsr2; }
+
+int spu_core_master_volume(unsigned core, unsigned volume) {
+    if (core >= 2 || (volume & 0x8000)) return -1;
+    master[core][0] = master[core][1] = direct_volume(volume);
+    return 0;
 }
 
-void port_spu_switch(unsigned entry, unsigned value) {
-    unsigned core = entry & 1;
-    for (unsigned i = 0; i < 24; ++i) {
-        unsigned v = core * 24 + i;
-        unsigned reg = entry >> 8;
-        if (reg >= 0x18 && reg <= 0x1b) {
-            static const unsigned routes[4] = {1,4,2,8};
-            unsigned bit = routes[reg - 0x18];
-            voices[v].route = (voices[v].route & ~bit) | ((value & (1u << i)) ? bit : 0);
-            continue;
-        }
-        if (!(value & (1u << i))) continue;
-        if ((entry >> 8) == 0x15) port_spu_start(v, voices[v].start, voices[v].pitch, voices[v].left, voices[v].right, voices[v].adsr1, voices[v].adsr2);
-        if ((entry >> 8) == 0x16) port_spu_stop(v);
-    }
+void spu_core_effect_volume(unsigned core, int volume) {
+    if (core < 2) effects[core].depth[0] = effects[core].depth[1] = (int16_t)volume;
+}
+
+void spu_core_mixer(unsigned core, unsigned value) { if (core < 2) mixer[core] = value & (core ? 0xfff : 0xff0); }
+
+void spu_core_input_gain(unsigned core, int left, int right) {
+    if (core >= 2) return;
+    input_gain[core][0] = (int16_t)left;
+    input_gain[core][1] = (int16_t)right;
+}
+
+void spu_core_effect_end(unsigned core, unsigned address) { if (core < 2) effects[core].end = address & 0x1fffff; }
+
+void spu_voices_stop(unsigned core, unsigned mask) {
+    if (core >= 2) return;
+    for (unsigned i = 0; i < 24; ++i) if (mask & (1u << i)) spu_voice_stop(core * 24 + i);
 }
 
 static int block(unsigned v) {
@@ -205,7 +196,7 @@ static void effect_write(unsigned core, int offset, int value) {
     ram[address + 1] = sample >> 8;
 }
 
-int port_spu_effect(unsigned core, unsigned mode, int left, int right, int delay, int feedback) {
+int spu_core_effect(unsigned core, unsigned mode, int left, int right, int delay, int feedback) {
     if (core >= 2 || (mode & ~0x100u) > 9) return -1;
     unsigned preset = mode & ~0x100u;
     unsigned bytes = spu_reverb_sizes[preset] * 16;
@@ -238,7 +229,15 @@ int port_spu_effect(unsigned core, unsigned mode, int left, int right, int delay
     return 0;
 }
 
-void port_spu_effect_enable(unsigned core, int enabled) { if (core < 2) effects[core].enabled = !!enabled; }
+void spu_core_effect_enable(unsigned core, int enabled) { if (core < 2) effects[core].enabled = !!enabled; }
+
+void spu_core_reverb(unsigned core, unsigned mode, int depth) {
+    spu_core_effect_end(core, 0x1fffff - (core << 17));
+    spu_core_effect(core, mode | 0x100, 0, 0, 0, 0);
+    spu_core_effect_enable(core, 1);
+    spu_core_effect_volume(core, (depth << 8) & 0xffff);
+    spu_core_master_volume(core, 0x3fff);
+}
 
 static int effect_filter(const int16_t *samples, unsigned cursor, int scale) {
     static const int taps[39] = {-1,0,2,0,-10,0,35,0,-103,0,266,0,-616,0,1332,0,-2960,0,10246,16384,10246,0,-2960,0,1332,0,-616,0,266,0,-103,0,35,0,-10,0,2,0,-1};
@@ -287,11 +286,11 @@ static void effect_sample(unsigned core, const int32_t *input, int32_t *output) 
     effects[core].filter_cursor = (cursor + 1) % 39;
 }
 
-void port_spu_input(unsigned core, int left, int right) {
+void spu_core_input(unsigned core, int left, int right) {
     if (core < 2) { input_pcm[core][0] += left; input_pcm[core][1] += right; }
 }
 
-void port_spu_sample(int32_t *left, int32_t *right) {
+void spu_mix(int32_t *left, int32_t *right) {
     int32_t dry[2][2] = {{0}}, wet[2][2] = {{0}};
     for (unsigned v = 0; v < 48; ++v) {
         if (!voices[v].stage) continue;

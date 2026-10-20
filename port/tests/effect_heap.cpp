@@ -22,7 +22,7 @@ _EFF_SCRIPT *allocate_effect(mgCMemory *memory) {
 
 int main() {
     static_assert(sizeof(mgMEMORY_BLOCK) == 16);
-    assert(reinterpret_cast<uintptr_t>(storage + 2048) <= UINT32_MAX);
+    assert(reinterpret_cast<uintptr_t>(storage + 2048) - PORT_WINDOW <= UINT32_MAX);
     std::memcpy(program.magic, "SB2", 3);
     mgCMemory memory;
     memory.SetHeapMem(storage, 2048);
@@ -48,7 +48,7 @@ int main() {
     assert(effect->run.stack_end - effect->run.stack == 64);
     assert(effect->run.call_end - effect->run.call == 2);
     mgMEMORY_BLOCK *block = reinterpret_cast<mgMEMORY_BLOCK *>(work) - 1;
-    uintptr_t begin = reinterpret_cast<uintptr_t>(block->data);
+    uintptr_t begin = reinterpret_cast<uintptr_t>(static_cast<u_long128 *>(block->data));
     uintptr_t end = reinterpret_cast<uintptr_t>(reinterpret_cast<u_long128 *>(block) + block->size);
     assert(end <= reinterpret_cast<uintptr_t>(storage + 2047));
     assert(reinterpret_cast<uintptr_t>(effect->run.stack) >= begin);

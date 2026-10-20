@@ -1,0 +1,6 @@
+[
+  {"launch": {}},
+  {"goto": 800},
+  {"replay": "port/tests/golden/select_language.txt"},
+  {"screenshot": "after_select"}
+]

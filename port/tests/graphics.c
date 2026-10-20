@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <string.h>
 #include <time.h>
-#include <sys/mman.h>
+#include "port_window.h"
 
 void sceGsSetDefDBuff(void *, int, int, int, int, int, int);
 void sceGsSwapDBuff(const void *, int);
@@ -17,6 +17,14 @@ void *sceDmaGetChan(int);
 int sceDmaSend(void *, void *);
 static int interrupts;
 static int callbacks;
+
+void port_present_frame(void) {}
+
+void port_depth_download(int x, int y, int width, int height, unsigned *pixels) {
+    (void)x;
+    (void)y;
+    memset(pixels, 0, (size_t)width * (size_t)height * sizeof *pixels);
+}
 
 void port_kernel_vblank(void) {
     interrupts++;
@@ -130,10 +138,6 @@ static void pal_timing(void) {
 }
 
 int main(void) {
-    assert(mmap((void *)0x10000000, 0x10000, PROT_READ | PROT_WRITE,
-                MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0) != MAP_FAILED);
-    assert(mmap((void *)0x12000000, 0x2000, PROT_READ | PROT_WRITE,
-                MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0) != MAP_FAILED);
     vif_packet();
     gif_packet();
     graph_packets();

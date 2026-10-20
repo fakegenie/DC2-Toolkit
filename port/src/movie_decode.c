@@ -40,10 +40,9 @@ int port_pss_packet(const unsigned char *data, size_t size, struct port_pss_pack
 #include <libavutil/error.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
+#include "port_graphics.h"
 
-void port_sound_movie_pcm(const int16_t *samples, size_t frames, unsigned rate, unsigned channels);
-void port_sound_movie_clear(void);
+#include "audio.h"
 
 static struct {
     struct sceCdlFILE file;
@@ -78,9 +77,7 @@ static struct {
 } movie;
 
 static double movie_time(void) {
-    struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    return now.tv_sec + now.tv_nsec / 1000000000.0;
+    return (double)port_graphics.fields * 0.02;
 }
 
 static unsigned movie_le32(const unsigned char *p) {
@@ -130,7 +127,7 @@ static void movie_audio(const unsigned char *data, size_t size) {
                     movie.pcm[i * movie.audio_channels + channel] = (int16_t)((unsigned)p[0] | (unsigned)p[1] << 8);
                 }
             }
-            port_sound_movie_pcm(movie.pcm, frames, movie.audio_rate, movie.audio_channels);
+            audio_movie_pcm(movie.pcm, frames, movie.audio_rate, movie.audio_channels);
             movie.audio_size = 0;
         }
     }
@@ -209,7 +206,7 @@ static int movie_picture(void) {
 
 void port_movie_close(void) {
     port_present_movie_clear();
-    port_sound_movie_clear();
+    audio_movie_clear();
     avcodec_free_context(&movie.decoder);
     if (movie.parser) av_parser_close(movie.parser);
     av_frame_free(&movie.frame);
@@ -272,7 +269,7 @@ void port_movie_step(void) {
                 movie.audio_size = 0;
                 movie.started = 0;
                 movie.frames = 0;
-                port_sound_movie_clear();
+                audio_movie_clear();
                 continue;
             }
             movie.ended = 1;

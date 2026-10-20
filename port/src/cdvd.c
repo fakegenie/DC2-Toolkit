@@ -1,5 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cdvd.h"
+#include "port_kernel.h"
+#include "port_stats.h"
 #include <ctype.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -34,6 +36,8 @@ static uint32_t le32(const unsigned char *p) {
 
 static int read_disc(uint64_t offset, void *buffer, size_t size) {
     if (disc < 0 || offset > disc_size || size > disc_size - offset || (size && !buffer)) return 0;
+    port_stats.disc_reads++;
+    port_stats.disc_bytes += (uint32_t)size;
     unsigned char *out = buffer;
     while (size) {
         ssize_t result = pread(disc, out, size, (off_t)offset);
@@ -216,7 +220,10 @@ int sceCdRead(unsigned int lsn, unsigned int sectors, void *buffer, struct sceCd
     if (result && sectors) log_archive_read(lsn);
     return result;
 }
-int sceCdSync(int mode) { (void)mode; return 0; }
+int sceCdSync(int mode) {
+    if (mode == 0) port_kernel_yield();
+    return 0;
+}
 int sceCdGetError(void) { return cd_error; }
 int sceCdBreak(void) { cd_error = 0; return 1; }
 int sceCdSeek(unsigned int lsn) { return disc >= 0 && (uint64_t)lsn * 2048 < disc_size; }

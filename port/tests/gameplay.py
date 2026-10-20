@@ -11,8 +11,6 @@ import subprocess
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build", type=pathlib.Path, default=pathlib.Path("build/port"))
-    parser.add_argument("--profile", action="store_true")
-    parser.add_argument("--trace", action="store_true")
     options = parser.parse_args()
     root = pathlib.Path(__file__).resolve().parents[2]
     build = options.build.resolve()
@@ -36,28 +34,26 @@ def main():
         if unit in exports:
             target = out / source.name
             shutil.copyfile(source, target)
-            subprocess.run(["objcopy", *["--globalize-symbol=" + name for name in exports[unit]], str(target)], check=True)
+            subprocess.run([port.OBJCOPY, *["--globalize-symbol=" + port.PREFIX + name for name in exports[unit]], str(target)], check=True)
+            objects.append(target)
+        elif unit == "port_input":
+            target = out / source.name
+            shutil.copyfile(source, target)
+            subprocess.run([port.OBJCOPY, f"--redefine-sym={port.PREFIX}port_input_read={port.PREFIX}port_input_read_device", str(target)], check=True)
             objects.append(target)
         else:
             objects.append(source)
     replay = out / "gameplay.o"
-    subprocess.run(["clang++", "-std=c++26", *port.FLAGS, "-O2", *(["-DREPLAY_PROFILE"] if options.profile else []), "-include", str(root / "port/include/port.h"),
+    subprocess.run(["clang++", "-std=c++26", *port.FLAGS, "-O2", f'-DSYMBOL_PREFIX="{port.PREFIX}"', "-include", str(root / "port/include/port.h"),
                     "-I" + str(root / "port/include"), "-I" + str(build / "copy/ps2/include"),
                     "-I" + str(build / "copy/ps2/include/sce"), "-c", str(root / "port/tests/gameplay.cpp"),
                     "-o", str(replay)], check=True)
-    _, libraries = port.graphics_flags(root / "build/port/sdk")
-    movie = root / "build/port/movie-sdk/lib"
-    profile = ["-Wl,--wrap=" + name for name in ["port_gs_raster", "port_gs_raster_enqueue", "port_gs_raster_flush", "port_vu1_start", "port_vu1_continue"]] if options.profile else []
-    if options.trace:
-        trace = out / "gs_trace.o"
-        subprocess.run(["clang", "-std=c11", "-O2", "-fno-pie", "-I" + str(root / "port/include"),
-                        "-c", str(root / "port/tests/gs_trace.c"), "-o", str(trace)], check=True)
-        objects.append(trace)
-        profile += ["-Wl,--wrap=" + name for name in ["port_gs_reset", "port_gif_submit", "port_gif_feed",
-                    "port_gs_write_register", "port_gs_image_load", "port_gs_image_store", "port_gs_read_rgba"]]
-    subprocess.run(["clang++", "-pthread", "-no-pie", "-o", str(out / "darkchronicle"), *map(str, objects), str(replay),
-                    "-Wl,--wrap=port_input_read", *profile, *[f"-Wl,--defsym={a}={b}" for a, b in port.ALIASES.items()],
-                    *libraries, "-L" + str(movie), "-Wl,-rpath," + str(movie), "-lavcodec", "-lavutil"], check=True)
+    _, libraries = port.graphics_flags(build / "sdk")
+    _, movie_libraries = port.movie_flags(build / "movie-sdk")
+    link = [f"-Wl,-alias,_{target},_{alias}" for alias, target in port.ALIASES.items()] if port.DARWIN else \
+        ["-no-pie", *(f"-Wl,--defsym={alias}={target}" for alias, target in port.ALIASES.items())]
+    subprocess.run(["clang++", "-o", str(out / "darkchronicle"), *map(str, objects), str(replay),
+                    *link, *port.LINK_FLAGS, *libraries, *movie_libraries], check=True)
     print(out / "darkchronicle")
 
 

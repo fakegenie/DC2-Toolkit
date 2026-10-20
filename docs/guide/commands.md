@@ -19,15 +19,15 @@ Run `dc2tk help <command>` to see all options for any command.
 
 `build` also takes `--mods <dir>` (the folder that holds the mods), `--no-start-at` (ignore a mod's `start_at`), and `--full` (compile every script, not only the edited ones). `--play` and `play` find PCSX2 through `--pcsx2 <exe>`, the `PCSX2` environment variable, your `PATH`, or its usual install folder.
 
-`dc2tk build extracted/scripts dc2.iso --native` builds the Linux x86-64 SDL3 port as
+`dc2tk build extracted/scripts dc2.iso --native` builds the SDL3 port for Linux or macOS as
 `build/port/darkchronicle`. Pass `--native FILE` to choose its path. Add `-o modded.iso` to
 write the ISO too; both builds use the chosen mods, executable tables and native declarations.
-The native build needs clang 21, binutils, Python 3 and SDL3 development files. A local SDK in
+The native build needs clang 21, binutils (llvm-objcopy and llvm-nm on macOS), Python 3 and SDL3 development files. A local SDK in
 `build/port/sdk` takes precedence over `pkg-config sdl3`; `python3 -I tools/port_sdk.py`
 installs that SDK. Run the binary with `--graphics modded.iso`. It warns when the
 mounted disc's executable differs from the one used for the build. For MPEG2 movies, run
-`python3 -I tools/movie_sdk.py` and add `--movies` to the native build. Engine mods are checked
-with clang as well as MWCC by `mod check`. A mod cannot override a function supplied by `port/src`.
+`python3 -I tools/movie_sdk.py` (or install FFmpeg for `pkg-config`) and add `--movies` to the native build. Engine mods are checked
+with clang as well as MWCC by `mod check --native`. A mod cannot override a function supplied by `port/src`.
 
 ## The engine
 
@@ -42,8 +42,8 @@ The game's executable (`SCES_511.90`) built from [ChronicleTwo](https://github.c
 
 A chosen mod's `engine/` files are built automatically by `dc2tk build … --mod NAME`, including
 `--dry-run`. `dc2tk mod check extracted/scripts NAME --disc dc2.iso` builds them too. These
-commands need the same container tools as `engine build`; `mod check` also needs the native
-clang/SDL3 tools and `--disc` for the retail libraries. Engine mods cannot be combined with `--executable`. See [Engine files](mods.md#engine-files)
+commands need the same container tools as `engine build`; `mod check --native` also builds the port, which needs the native
+clang/SDL3 tools, and `--disc` for the retail libraries. Engine mods cannot be combined with `--executable`. See [Engine files](mods.md#engine-files)
 for function replacement, `original()`, headers, added units and native declarations.
 `dc2tk mod override engine NAME FUNCTION` copies an engine function into a mod and refuses
 an existing destination. Engine mods can also edit executable data tables; those values are

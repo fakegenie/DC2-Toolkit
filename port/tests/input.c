@@ -1,6 +1,9 @@
 #include <assert.h>
 #include <string.h>
 #include "input.h"
+#include "port_graphics.h"
+
+PortGraphicsState port_graphics;
 
 static unsigned int pressed(const unsigned char data[32]) {
     return ((data[2] << 8) | data[3]) ^ 0xffff;

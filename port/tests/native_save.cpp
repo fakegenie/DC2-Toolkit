@@ -8,7 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 
-extern CSaveData *ActiveSaveData asm("_ZL14ActiveSaveData");
+extern CSaveData *ActiveSaveData asm(SYMBOL_PREFIX "_ZL14ActiveSaveData");
 extern "C" int port_memory_card_init(const char *);
 void MakeMemoryCardFileName(int, char *);
 
@@ -103,7 +103,7 @@ int main(int argc, char **argv) {
             assert(data.save_dungeon.stage_id == 1 && data.save_dungeon.floor_id[1] == 5);
             assert(data.user_data.invent_data.photo[0].used == 1);
             assert(data.user_data.invent_data.photo[0].neta_id == 314);
-            assert((uintptr_t)data.user_data.invent_data.photo[0].image == 0x00123456);
+            assert(data.user_data.invent_data.photo[0].image.address == 0x00123456);
             data.user_data.invent_data.ResetAddress();
             assert(data.user_data.invent_data.photo[0].image == (char *)data.user_data.invent_data.photo_work[0]);
             assert(data.user_data.invent_data.photo_work[0][0] == 0x1234);

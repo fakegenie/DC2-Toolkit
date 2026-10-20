@@ -20,6 +20,7 @@ pub fn run_mod_check(
     names: &[String],
     mods_dir: &ModsDir,
     disc: Option<&Path>,
+    native: bool,
     common: &Common,
 ) -> Result<ExitCode> {
     let mut tools = common.tools()?;
@@ -55,15 +56,17 @@ pub fn run_mod_check(
     };
     if let Some(prepared) = &prepared {
         let executable = crate::engine::compile_mods(prepared, edited_executable.as_deref())?;
-        crate::native::build(
-            Some(prepared),
-            disc.unwrap(),
-            edited_executable.as_deref(),
-            &executable,
-            &crate::files::root().join("build/port/darkchronicle"),
-            true,
-            false,
-        )?;
+        if native {
+            crate::native::build(
+                Some(prepared),
+                disc.unwrap(),
+                edited_executable.as_deref(),
+                &executable,
+                &crate::files::root().join("build/port/darkchronicle"),
+                true,
+                false,
+            )?;
+        }
     }
     let consts = default_constants(source)?;
     let constants = mod_constants(&mod_dirs, &lines, &consts, &added, disc, &tools)?;

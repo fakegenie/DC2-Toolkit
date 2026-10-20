@@ -35,8 +35,8 @@ void port_present_movie(const uint32_t *rgba, unsigned width, unsigned height) {
 }
 
 void port_present_movie_clear(void) {}
-void port_sound_movie_clear(void) {}
-void port_sound_movie_pcm(const int16_t *samples, size_t frames, unsigned rate, unsigned channels) {
+void audio_movie_clear(void) {}
+void audio_movie_pcm(const int16_t *samples, size_t frames, unsigned rate, unsigned channels) {
     assert(samples && frames && rate == 48000 && channels == 2);
     audio_frames += frames;
     for (size_t i = 0; i < frames * channels; i++) {

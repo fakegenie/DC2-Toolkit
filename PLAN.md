@@ -1,12 +1,23 @@
 # Plan
 
-The engine in dc2tk, mods that change it, and a minimal native Linux port. The facts about
+The engine in dc2tk, mods that change it, and a minimal native port for macOS and Linux, with
+Windows to follow. The facts about
 ChronicleTwo come from its source at commit `d51e74b` (Kazarov at `14164f1`), given as paths under
 the submodule, `engine/...`.
 
 ## Picking this up
 
 ### Where things stand
+
+**The port no longer emulates the PS2** (2026-10-20, uncommitted on `engine`). The DMA, VIF, VU1
+and software GS are deleted. The engine's drawing calls now reach an SDL_GPU renderer (Metal on
+macOS, Vulkan elsewhere), and `CSound` calls the synth directly with no IOP behind it. It builds
+and runs on macOS arm64 with 0 stubbed symbols, at 50 Hz in a real window with real sound: the
+language select, title, the attract demo, New Game, the costume screen, the opening cutscene,
+the castle dungeon with its HUD, and the main and item menus. `port/tests/run.py` passes on macOS.
+Linux compiles and links (checked in Docker, aarch64) but has not been run since. Part 2 below
+describes the port as it is now; the table and notes after this paragraph are the earlier review
+of the emulated port and are kept for the engine milestones and the fixes.
 
 Reviewed 2026-10-20, after an agent worked overnight from the tasks this file held. Its work
 (about 15,700 new lines and 1,850 changed) is committed on the branch `engine`. "Checked in
@@ -21,9 +32,9 @@ under `build/` (not in git).
 | E4 executable tables and natives from source | yes, every table but `data:parts` | Rust tests | `data:parts`; fixes 4, 5, 14 |
 | P0 compile spike | yes | | |
 | P1 headless boot | yes | boots `dc2.iso` to the language selector | |
-| P2 graphics | DMA, VIF, VU1 interpreter, software GS, SDL3 window | `tools/port.py --graphics --movies` builds clean (149 units, 34 files, no stubs); `port/tests/run.py --iso dc2.iso` passes | PAL speed; PCSX2 comparison; a real display |
+| P2 graphics | the engine draws through SDL_GPU (replaced the emulated DMA, VIF, VU1 and GS) | `tools/port.py --movies` builds clean (149 units, 40 files, no stubs); `port/tests/run.py` passes on macOS; 50 Hz in a window | PCSX2 comparison; water on screen; lens flare, depth of field and texture animation on screen |
 | P3 input | SDL keyboard and gamepad as a DualShock 2 | | a human playing it |
-| P4 sound | SPU2 voices, ADSR, reverb, the sound RPCs | the port suite's sound and MIDI checks | listening against retail; a real audio device |
+| P4 sound | SPU2 voices, ADSR, reverb, the MIDI sequencer; `CSound` calls them directly | the port suite's sound and MIDI checks | listening against retail; a real audio device |
 | P5 saves and movies | memory cards as folders; MPEG-2 movies | the port suite's card checks; the retail logo (150 frames) and tutorial (1,275) movies decode | console-made saves |
 | P6 native mods | `dc2tk build --native`, the executable hash check, `mod check` with clang | `tools/test_native_prepare.py` | PCSX2 parity; fixes 3, 6, 11 |
 
@@ -68,7 +79,10 @@ written fresh. These are what it found to fix:
 1. **Done:** the overnight work is committed on `engine`, unchanged from what the review checked:
    the native tables' parser, the port, engine mods for the ISO and the port, and this plan.
    `build/` stays out of git; it holds the evidence above.
-2. **The port's allocator.** `port/src/memory.c:174-245` replaces `malloc`, `free`, `calloc`,
+2. **Done: the port's allocator.** The engine's `operator new` and `delete` are renamed in its
+   objects to a 64 MB arena of its own, which reports when it runs out; the rest of the process
+   uses the system allocator. What follows is the review's original finding.
+   `port/src/memory.c:174-245` replaces `malloc`, `free`, `calloc`,
    `realloc`, `posix_memalign` and `aligned_alloc` for the whole process with a 64 MB arena at
    `0x08000000` that SDL, PulseAudio, Mesa and libavcodec share; `memalign`, `valloc` and
    `pvalloc` still reach glibc, so a library calling them hands our `free` a foreign pointer;
@@ -78,7 +92,7 @@ written fresh. These are what it found to fix:
    objects their own allocator (`objcopy --redefine-sym` of `malloc`, `free`, `operator new` and
    `delete` in engine objects, as `main` already becomes `port_game_main`), leave the rest of the
    process on glibc, check `_end` against the arena, and stop with a message when it runs out.
-3. **`mod check` always builds the native port** for engine mods (`modding/check.rs:57-66`),
+3. **Done: `mod check --native`.** `mod check` always built the native port for engine mods (`modding/check.rs:57-66`),
    which fails on Windows, macOS and any Linux without SDL3, and costs a full native compile.
    Make the native check `--native`, as `build` has it.
 4. **Units whose tables are written as source lose Satan's Fiddle's profile**
@@ -95,15 +109,14 @@ written fresh. These are what it found to fix:
    flags, aliases, localised symbols, the GS bundle and Kazarov's `libvu0.cpp`. Keep them in
    dc2tk and make `tools/port.py` a thin call to `dc2tk build --native` (or drop it), so they
    cannot drift.
-8. **CPU use.** `gs_raster.c:166-169` sizes its workers from the online CPUs, not the allowed
-   affinity; `tools/movie_sdk.py:76` runs `make -j8`. Both should follow the affinity.
-9. **Debugging in the shipping binary:** the screenshot hook (`present.c:56-68`,
-   `DC2TK_SCREENSHOT`), the GS tuning variables (`DC2TK_GS_BAND_PIXELS`, `_BALANCE`, `_BATCH`)
-   and statistics, `cdvd.c`'s 1 MB index scanned on every read to log archive members, and the
-   log line for every file opened. Move them into the test build (as the replay wrapper is) or
+8. **CPU use.** `tools/movie_sdk.py:76` runs `make -j8`; it should follow the affinity. (The GS
+   workers this also named are gone.)
+9. **Debugging in the shipping binary:** the screenshot hook (`present.c`, `DC2TK_SCREENSHOT`),
+   scripted presses (`input.c`, `DC2TK_PRESS`), the sound dump (`audio.c`, `DC2TK_SOUND_DUMP`),
+   `cdvd.c`'s 1 MB index scanned on every read to log archive members, and the log line for every
+   file opened. Move them into the test build (as the replay wrapper is) or
    behind one logging switch.
-10. **`dma_chain.c:44-66` parses `/proc/self/maps` on every DMA kick** and fails past 1,024
-    regions. The port lays out the memory itself; record the valid ranges once at start.
+10. **Done:** `dma_chain.c` is deleted with the rest of the emulation.
 11. **`port/tests/run.py:59-80`** writes patched engine sources into a temporary folder under
     `/tmp`; write them under `build/port/tests/` instead. `tools/port.py:129` gives every unit
     `-I engine/port/src`, which only the four upstream asm units need. `-DPORT_SOUND` is always
@@ -155,9 +168,11 @@ written fresh. These are what it found to fix:
 - **dc2tk's rule:** a disc image built with nothing edited is retail's, byte for byte
   (development.md). With no engine change, the disc keeps retail's `SCES_511.90`. After any change
   to the PS2 patches, `dc2tk engine verify` must still say every section is retail's.
-- **The port runs the game as the PS2 did:** retail formats read from the ISO, the original `.stb`
-  scripts on the original VM, PAL timing at 50 Hz, the GS's own resolution. No 60 fps, no
-  converted data, no replaced textures, no other scripting language. From ChronicleTwo's `port/`
+- **The port runs the game as the PS2 did, natively:** retail formats read from the ISO, the
+  original `.stb` scripts on the original VM, PAL timing at 50 Hz, the game's own resolution and
+  draw order. No 60 fps, no converted data, no replaced textures, no other scripting language. No
+  emulation either: where the engine drove PS2 hardware, the port replaces that engine function
+  with one that does the same thing through SDL3, and changes as few functions as it can. From ChronicleTwo's `port/`
   only the four asm files are built, and from Kazarov's `src/cpp/sce` only `libvu0.cpp` (MIT);
   the rest of `sce` may be read for how a library behaves.
 - **Test code stays out of the shipping binary:** the replay harness, traces and profiling link
@@ -173,41 +188,45 @@ written fresh. These are what it found to fix:
 
 ### This machine
 
-- Linux x86-64 with clang 21, binutils, Python 3 and Docker. No Rust, cmake, ninja, pkg-config or
-  system SDL3. The retail disc is `dc2.iso` in the repository root; a retail `SCES_511.90` alone is
-  also at `/home/dev/projects/decomp-bench/artifacts/chronicletwo/rom/pal/extracted/iso/`.
-- **Rust runs in Docker**, in the image `dc2tk-rust`. If it is missing, make it:
-
-  ```
-  printf 'FROM rust:1-trixie\nRUN rustup component add rustfmt clippy\n' | docker build -t dc2tk-rust -
-  ```
-
-  then run cargo from the repository root (`mkdir -p ~/.cache/dc2tk-cargo` once):
-
-  ```
-  docker run --rm --cpuset-cpus=0-3 --user $(id -u):$(id -g) -e CARGO_HOME=/cargo \
-      -e CARGO_INCREMENTAL=0 -v "$HOME/.cache/dc2tk-cargo:/cargo" -v "$PWD:$PWD" -w "$PWD/src" \
-      dc2tk-rust cargo build --release
-  ```
-
-  The binary lands in `build/release/dc2tk`, which `./dc2tk` runs.
+- **macOS arm64** (the machine the native rewrite was done on), with Homebrew's `sdl3`,
+  `ffmpeg`, `llvm` (for `llvm-objcopy` and `llvm-nm`), `pkg-config`, `glslang` and
+  `spirv-cross`, and Rust from rustup. The retail disc is `dc2.iso` in the repository root.
+- **Building the port:** `python3 -I tools/port.py --movies`, then `build/port/darkchronicle
+  dc2.iso`. Running it needs the window server. Keys: WASD move, F/H/T/G camera, arrows the
+  D-pad, I/J/K/L triangle/square/cross/circle, Q/E L1/R1, 1/3 L2/R2, C/V L3/R3, Enter Start,
+  Backspace Select. Saves go to `DC2_SAVE_ROOT` (default `./saves`, ignored by git).
+- **Shaders:** `port/shaders/*.vert` and `*.frag` are compiled by `python3 -I
+  tools/port_shaders.py` into `port/src/shaders.h` (SPIR-V and Metal source), which is committed
+  so a build needs neither tool. Run it after changing a shader.
+- **Test aids in the binary** (fix 9): `DC2TK_PRESS="cross@300,start@1500/150"` presses a button
+  at a field, or every period after it; `DC2TK_SCREENSHOT=file.bmp` with `DC2TK_SCREENSHOT_FIELD`
+  and `DC2TK_SCREENSHOT_EVERY` saves the shown frame; `DC2TK_SOUND_DUMP=file.raw` writes the
+  mixed sound.
+- **Crashes:** the binary re-executes itself at start (see Part 2), which LLDB follows badly.
+  macOS writes a report for every crash to `~/Library/Logs/DiagnosticReports/darkchronicle-*.ips`
+  (JSON after the first line), with the faulting thread's frames.
+- **The debug build:** `python3 -I tools/imgui_sdk.py` once (Dear ImGui 1.92.9b into
+  `build/port/imgui-sdk`), then `python3 -I tools/port.py --movies --debug` also links
+  `build/port/darkchronicle-debug`. It opens a second window (F1 shows or hides it, F5 pauses, F6
+  steps) and serves the same commands on `http://127.0.0.1:7777/` (`DC2TK_DEBUG_PORT`).
+  `python3 -I tools/debug.py launch`, then `help`, `status`, `stats frames=200 --summary`,
+  `press buttons=cross frames=6`, `step frames=10`, `speed value=0`, `screenshot out.png`,
+  `windowshot out.png`, `tab name=Capture`, `profile seconds=3`, `town map=18`, `dungeon dungeon=0 floor=2`,
+  `capture`, `toggle name=shadows value=0`, `record path=...`, `replay path=...`, `save slot=1`,
+  `load slot=1`. Check the game through `screenshot` and `windowshot`, never a full-screen capture.
+- **Golden screenshot tests:** `python3 -I tools/golden_port.py` runs `port/tests/golden/*.json`
+  against the debug build, paused and stepped frame by frame; `--update` writes the baselines to
+  `build/port/golden/` (game imagery, never in git).
+- **The replay harness:** `python3 -I port/tests/gameplay.py` links
+  `build/port/replay/darkchronicle`; `DC2TK_REPLAY_FIELDS`, `DC2TK_REPLAY_SKIP`,
+  `DC2TK_REPLAY_FIGHT` and `DC2TK_REPLAY_SCREENSHOTS` steer it.
+- **Linux** (the machine of the earlier work): clang 21, binutils, Python 3 and Docker; Rust in
+  the `dc2tk-rust` image (`printf 'FROM rust:1-trixie\nRUN rustup component add rustfmt clippy\n' |
+  docker build -t dc2tk-rust -`); `python3 -I tools/port_sdk.py` copies SDL3 out of Kazarov's
+  image and `python3 -I tools/movie_sdk.py` builds FFmpeg 8.0.1's MPEG-2 decoder.
 - **Kazarov's image** `kazarov-dev:01b70a4a6008` is made by `dc2tk engine` when missing (a few
   minutes).
-- **The port's SDKs**, both under `build/port/`: `python3 -I tools/port_sdk.py` copies SDL3 and
-  its libraries out of Kazarov's image (Debian's, linked by absolute rpath, so the binary runs
-  only here); `python3 -I tools/movie_sdk.py` builds FFmpeg 8.0.1's MPEG-2 decoder from the
-  checksummed release, as shared libraries.
-- **Running the port:** `python3 -I tools/port.py --graphics --movies`, then
-  `SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy DC2TK_GS_THREADS=4 build/port/darkchronicle
-  --graphics dc2.iso` headless. Keys: WASD move, F/H/T/G camera, arrows the D-pad, I/J/K/L
-  triangle/square/cross/circle, Q/E L1/R1, 1/3 L2/R2, C/V L3/R3, Enter Start, Backspace Select.
-  Saves go to `DC2_SAVE_ROOT` (default `./saves`, ignored by git).
-- **The replay harness:** `python3 -I port/tests/gameplay.py --profile` links
-  `build/port/replay/darkchronicle`; `DC2TK_REPLAY_FIELDS`, `DC2TK_REPLAY_SKIP` and
-  `DC2TK_REPLAY_FIGHT` steer it. Routes are in `build/validation/crash-recovery/routes.md`.
 - **The scratch folder under `/tmp` is cleared by a reboot.**
-- **Times:** `engine verify` from nothing about 5 minutes; one edited unit relinks in about 14 s;
-  `tools/port.py --graphics --movies` from clean objects 11 s on four CPUs.
 
 ### Checks
 
@@ -220,16 +239,16 @@ written fresh. These are what it found to fix:
 - `./dc2tk engine verify dc2.iso` after touching `ps2.json` or the copy step.
 - `python3 -I tools/test_engine_mods.py` and `python3 -I tools/test_native_prepare.py`: engine-mod
   and native preparation, without Docker or a disc.
-- `python3 -I port/tests/run.py --iso dc2.iso`: the port's boundary checks and the retail movies.
-- `python3 -I tools/port.py --graphics --movies` after touching `port.json`, `port/` or
-  `tools/port.py`, and a headless boot to the language selector.
+- `python3 -I port/tests/run.py`: the port's checks (`--iso dc2.iso` adds the retail movies).
+- `python3 -I tools/port.py --movies` after touching `port.json`, `port/` or `tools/port.py`, then
+  a run to the costume screen and a run into the castle dungeon, checked by screenshot.
 - `tools/golden.sh` for anything that can reach what dc2tk writes (development.md).
 
 ## The shape
 
 One engine source, two outputs. ChronicleTwo's decompiled engine is a git submodule. For a set of
 mods dc2tk prepares one patched copy of it, which MWCC compiles into the `SCES_511.90` that goes
-on the ISO and clang compiles into a native Linux binary. Both read the same disc image, so
+on the ISO and clang compiles into a native binary. Both read the same disc image, so
 scripts, assets, maps, data tables and engine changes from one `dc2tk build` run the same in
 PCSX2, on a PS2 and natively.
 
@@ -247,12 +266,14 @@ PCSX2, on a PS2 and natively.
 - **The port is minimal and runs the game as the PS2 did** (see Rules). ChronicleTwo's own port
   (519 overridden game functions, Luau, a converted `data.zip`) is not used.
 - **Mods can change engine code**, and the change works in the ISO build and in the port.
-- **The port is emulated at the SDK and IOP boundary.** The game's 149 units compile with token
-  substitutions and call the `sce*` functions they call on a PS2; the port supplies those
-  functions and the hardware behind them.
+- **The port is native, not emulated.** The game's 149 units compile with token substitutions.
+  Where an engine function drove PS2 hardware (GS packets, VU1 programs, the IOP sound modules),
+  the port replaces that function with one written fresh that draws through SDL_GPU or calls the
+  synth. The rest of the engine runs as it is.
 - **Saves** are a folder per memory card. **Movies** decode with libavcodec, linked dynamically.
-- Engine builds for the ISO need Docker on every OS (Docker Desktop on Windows); the port is Linux
-  x86-64 only, built by `dc2tk build --native`, which drives clang itself, without CMake.
+- Engine builds for the ISO need Docker on every OS (Docker Desktop on Windows); the port builds
+  on macOS and Linux (Windows later) with `dc2tk build --native`, which drives clang itself,
+  without CMake.
 
 ## Part 1: the engine in dc2tk
 
@@ -341,77 +362,99 @@ What engine code in a mod keeps to: C++ that MWCC 3.0 accepts; no inline asm, ha
 addresses or fixed RAM addresses; only `sce*` functions the port implements; no function
 `port/src` replaces; room below the PS2 stack.
 
-## Part 2: the native Linux port
+## Part 2: the native port
 
 ### The boundary
 
-The port is the PS2's software and hardware below the game: the Sony SDK libraries the retail
-executable links as assembly, the IOP modules it loads, and the DMA, VIF, VU1, GS and SPU2 they
-drive. The game reads its files with `sceCdRead` from the ISO it is given, so whatever dc2tk
-builds runs on it.
+The engine draws by building GS packets and VU1 programs and sending them by DMA, and it plays
+sound through IOP modules over RPC. The port replaces the engine functions that do that, about 90
+of them marked `PORT_OVERRIDE` in `port/src`, with functions that do the same work natively. The
+game reads its files with `sceCdRead` from the ISO it is given, so whatever dc2tk builds runs on
+it.
+
+- **2D and register state:** `mgCDrawPrim` (`mg_drawprim.cpp`), `CPreSprite` (`prespr.cpp`) and
+  the mglib frame functions (`mglib.cpp`) write GS registers into a state machine
+  (`draw.cpp`): PRIM, RGBAQ, UV, XYZ, TEX0/1, CLAMP, ALPHA, TEST, ZBUF, FRAME, SCISSOR, FOGCOL,
+  TEXA and the BITBLT registers. A vertex kick becomes a `render_draw` with the state the GS would
+  have used.
+- **Blending:** the GS's (A-B)*C+D maps to SDL_GPU's blend factors, with source alpha, destination
+  alpha and the FIX constant; alpha 0x80 is 1.0, as on the GS.
+- **Textures:** RAM TIM2 and IM2 images are decoded once (4- and 8-bit CLUTs with CSM1, page-
+  swizzled 8-bit, 16/24/32-bit) and cached by image and palette with a checksum checked once a
+  frame. A texture the game also draws into (its VRAM address is a frame buffer) is the same GPU
+  texture, so render-to-texture effects work. CLUT copies go to a palette table, never to the
+  retail RAM palette.
+- **Frame buffers:** a target per GS frame base, at least 640x512, with one depth buffer shared
+  per size. `mgEndFrame` presents the display target. Depth reads (`sceGsExecStoreImage` of
+  PSMZ32/24) are served by a depth-to-colour pass.
+- **Models:** `mgCVisualMDT` faces become GPU meshes once (`mg_visual.cpp`,
+  `visualmotion.cpp`), drawn by `mesh.vert`, which does what `Vu_prog0` did: the game's own
+  model-screen matrix, three directional and four point lights, fog, and skinning from a 32-bone
+  palette. Sorted draws keep the game's `mgCDrawManager` order.
+- **The other VU1 programs**, written fresh in C++ from `engine/docs/vu1/`: 3D sprites
+  (`mg_sprite.cpp`, `prog_3dsp`), shadow volumes (`mg_shadow.cpp`, `prog_sdw`) and water
+  (`water.cpp`, `prog_wtr`).
+- **Sound:** `CSound` (`sound.cpp`) and `CSound::StreamOpenState` (`ezbgm.cpp`) call `midi.c`
+  (the retail HD/BD/SQ banks and sequences, port layout, voice allocation), `audio.c` (BGM
+  streams, movie PCM, SDL output) and `spu2.c` (48 voices with ADSR, Gaussian interpolation and
+  the nine reverb presets). There is no IOP, RPC, SIF DMA or IOP heap. An audit of 841 retail
+  banks and 435 sequences found no unsupported feature.
+- **Movies:** `CMovie` is replaced; the port demultiplexes the PSS file, libavcodec decodes the
+  MPEG-2 video, and the frame is shown in place of the display, as the PS2 showed it.
 
 ### How it is built
 
-`dc2tk build extracted/scripts dc2.iso --native [FILE] [--movies]` (and, until fix 7,
-`tools/port.py`):
+`dc2tk build extracted/scripts dc2.iso --native [FILE] [--movies]`, or `tools/port.py`, which
+does the same and is kept in step with `native.rs` (fix 7):
 
-- copies `engine/ps2` with `port.json` applied (137 substitutions: 13 for clang, 5 declarations of
-  guarded-out asm functions, 5 pointer widths, 9 record asserts, 90 native sizes, strides and
-  typed indexing, 9 monster script arenas, 5 effect heap, 1 minimap bound), then strips the
-  functions `port/src` replaces, then replays the chosen mods;
-- compiles the 149 units at `-O0`, ChronicleTwo's four asm files (weakened, so the engine's own
-  definitions win), Kazarov's `libvu0.cpp`, and `port/src` (C at `-O2`, `memory.c` and `kernel.c`
-  at `-O0`, the GS raster, memory and CLUT files together at `-O3`);
-- makes `MainBuffer` and the second `VectMatMul` local, aliases the four names the engine spells
-  differently, renames the game's `main` to `port_game_main`, and links non-PIE with SDL3 (and
-  libavcodec with `--movies`). Nothing is left unresolved.
-
-At start `port/src/main.c` maps the memory, reads the VU1 microcode and the first DMA chain from
-the ISO's `SCES_511.90` by its symbol table, checks that executable's hash against the one the
-build recorded, and runs the game's `main` on a fiber.
+- copies `engine/ps2` with `port.json` applied (173 token-sized substitutions: clang fixes,
+  declarations of guarded-out asm, pointer widths, native sizes and strides, renames of a retail
+  function to `*Retail` where an override must call it), strips the functions `port/src`
+  replaces, then replays the chosen mods;
+- compiles the 149 units at `-O0`, ChronicleTwo's four asm files (weakened), Kazarov's
+  `libvu0.cpp`, and `port/src`;
+- renames the engine's `operator new` and `delete` to the port's arena and its `main` to
+  `port_game_main`, aliases the four names the engine spells differently, and links with SDL3
+  (and libavcodec with `--movies`). Nothing is left unresolved.
 
 ### Choices
 
-- **x86-64.** `u_long128` is `unsigned __int128`, which clang has only on 64-bit targets, and the
-  PS2's `long` is 64 bits as Linux x86-64's is.
-- **Every address the game sees lies below 256 MB, as on the PS2.** The game makes DMA addresses
-  with `& 0x0FFFFFFF`, so a pointer above `0x10000000` breaks even where nothing truncates it.
-  Linked non-PIE, the image from `.text` to `_end` ends near `0x05D20000`, the fiber stacks
-  included. The game's heap is `main_buffer`, a 26 MB `.bss` array. Host allocations use a 64 MB
-  arena at `0x08000000` (fix 2).
-- **The uncached segments exist.** Before the static constructors run, the binary's `.data` and
-  `.bss` move into a memfd mapped at their own addresses and again at `+0x20000000` and
-  `+0x30000000`. The scratchpad is mapped at `0x70000000`.
-- **Upstream's `PORT` macro and headers**, with `-DPORT -DPAL`. `PORT` alone switches the 95
-  `PAL_TIMING` sites to NTSC values, which `port.h` undoes. Its 52 `PORT_RECORD_ASSERT`s hold on
-  x86-64, and further record widths are pinned by `port/tests/records.cpp`.
+- **64-bit, with the game's addresses in a 32-bit window.** Retail data on the disc and in
+  memory holds 32-bit pointers, and the game masks addresses with `0x0FFFFFFF`. On macOS the
+  binary places its data, BSS and a 768 MB zero-fill segment at `0x100000000` and above,
+  re-executes itself once with ASLR off so they land there, and mirrors the window at `+0x20000000`
+  and `+0x30000000` for the uncached segments; the scratchpad is a 16 KB segment of its own.
+  Linux uses a memfd at low addresses. Struct fields that held a PS2 pointer are
+  `ps2_pointer<T>`. Removing the window would mean changing every loader that fixes up pointers
+  in place, so it stays.
+- **Upstream's `PORT` macro and headers**, with `-DPORT -DPAL`; `port.h` undoes the NTSC timing
+  `PORT` alone selects.
 - **The MWCC asm**: 54 functions are guarded out under `PORT`. 44 come from ChronicleTwo's four
   files; the port writes mg_frame's 7, `ClipBoxXZ`, `PlaneNormalXZ` and `SendDMA`.
-- **VU1 is an interpreter** running the microprograms the game uploads itself, with SSE2 for whole
-  vectors and two recognised blocks of prog0 run directly once every instruction word matches.
-  It has known numerical and timing limits; `engine/docs/vu1/` is what it is checked against.
-- **The GS is a software rasteriser** over a 4 MB local memory array, drawing in row bands on
-  worker threads, batched; output is checked against a serial reference by recorded traces.
-- **Sound is emulated at the RPC boundary**, with no IOP processor: LIBSD and SDRDRV, MODMIDI and
-  MODHSYN, EZMIDI and EZBGM, over a 48-voice SPU2 with ADSR, Gaussian interpolation, nine reverb
-  presets and SDL output. An audit of 841 retail banks and 435 sequences found no unsupported
-  feature.
-- **Movies** are demultiplexed by the port and decoded by libavcodec's MPEG-2 decoder.
+- **Shaders** are GLSL, compiled ahead of time to SPIR-V and Metal source by
+  `tools/port_shaders.py` (`spirv-cross --msl-decoration-binding`, or Metal buffer slots follow
+  use order).
+- **Engine bugs a 64-bit build exposes** are fixed by substitutions as found, for example
+  `S51Thunder`'s two-float `ratio` that `GetTimeLightingRatio` fills with four, and
+  `MenuCommonReadData`'s 4-byte pointer stride. ChronicleTwo's `engine/port/src` and its probe
+  scripts in `engine/scripts/port` are a good place to look for more of them.
 
 ### Modules
 
 | Files | What | Lines |
 |---|---|---|
-| `main.c`, `memory.c`, `kernel.c`, `runtime.c` | start, low memory and mirrors, the allocator, EE threads as fibers, semaphores, VBlank, MW runtime | 620 |
-| `cdvd.c`, `executable.c`, `split_data.c`, `devices.c` | the ISO, `cdrom0:` files, the executable's symbols, split data, SIF devices | 600 |
-| `packets.c`, `graphics.c`, `dma_chain.c`, `dma.cpp`, `vif.c` | libvifpk, libgifpk, libgraph, DMA, VIF1 | 790 |
-| `vu1.c` | VU1 | 710 |
-| `gs.c`, `gs_memory.c`, `gs_clut.c`, `gs_raster.c`, `present.c` | the GS and the window | 2,050 |
-| `iop.c`, `iop_sound.c`, `iop_midi.c`, `spu2.c` | the IOP's sound modules and the SPU2 | 1,410 |
-| `input.c`, `memory_card.c`, `movie.cpp`, `movie_decode.c` | pads, cards, movies | 960 |
-| `frame.cpp`, `collision.cpp`, `mglib.cpp`, `link_fixups.cpp` | asm and engine replacements | 250 |
+| `main.c`, `memory.c`, `kernel.c`, `runtime.c` | start, the address window, the engine's arena, EE threads as fibers, semaphores, VBlank, MW runtime | 630 |
+| `cdvd.c`, `executable.c`, `split_data.c`, `devices.c` | the ISO, `cdrom0:` files, the executable's symbols, split data, SIF devices | 590 |
+| `render.c`, `render.h`, `port/shaders` | SDL_GPU: targets, textures, pipelines, batching, present | 1,040 |
+| `draw.cpp`, `mg_drawprim.cpp`, `mglib.cpp`, `prespr.cpp`, `packets.c`, `graphics.c`, `dma.cpp`, `present.c` | the GS state machine, the texture cache, 2D drawing, frame and display | 1,460 |
+| `mg_visual.cpp`, `visualmotion.cpp`, `mg_sprite.cpp`, `mg_shadow.cpp`, `water.cpp` | models, 3D sprites, shadows, water | 920 |
+| `audio.c`, `midi.c`, `spu2.c`, `sound.cpp`, `ezbgm.cpp`, `iop.c` | the sound library and the `CSound` replacements | 1,560 |
+| `input.c`, `memory_card.c`, `movie.cpp`, `movie_decode.c` | pads, cards, movies | 1,000 |
+| `frame.cpp`, `collision.cpp`, `link_fixups.cpp` | asm replacements | 230 |
+| `port/debug/*` (debug build only), `hooks.c`, `port_stats.h` | debug window and API, counters, scenario controls, frame capture, input replay, savestates; the normal build has only empty hooks and counters | |
 
-About 7,900 lines with headers; the tests are about 6,100 more.
+About 7,900 lines with headers and shaders, not counting the generated `shaders.h`; the tests
+are about 3,100 more.
 
 ## Milestones
 
@@ -425,9 +468,9 @@ Each has a gate. A gate that needs PCSX2, a PS2, a display or a listener is the 
    Gate, the user's: a shop edit and a mod's native work in PCSX2.
 5. **P0 Compile spike.** Done.
 6. **P1 Headless boot.** Done: the ISO boots to the language selector.
-7. **P2 Graphics.** Built. Gate: the title screen in a window, compared with PCSX2, and 50 frames
-   a second sustained. Next: fix 2 and 10, then speed (profile a recorded trace; the raster
-   loop and GS memory access take most of the time).
+7. **P2 Graphics.** Built natively, 50 frames a second in a window on macOS. Gate, the user's:
+   compared with PCSX2. Next: see water, lens flare, depth of field and texture animation on
+   screen; run on Linux; then Windows.
 8. **P3 Input.** Built. Gate: New Game, Palm Brinks, the first dungeon floor, played by a person.
    Next: replay from `first-floor-selection-save` past the gate where it crashed, and melee hits.
 9. **P4 Sound.** Built. Gate: effects, music and voices, heard against retail.

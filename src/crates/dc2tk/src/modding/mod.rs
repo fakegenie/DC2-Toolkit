@@ -172,6 +172,9 @@ pub enum ModCommand {
         /// no two mods change one place and every file the scripts load is there.
         #[arg(long)]
         disc: Option<PathBuf>,
+        /// Also build the native port with the mods' engine files, which needs --disc.
+        #[arg(long, requires = "disc")]
+        native: bool,
         #[command(flatten)]
         common: Common,
     },
@@ -216,8 +219,8 @@ pub fn run_mod(command: &ModCommand) -> Result<ExitCode> {
         ModCommand::Asset { iso, name, paths, form, mods, defs } => {
             run_mod_asset(iso, name, paths, form.as_deref(), mods, defs)
         }
-        ModCommand::Check { source, names, mods, disc, common } => {
-            check::run_mod_check(source, names, mods, disc.as_deref(), common)
+        ModCommand::Check { source, names, mods, disc, native, common } => {
+            check::run_mod_check(source, names, mods, disc.as_deref(), *native, common)
         }
         ModCommand::Make { iso, name, extracted, mods, common } => run_mod_make(iso, name, extracted, mods, common),
     }

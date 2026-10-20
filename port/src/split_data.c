@@ -1,9 +1,6 @@
 #include "cdvd.h"
 #include "split_data.h"
-#ifdef PORT_GRAPHICS
-#include "dma_chain.h"
-#endif
-#include <elf.h>
+#include "port_elf.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -81,9 +78,6 @@ int port_split_data_init(void) {
         uint64_t offset = (uint64_t)section.sh_offset + start.st_value - section.sh_addr;
         if (!span(file.size, offset, length)) goto done;
         memcpy(targets[i].data, data + offset, length);
-#ifdef PORT_GRAPHICS
-        if (port_dma_map(start.st_value, targets[i].data, length) < 0) goto done;
-#endif
         fprintf(stderr, "executable: %s (%zu bytes)\n", targets[i].name, (size_t)length);
     }
     success = 1;

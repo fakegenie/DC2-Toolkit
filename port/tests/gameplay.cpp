@@ -25,21 +25,20 @@
 extern "C" {
 #include "input.h"
 #include "port_graphics.h"
-#include "gs_raster.h"
-#include "gs.h"
+#include "port_present.h"
 }
 
-extern TITLE_INFO *replay_title asm("_ZL9TitleInfo");
-extern short replay_tree_mode asm("_ZL11DngTreeMode");
-extern short replay_title_phase asm("_ZL10TitlePhase");
-extern int replay_language_phase asm("_ZL16title_lang_phase");
-extern CMenuCostumeSel *replay_costume asm("_ZL10MenuCosPtr");
-extern int replay_pause_frames asm("_ZL8InitFlag");
-extern int replay_edit_control asm("_ZL11ControlMode");
-extern int replay_edit_loop asm("_ZL8LoopMode");
-extern int replay_edit_map asm("_ZL5MapNo");
-extern CSaveMenuClass *replay_save_menu asm("_ZL11SaveMenuPtr");
-extern CMemoryCardManager *replay_card asm("_ZL13MemoryCardPtr");
+extern TITLE_INFO *replay_title asm(SYMBOL_PREFIX "_ZL9TitleInfo");
+extern short replay_tree_mode asm(SYMBOL_PREFIX "_ZL11DngTreeMode");
+extern short replay_title_phase asm(SYMBOL_PREFIX "_ZL10TitlePhase");
+extern int replay_language_phase asm(SYMBOL_PREFIX "_ZL16title_lang_phase");
+extern CMenuCostumeSel *replay_costume asm(SYMBOL_PREFIX "_ZL10MenuCosPtr");
+extern int replay_pause_frames asm(SYMBOL_PREFIX "_ZL8InitFlag");
+extern int replay_edit_control asm(SYMBOL_PREFIX "_ZL11ControlMode");
+extern int replay_edit_loop asm(SYMBOL_PREFIX "_ZL8LoopMode");
+extern int replay_edit_map asm(SYMBOL_PREFIX "_ZL5MapNo");
+extern CSaveMenuClass *replay_save_menu asm(SYMBOL_PREFIX "_ZL11SaveMenuPtr");
+extern CMemoryCardManager *replay_card asm(SYMBOL_PREFIX "_ZL13MemoryCardPtr");
 
 static bool save_active(void) {
     bool town_menu = GetNowLoopNo() == LOOP_EDIT && replay_edit_loop == EDIT_LOOP_WALK_MENU;
@@ -78,10 +77,6 @@ static unsigned save_buttons(void) {
     }
     if (menu->phase == SAVE_LIST_PHASE_SAVE_DONE || menu->phase == SAVE_LIST_PHASE_LOAD_DONE) return PORT_INPUT_CROSS;
     return 0;
-}
-
-static void bitmap_word(unsigned char *bytes, uint32_t value) {
-    for (int i = 0; i < 4; ++i) bytes[i] = (unsigned char)(value >> (i * 8));
 }
 
 static void journal_event(const char *kind, const char *command) {
@@ -361,45 +356,10 @@ static void screenshot_request(void) {
     int count = std::fscanf(file, "%llu %1023s", &id, path);
     std::fclose(file);
     if (count != 2 || id == previous) return;
-    uint64_t framebuffer = port_graphics.display[2];
-    uint64_t display = port_graphics.display[3];
-    unsigned width = (unsigned)((((display >> 32) & 4095) + 1) / (((display >> 23) & 15) + 1));
-    unsigned height = (unsigned)((((display >> 44) & 2047) + 1) / (((display >> 27) & 3) + 1));
-    if (port_graphics.interlace && port_graphics.frame_mode) height /= 2;
-    if (!width || !height || width > 2048 || height > 2048 || !((framebuffer >> 9) & 63)) return;
-    size_t bytes = (size_t)width * height * 4;
-    uint32_t *pixels = (uint32_t *)std::malloc(bytes);
-    if (!pixels) return;
-    int result = port_gs_read_rgba((unsigned)(framebuffer & 511) * 32, (unsigned)(framebuffer >> 9) & 63,
-                                    (unsigned)(framebuffer >> 15) & 31, (unsigned)(framebuffer >> 32) & 2047,
-                                    (unsigned)(framebuffer >> 43) & 2047, width, height, pixels, width);
-    if (!result) {
-        for (size_t i = 0; i < bytes / 4; ++i) {
-            uint32_t pixel = pixels[i];
-            pixels[i] = (pixel & 0xff00ff00) | (pixel & 255) << 16 | (pixel >> 16 & 255);
-        }
-        unsigned char header[54] = {'B', 'M'};
-        bitmap_word(header + 2, (uint32_t)bytes + 54);
-        bitmap_word(header + 10, 54);
-        bitmap_word(header + 14, 40);
-        bitmap_word(header + 18, width);
-        bitmap_word(header + 22, 0u - height);
-        header[26] = 1;
-        header[28] = 32;
-        bitmap_word(header + 34, (uint32_t)bytes);
-        file = std::fopen(path, "wb");
-        if (file) {
-            bool written = std::fwrite(header, 1, sizeof(header), file) == sizeof(header) &&
-                           std::fwrite(pixels, 1, bytes, file) == bytes;
-            int closed = std::fclose(file);
-            if (written && !closed) {
-                previous = id;
-                std::fprintf(stderr, "replay: screenshot id=%llu field=%llu path=%s\n", id,
-                             (unsigned long long)port_graphics.fields, path);
-            }
-        }
-    }
-    std::free(pixels);
+    previous = id;
+    port_present_save(path);
+    std::fprintf(stderr, "replay: screenshot id=%llu field=%llu path=%s\n", id,
+                 (unsigned long long)port_graphics.fields, path);
 }
 
 static void town_report(void) {
@@ -486,59 +446,7 @@ static double seconds(clockid_t clock) {
     return value.tv_sec + value.tv_nsec * 1e-9;
 }
 
-static double raster_seconds;
-static double vu_seconds;
-
-#ifdef REPLAY_PROFILE
-static unsigned raster_depth;
-extern "C" int __real_port_gs_raster(uint64_t *, unsigned, const PortGsVertex *, unsigned);
-extern "C" int __real_port_gs_raster_enqueue(const uint64_t *, unsigned, const PortGsVertex *, unsigned);
-extern "C" int __real_port_gs_raster_flush(void);
-extern "C" int __real_port_vu1_start(unsigned);
-extern "C" int __real_port_vu1_continue(void);
-
-extern "C" int __wrap_port_gs_raster(uint64_t *regs, unsigned prim, const PortGsVertex *vertices, unsigned count) {
-    double start = seconds(CLOCK_MONOTONIC);
-    raster_depth++;
-    int result = __real_port_gs_raster(regs, prim, vertices, count);
-    if (!--raster_depth) raster_seconds += seconds(CLOCK_MONOTONIC) - start;
-    return result;
-}
-
-extern "C" int __wrap_port_gs_raster_enqueue(const uint64_t *regs, unsigned prim, const PortGsVertex *vertices, unsigned count) {
-    double start = seconds(CLOCK_MONOTONIC);
-    raster_depth++;
-    int result = __real_port_gs_raster_enqueue(regs, prim, vertices, count);
-    if (!--raster_depth) raster_seconds += seconds(CLOCK_MONOTONIC) - start;
-    return result;
-}
-
-extern "C" int __wrap_port_gs_raster_flush(void) {
-    double start = seconds(CLOCK_MONOTONIC);
-    raster_depth++;
-    int result = __real_port_gs_raster_flush();
-    if (!--raster_depth) raster_seconds += seconds(CLOCK_MONOTONIC) - start;
-    return result;
-}
-
-extern "C" int __wrap_port_vu1_start(unsigned entry) {
-    double start = seconds(CLOCK_MONOTONIC);
-    double raster_start = raster_seconds;
-    int result = __real_port_vu1_start(entry);
-    vu_seconds += seconds(CLOCK_MONOTONIC) - start - (raster_seconds - raster_start);
-    return result;
-}
-
-extern "C" int __wrap_port_vu1_continue(void) {
-    double start = seconds(CLOCK_MONOTONIC);
-    double raster_start = raster_seconds;
-    int result = __real_port_vu1_continue();
-    vu_seconds += seconds(CLOCK_MONOTONIC) - start - (raster_seconds - raster_start);
-    return result;
-}
-#endif
-
-extern "C" void __wrap_port_input_read(unsigned char data[32]) {
+extern "C" void port_input_read(unsigned char data[32]) {
     static int stage;
     static uint64_t last_press;
     static uint64_t next_report;
@@ -713,9 +621,9 @@ extern "C" void __wrap_port_input_read(unsigned char data[32]) {
     if (key_stopped && !controlled) combat_route_reset();
     if (fighting) combat_hit_sample(floor, field);
     if (field >= next_report) {
-        std::fprintf(stderr, "replay: field=%llu stage=%d loop=%d dungeon=%d mode=%d wall=%.3f cpu=%.3f raster=%.3f vu=%.3f\n",
+        std::fprintf(stderr, "replay: field=%llu stage=%d loop=%d dungeon=%d mode=%d wall=%.3f cpu=%.3f\n",
                      (unsigned long long)field, stage, GetNowLoopNo(), DngStatus.dungeon_no, DngStatus.mode,
-                     seconds(CLOCK_MONOTONIC) - start, seconds(CLOCK_PROCESS_CPUTIME_ID), raster_seconds, vu_seconds);
+                     seconds(CLOCK_MONOTONIC) - start, seconds(CLOCK_PROCESS_CPUTIME_ID));
         if (stage == 5 && fight && GetNowLoopNo() == LOOP_DUNGEON && DngStatus.dungeon_no == 0 &&
             DngStatus.mode == DNG_STATUS_FIELD && ActiveMonster) {
             int alive = 0;

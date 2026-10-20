@@ -3,6 +3,7 @@
 #include <new>
 #include <strings.h>
 #include <sys/types.h>
+#include "port_window.h"
 
 #define PORT_INIT(...) = __VA_ARGS__
 #define PORT_RETURN(...) return __VA_ARGS__
@@ -32,3 +33,17 @@
 #include "pal_timing.hpp"
 #undef PAL_TIMING
 #define PAL_TIMING(pal, ntsc) pal
+
+template <typename T> struct ps2_pointer {
+    unsigned int address;
+    operator T *() const { return address ? reinterpret_cast<T *>(PORT_WINDOW + address) : nullptr; }
+    T *operator->() const { return *this; }
+    ps2_pointer &operator=(T *pointer) {
+        address = static_cast<unsigned int>(reinterpret_cast<__UINTPTR_TYPE__>(pointer));
+        return *this;
+    }
+    ps2_pointer &operator+=(__PTRDIFF_TYPE__ count) {
+        address += static_cast<unsigned int>(count * sizeof(T));
+        return *this;
+    }
+};

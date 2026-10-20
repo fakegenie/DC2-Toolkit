@@ -52,8 +52,11 @@ static int interrupt_active;
 static ucontext_t host_context;
 static int (*game_entry)(void);
 static int game_result;
+static int host_requested;
 
 extern void port_graphics_tick(void);
+
+__attribute__((weak)) void debug_host(void) {}
 
 static void ready(int id) {
     threads[id].state = READY;
@@ -97,6 +100,12 @@ static void preempt(void) {
         ready(running);
         schedule();
     }
+}
+
+void port_kernel_yield(void) {
+    if (!running || threads[running].state != RUNNING || interrupt_active) return;
+    ready(running);
+    schedule();
 }
 
 static void thread_entry(void) {
@@ -333,5 +342,18 @@ int port_kernel_run(int (*entry)(void)) {
     threads[1].context.uc_link = &host_context;
     makecontext(&threads[1].context, main_entry, 0);
     if (swapcontext(&host_context, &threads[1].context) < 0) return 1;
+    while (host_requested) {
+        host_requested = 0;
+        debug_host();
+        if (swapcontext(&host_context, &threads[running].context) < 0) return 1;
+    }
     return game_result;
+}
+
+void port_kernel_host(void) {
+    host_requested = 1;
+    if (swapcontext(&threads[running].context, &host_context) < 0) {
+        perror("port: host switch");
+        exit(1);
+    }
 }

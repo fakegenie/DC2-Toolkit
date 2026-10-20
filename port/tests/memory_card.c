@@ -1,4 +1,5 @@
-#define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE
+#define _DARWIN_C_SOURCE
 #include <assert.h>
 #include <fcntl.h>
 #include <stddef.h>

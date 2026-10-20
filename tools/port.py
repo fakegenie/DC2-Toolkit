@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Builds the native Linux port: the engine's units with tools/engine-patches/port.json applied,
+"""Builds the native port for Linux x86-64 or macOS arm64: the engine's units with tools/engine-patches/port.json applied,
 ChronicleTwo's C++ for the MWCC asm (its symbols made weak, so where the engine still has a
 function its own definition is used), and port/src, compiled by clang and linked into
 build/port/darkchronicle. Every symbol nothing defines yet becomes a stub that names itself and
@@ -7,6 +7,7 @@ aborts, and build/port/missing.txt lists them by library.
 
     python3 -I tools/port.py            build
     python3 -I tools/port.py --run      build, then run it
+    python3 -I tools/port.py --debug    also link build/port/darkchronicle-debug with port/debug and Dear ImGui
 """
 
 import argparse
@@ -16,6 +17,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -27,21 +29,40 @@ OUT = ROOT / "build" / "port"
 COPY = OUT / "copy"
 OBJ = OUT / "obj"
 BINARY = OUT / "darkchronicle"
+DEBUG_BINARY = OUT / "darkchronicle-debug"
+IMGUI = OUT / "imgui-sdk"
+IMGUI_SOURCES = ["imgui.cpp", "imgui_draw.cpp", "imgui_tables.cpp", "imgui_widgets.cpp", "imgui_demo.cpp",
+                 "imgui_impl_sdl3.cpp", "imgui_impl_sdlgpu3.cpp"]
+SDL_CFLAGS = []
+DARWIN = sys.platform == "darwin"
+PREFIX = "_" if DARWIN else ""
+OBJCOPY = (shutil.which("llvm-objcopy") or "/opt/homebrew/opt/llvm/bin/llvm-objcopy") if DARWIN else "objcopy"
+NM = OBJCOPY.replace("objcopy", "nm")
 
 UPSTREAM_ASM = ["mg_math.cpp", "collision_asm.cpp", "gameutil_asm.cpp", "mg_drawprim_asm.cpp"]
 FLAGS = [
-    "-O0", "-g", "-pthread", "-fno-pie", "-fno-pic", "-DPORT", "-DPAL", "-DPORT_SOUND",
+    "-O0", "-g", "-pthread", *([] if DARWIN else ["-fno-pie", "-fno-pic"]), "-DPORT", "-DPAL", "-DPORT_SOUND",
     "-fms-extensions", "-fno-strict-aliasing", "-fwrapv", "-ffp-contract=off",
     "-fno-strict-return", "-ftrivial-auto-var-init=zero",
     "-Wno-c++11-narrowing", "-Wno-register", "-Wno-return-mismatch", "-w",
 ]
 LINK_FLAGS = ["-pthread"]
+if DARWIN:
+    LINK_FLAGS += ["-Wl,-segaddr,__PS2,0x110000000", "-Wl,-segprot,__PS2,rw,rw",
+                   "-Wl,-segaddr,__PS2SPR,0x170000000", "-Wl,-segprot,__PS2SPR,rw,rw"]
 LOCALISED = {"mainloop": ["MainBuffer"], "eventedit": ["_Z10VectMatMulPfS_PA4_f"]}
 ALIASES = {
     "BuffWorkData__2": "BuffWorkData",
     "EventCamera__2": "EventCamera",
     "_Z8PrimQuadIfEvP11mgCDrawPrim6mgRectIT_ES2_IiE": "_Z11PrimQuad_f_P11mgCDrawPrim9mgRect_f_9mgRect_i_",
     "_Z8PrimQuadIiEvP11mgCDrawPrim6mgRectIT_ES2_IiE": "_Z11PrimQuad_i_P11mgCDrawPrim9mgRect_i_S1_",
+}
+OPERATORS = {
+    **dict.fromkeys(["_Znwm", "_Znam", "_ZnwmRKSt9nothrow_t", "_ZnamRKSt9nothrow_t"], "port_new"),
+    **dict.fromkeys(["_ZnwmSt11align_val_t", "_ZnamSt11align_val_t", "_ZnwmSt11align_val_tRKSt9nothrow_t",
+                     "_ZnamSt11align_val_tRKSt9nothrow_t"], "port_new_aligned"),
+    **dict.fromkeys([f"_Zd{kind}Pv{size}{rest}" for kind in "la" for size in ("", "m")
+                     for rest in ("", "RKSt9nothrow_t", "St11align_val_t", "St11align_val_tRKSt9nothrow_t")], "port_delete"),
 }
 SPLIT_DATA = {"Vu_progmain", "Vu_prog0", "Vu_prog_sdw", "Vu_prog_3dsp", "Vu_prog_wtr", "My_dma_start0", "_gp"}
 LIBRARIES = [
@@ -119,40 +140,54 @@ def compile_one(source, name):
     depfile = OBJ / f"{name}.d"
     command_file = OBJ / f"{name}.command.json"
     c = source.suffix == ".c"
-    command = ["clang" if c else "clang++", "-std=c11" if c else "-std=c++26", "-c", *FLAGS,
+    if name.startswith("imgui_"):
+        return compile_command(source, target, depfile, command_file,
+                               ["clang++", "-std=c++17", "-c", "-O2", "-g", "-w", "-MMD", "-MF", str(depfile),
+                                f"-I{IMGUI}", *SDL_CFLAGS, str(source), "-o", str(target)], [])
+    debug = [f"-I{IMGUI}", f"-I{PORT / 'debug'}"] if name.startswith("debug_") else []
+    command = ["clang" if c else "clang++", "-std=c11" if c else "-std=c++26", "-c", *FLAGS, *debug,
                *(["-O2"] if not source.is_relative_to(COPY) and source.name not in ("memory.c", "kernel.c") else []),
-               *(["-O3"] if name == "port_gs_bundle" else []),
                "-MMD", "-MF", str(depfile),
                *([] if c else ["-include", str(PORT / "include" / "port.h")]),
                f"-I{PORT / 'include'}", f"-I{COPY / 'ps2' / 'include'}", f"-I{COPY / 'ps2' / 'include' / 'sce'}",
                *([f"-I{ENGINE / 'port' / 'include'}"] if name.startswith("upstream_") else []),
                f"-I{ENGINE / 'port' / 'src'}", str(source), "-o", str(target)]
-    signature = json.dumps([command, LOCALISED.get(name, []), name == "main"])
+    changes = [f"--localize-symbol={PREFIX}{symbol}" for symbol in LOCALISED.get(name, [])]
+    if name.startswith("upstream_"):
+        changes.append("--weaken")
+    if name == "main":
+        changes.append(f"--redefine-sym={PREFIX}main={PREFIX}port_game_main")
+    return compile_command(source, target, depfile, command_file, command, changes,
+                           operators=not c and not name.startswith("debug_"))
+
+
+def compile_command(source, target, depfile, command_file, command, changes, operators=False):
+    name = target.stem
+    signature = json.dumps([command, changes, operators])
     if up_to_date(source, target, depfile) and command_file.exists() and command_file.read_text() == signature:
         return name, None
     result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode != 0:
         return name, result.stderr
-    for symbol in LOCALISED.get(name, []):
-        subprocess.run(["objcopy", f"--localize-symbol={symbol}", str(target)], check=True)
-    if name.startswith("upstream_"):
-        subprocess.run(["objcopy", "--weaken", str(target)], check=True)
-    if name == "main":
-        subprocess.run(["objcopy", "--redefine-sym=main=port_game_main", str(target)], check=True)
+    if changes:
+        subprocess.run([OBJCOPY, *changes, str(target)], check=True)
+    if operators:
+        used = subprocess.run([NM, "-u", str(target)], capture_output=True, text=True, check=True).stdout.split()
+        for old, new in OPERATORS.items():
+            if f"{PREFIX}{old}" in used:
+                subprocess.run([OBJCOPY, f"--redefine-sym={PREFIX}{old}={PREFIX}{new}", str(target)], check=True)
     command_file.write_text(signature, encoding="utf-8")
     return name, None
 
 
-def compile_all(units):
+def compile_all(units, debug=False):
     jobs = [(source, source.stem) for source in units]
     jobs += [(ENGINE / "port" / "src" / name, "upstream_" + Path(name).stem) for name in UPSTREAM_ASM]
     jobs.append((ENGINE / "tools" / "kazarov" / "src" / "cpp" / "sce" / "libvu0.cpp", "kazarov_vu0"))
-    grouped = ("gs_memory.c", "gs_clut.c", "gs_raster.c")
-    bundle = OUT / "gs_bundle.c"
-    write_if_changed(bundle, "".join(f'#include "{PORT / "src" / name}"\n' for name in grouped))
-    jobs += [(source, "port_" + source.stem) for source in sorted((PORT / "src").glob("*.c*"))
-             if source.name not in grouped]
-    jobs.append((bundle, "port_gs_bundle"))
+    jobs += [(source, "port_" + source.stem) for source in sorted((PORT / "src").glob("*.c*"))]
+    if debug:
+        jobs += [(source, "debug_" + source.stem) for source in sorted((PORT / "debug").glob("*.c*"))]
+        jobs += [(IMGUI / name, "imgui_" + Path(name).stem) for name in IMGUI_SOURCES]
     OBJ.mkdir(parents=True, exist_ok=True)
     workers = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count() or 1
     with concurrent.futures.ThreadPoolExecutor(min(workers, len(jobs))) as pool:
@@ -165,14 +200,23 @@ def compile_all(units):
     return [OBJ / f"{name}.o" for _source, name in jobs], len(units), len(jobs) - len(units)
 
 
-def link(objects, extra):
-    command = ["clang++", "-no-pie", "-o", str(BINARY), *map(str, objects), *map(str, extra),
-               "-Wl,--no-demangle", *(f"-Wl,--defsym={alias}={target}" for alias, target in ALIASES.items()), *LINK_FLAGS]
+def link(objects, extra, binary=BINARY):
+    if DARWIN:
+        platform = [f"-Wl,-alias,_{target},_{alias}" for alias, target in ALIASES.items()]
+    else:
+        platform = ["-no-pie", "-Wl,--no-demangle", *(f"-Wl,--defsym={alias}={target}" for alias, target in ALIASES.items())]
+    command = ["clang++", "-o", str(binary), *map(str, objects), *map(str, extra), *platform, *LINK_FLAGS]
     return subprocess.run(command, capture_output=True, text=True)
 
 
-def undefined(link_errors):
-    return sorted(set(re.findall(r"undefined reference to `([^']+)'", link_errors)))
+def undefined(link_errors, objects):
+    if not DARWIN:
+        return sorted(set(re.findall(r"undefined reference to `([^']+)'", link_errors)))
+    printed = set(re.findall(r'^\s+"(.+)", referenced from', link_errors, re.M))
+    listing = subprocess.run([OBJCOPY.replace("objcopy", "nm"), "-u", "-j", *map(str, objects)],
+                             capture_output=True, text=True, check=True).stdout.split()
+    symbols = sorted({name[1:] for name in listing if name.startswith("_")})
+    return [name for name, text in demangled(symbols).items() if f"_{name}" in printed or text in printed]
 
 
 def demangled(names):
@@ -186,15 +230,15 @@ def write_stubs(names, readable):
     lines = ["#include <stdio.h>", "#include <stdlib.h>"]
     for number, name in enumerate(names):
         if name in SPLIT_DATA:
-            lines.append(f'__attribute__((used, aligned(16))) char stub_data_{number}[64] __asm__("{name}");')
+            lines.append(f'__attribute__((used, aligned(16))) char stub_data_{number}[64] __asm__("{PREFIX}{name}");')
             continue
         text = readable[name].replace("\\", "\\\\").replace('"', '\\"')
-        lines.append(f'__attribute__((used)) void stub_{number}(void) __asm__("{name}");')
+        lines.append(f'__attribute__((used)) void stub_{number}(void) __asm__("{PREFIX}{name}");')
         lines.append(f'void stub_{number}(void) {{ fputs("unimplemented: {text}\\n", stderr); abort(); }}')
     source = OUT / "stubs.c"
     source.write_text("\n".join(lines) + "\n", encoding="utf-8")
     target = OUT / "stubs.o"
-    subprocess.run(["clang", "-c", "-O0", "-fno-pie", "-w", str(source), "-o", str(target)], check=True)
+    subprocess.run(["clang", "-c", "-O0", *([] if DARWIN else ["-fno-pie"]), "-w", str(source), "-o", str(target)], check=True)
     return target
 
 
@@ -234,29 +278,43 @@ def graphics_flags(prefix):
         sys.exit("SDL3 development files missing: run python3 -I tools/port_sdk.py or pass --sdl PREFIX")
 
 
+def movie_flags(prefix):
+    if (prefix / "include/libavcodec/avcodec.h").exists():
+        return [f"-I{prefix / 'include'}"], [f"-L{prefix / 'lib'}", f"-Wl,-rpath,{prefix / 'lib'}", "-lavcodec", "-lavutil"]
+    try:
+        cflags = subprocess.check_output(["pkg-config", "--cflags", "libavcodec", "libavutil"], text=True)
+        libraries = subprocess.check_output(["pkg-config", "--libs", "libavcodec", "libavutil"], text=True)
+        return shlex.split(cflags), shlex.split(libraries)
+    except (OSError, subprocess.CalledProcessError):
+        sys.exit("FFmpeg SDK missing: run python3 -I tools/movie_sdk.py")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--run", action="store_true", help="run the port once it is built")
-    parser.add_argument("--graphics", action="store_true", help="enable the software GS and SDL3 display")
+    parser.add_argument("--graphics", action="store_true", help="accepted for compatibility; the port always opens a window")
     parser.add_argument("--movies", action="store_true", help="enable MPEG-2 movies with the local FFmpeg SDK")
+    parser.add_argument("--debug", action="store_true", help="also link the debug build with its window and API")
     parser.add_argument("--sdl", type=Path, default=OUT / "sdk", help="local SDL3 installation prefix")
     parser.add_argument("arguments", nargs="*", help="arguments for the port, with --run")
     options = parser.parse_args()
     if options.movies:
-        prefix = OUT / "movie-sdk"
-        if not (prefix / "include/libavcodec/avcodec.h").exists():
-            sys.exit("FFmpeg SDK missing: run python3 -I tools/movie_sdk.py")
-        FLAGS.extend(["-DPORT_MOVIES", f"-I{prefix / 'include'}"])
-        LINK_FLAGS.extend([f"-L{prefix / 'lib'}", f"-Wl,-rpath,{prefix / 'lib'}", "-lavcodec", "-lavutil"])
-    if options.graphics:
-        cflags, libraries = graphics_flags(options.sdl.resolve())
-        FLAGS.extend(["-DPORT_GRAPHICS", *cflags])
+        cflags, libraries = movie_flags(OUT / "movie-sdk")
+        FLAGS.extend(["-DPORT_MOVIES", *cflags])
         LINK_FLAGS.extend(libraries)
+    cflags, libraries = graphics_flags(options.sdl.resolve())
+    SDL_CFLAGS.extend(cflags)
+    FLAGS.extend(["-DPORT_GRAPHICS", *cflags])
+    LINK_FLAGS.extend(libraries)
     if not (ENGINE / "ps2" / "src").is_dir():
         sys.exit("no engine source in engine/: run `dc2tk engine fetch`")
-    objects, units, others = compile_all(copy_engine())
+    if options.debug and not (IMGUI / "imgui.h").exists():
+        sys.exit("Dear ImGui missing: run python3 -I tools/imgui_sdk.py")
+    every, units, others = compile_all(copy_engine(), options.debug)
+    debug_objects = [path for path in every if path.stem.startswith(("debug_", "imgui_"))]
+    objects = [path for path in every if path not in debug_objects]
     first = link(objects, [])
-    names = undefined(first.stderr)
+    names = undefined(first.stderr, objects)
     if first.returncode != 0 and not names:
         sys.exit(first.stderr)
     readable = demangled(names)
@@ -266,11 +324,17 @@ def main():
     if final.returncode != 0:
         sys.exit(final.stderr)
     write_if_changed(OUT / "objects.json", json.dumps([str(path) for path in [*objects, *extra]], indent=2) + "\n")
+    if options.debug:
+        debugged = link([*objects, *debug_objects], extra, DEBUG_BINARY)
+        if debugged.returncode != 0:
+            sys.exit(debugged.stderr)
     summary = f"{units} engine units and {others} other files compiled; {len(names)} symbols stubbed"
     if groups:
         summary += f" ({', '.join(f'{group} {len(items)}' for group, items in sorted(groups.items(), key=lambda g: -len(g[1])))})"
     print(summary)
     print(f"linked {BINARY.relative_to(ROOT)}; what is missing is in {(OUT / 'missing.txt').relative_to(ROOT)}")
+    if options.debug:
+        print(f"linked {DEBUG_BINARY.relative_to(ROOT)}")
     if options.run:
         sys.stdout.flush()
         code = subprocess.run([str(BINARY), *(["--graphics"] if options.graphics else []), *options.arguments]).returncode

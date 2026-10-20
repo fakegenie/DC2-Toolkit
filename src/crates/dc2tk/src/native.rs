@@ -1,7 +1,11 @@
-use std::collections::BTreeSet;
+//! dc2tk build --native: the engine's units with the port patches applied, compiled with the port's sources by clang
+//! and linked on Linux or macOS, every symbol nothing defines stubbed.
+
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 use anyhow::{bail, Context, Result};
 use rayon::prelude::*;
@@ -13,8 +17,6 @@ const FLAGS: &[&str] = &[
     "-O0",
     "-g",
     "-pthread",
-    "-fno-pie",
-    "-fno-pic",
     "-DPORT",
     "-DPAL",
     "-DPORT_GRAPHICS",
@@ -29,6 +31,59 @@ const FLAGS: &[&str] = &[
     "-Wno-register",
     "-Wno-return-mismatch",
     "-w",
+];
+const DARWIN: bool = cfg!(target_os = "macos");
+const PREFIX: &str = if DARWIN { "_" } else { "" };
+const SPLIT_DATA: &[&str] =
+    &["Vu_progmain", "Vu_prog0", "Vu_prog_sdw", "Vu_prog_3dsp", "Vu_prog_wtr", "My_dma_start0", "_gp"];
+const LIBRARIES: &[(&str, &[&str], bool)] = &[
+    ("libgraph", &["sceGs"], false),
+    ("libdma", &["sceDma"], false),
+    ("libvifpk", &["sceVif1Pk"], false),
+    ("libgifpk", &["sceGifPk"], false),
+    ("libvu0", &["sceVu0"], false),
+    ("libpad", &["scePad"], false),
+    ("libmc", &["sceMc"], false),
+    ("libcdvd", &["sceCd"], false),
+    ("libmpeg", &["sceMpeg"], false),
+    ("libsdr", &["sceSd"], false),
+    ("sifrpc, sifcmd, IOP heap", &["sceSif"], false),
+    (
+        "sifdev",
+        &["sceOpen", "sceClose", "sceRead", "sceWrite", "sceLseek", "sceIoctl", "sceGetstat", "sceFsReset"],
+        true,
+    ),
+    ("libdev", &["sceDev"], false),
+    ("modmsin", &["sceMSIn"], false),
+    (
+        "eekernel",
+        &[
+            "AddDmacHandler",
+            "AddIntcHandler",
+            "ChangeThreadPriority",
+            "CreateSema",
+            "CreateThread",
+            "DeleteSema",
+            "DeleteThread",
+            "DIntr",
+            "DisableDmac",
+            "EIntr",
+            "EnableDmac",
+            "EnableIntc",
+            "Exit__2",
+            "FlushCache",
+            "GetThreadId",
+            "RemoveDmacHandler",
+            "RemoveIntcHandler",
+            "RotateThreadReadyQueue",
+            "SignalSema",
+            "StartThread",
+            "TerminateThread",
+            "WaitSema",
+        ],
+        true,
+    ),
+    ("MW runtime", &["mwInit", "fptosi", "fptoui", "__construct_new_array"], true),
 ];
 const ALIASES: &[(&str, &str)] = &[
     ("BuffWorkData__2", "BuffWorkData"),
@@ -91,6 +146,51 @@ fn run(command: &mut Command) -> Result<Output> {
     Ok(output)
 }
 
+fn tool(name: &str) -> PathBuf {
+    let search = std::env::var_os("PATH").unwrap_or_default();
+    let found = std::env::split_paths(&search).map(|directory| directory.join(name)).find(|path| path.is_file());
+    found.unwrap_or_else(|| PathBuf::from("/opt/homebrew/opt/llvm/bin").join(name))
+}
+
+fn objcopy() -> PathBuf {
+    if DARWIN {
+        tool("llvm-objcopy")
+    } else {
+        PathBuf::from("objcopy")
+    }
+}
+
+fn nm() -> PathBuf {
+    if DARWIN {
+        tool("llvm-nm")
+    } else {
+        PathBuf::from("nm")
+    }
+}
+
+fn operators() -> Vec<(String, &'static str)> {
+    let mut found = Vec::new();
+    for old in ["_Znwm", "_Znam", "_ZnwmRKSt9nothrow_t", "_ZnamRKSt9nothrow_t"] {
+        found.push((old.to_string(), "port_new"));
+    }
+    for old in [
+        "_ZnwmSt11align_val_t",
+        "_ZnamSt11align_val_t",
+        "_ZnwmSt11align_val_tRKSt9nothrow_t",
+        "_ZnamSt11align_val_tRKSt9nothrow_t",
+    ] {
+        found.push((old.to_string(), "port_new_aligned"));
+    }
+    for kind in ["l", "a"] {
+        for size in ["", "m"] {
+            for rest in ["", "RKSt9nothrow_t", "St11align_val_t", "St11align_val_tRKSt9nothrow_t"] {
+                found.push((format!("_Zd{kind}Pv{size}{rest}"), "port_delete"));
+            }
+        }
+    }
+    found
+}
+
 fn graphics() -> Result<(Vec<String>, Vec<String>)> {
     let prefix = files::root().join("build/port/sdk");
     let mut include = prefix.join("usr/include");
@@ -131,6 +231,27 @@ fn graphics() -> Result<(Vec<String>, Vec<String>)> {
         String::from_utf8(cflags.stdout)?.split_whitespace().map(str::to_string).collect(),
         String::from_utf8(libraries.stdout)?.split_whitespace().map(str::to_string).collect(),
     ))
+}
+
+fn movie_flags() -> Result<(Vec<String>, Vec<String>)> {
+    let sdk = files::root().join("build/port/movie-sdk");
+    if sdk.join("include/libavcodec/avcodec.h").is_file() {
+        return Ok((
+            vec!["-DPORT_MOVIES".into(), format!("-I{}", sdk.join("include").display())],
+            vec![
+                format!("-L{}", sdk.join("lib").display()),
+                format!("-Wl,-rpath,{}", sdk.join("lib").display()),
+                "-lavcodec".into(),
+                "-lavutil".into(),
+            ],
+        ));
+    }
+    let cflags = run(Command::new("pkg-config").args(["--cflags", "libavcodec", "libavutil"]))
+        .context("FFmpeg SDK missing: run python3 -I tools/movie_sdk.py")?;
+    let libraries = run(Command::new("pkg-config").args(["--libs", "libavcodec", "libavutil"]))?;
+    let mut cflags: Vec<String> = String::from_utf8(cflags.stdout)?.split_whitespace().map(str::to_string).collect();
+    cflags.insert(0, "-DPORT_MOVIES".into());
+    Ok((cflags, String::from_utf8(libraries.stdout)?.split_whitespace().map(str::to_string).collect()))
 }
 
 fn units(folder: &Path) -> Result<Vec<PathBuf>> {
@@ -179,12 +300,13 @@ fn compile(source: &Path, name: &str, copy: &Path, out: &Path, cflags: &[String]
     let c = source.extension().is_some_and(|ext| ext == "c");
     let mut command = Command::new(if c { "clang" } else { "clang++" });
     command.args([if c { "-std=c11" } else { "-std=c++26" }, "-c"]);
-    command.args(FLAGS).args(cflags).arg("-MMD").arg("-MF").arg(&depfile);
+    command.args(FLAGS);
+    if !DARWIN {
+        command.args(["-fno-pie", "-fno-pic"]);
+    }
+    command.args(cflags).arg("-MMD").arg("-MF").arg(&depfile);
     if family != "engine" && name != "port_memory" && name != "port_kernel" {
         command.arg("-O2");
-    }
-    if family != "engine" && name == "port_gs_bundle" {
-        command.arg("-O3");
     }
     if !c {
         command.arg("-include").arg(root.join("port/include/port.h"));
@@ -204,30 +326,42 @@ fn compile(source: &Path, name: &str, copy: &Path, out: &Path, cflags: &[String]
     command.arg(source).arg("-o").arg(&object);
     let mut changes = Vec::new();
     match if family == "engine" { name } else { "" } {
-        "mainloop" => changes.push("--localize-symbol=MainBuffer".to_string()),
-        "eventedit" => changes.push("--localize-symbol=_Z10VectMatMulPfS_PA4_f".to_string()),
-        "main" => changes.push("--redefine-sym=main=port_game_main".to_string()),
+        "mainloop" => changes.push(format!("--localize-symbol={PREFIX}MainBuffer")),
+        "eventedit" => changes.push(format!("--localize-symbol={PREFIX}_Z10VectMatMulPfS_PA4_f")),
         _ => {}
     }
     if family == "upstream" {
         changes.push("--weaken".into());
     }
+    if family == "engine" && name == "main" {
+        changes.push(format!("--redefine-sym={PREFIX}main={PREFIX}port_game_main"));
+    }
     let fingerprint = serde_json::to_vec(&(
         command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect::<Vec<_>>(),
         &changes,
+        !c,
     ))?;
     if current(&object, &depfile, &signature, &fingerprint) {
         return Ok(object);
     }
     run(&mut command).with_context(|| format!("{} does not compile", source.display()))?;
-    for change in changes {
-        run(Command::new("objcopy").arg(change).arg(&object))?;
+    if !changes.is_empty() {
+        run(Command::new(objcopy()).args(&changes).arg(&object))?;
+    }
+    if !c {
+        let listing = run(Command::new(nm()).arg("-u").arg(&object))?;
+        let used = String::from_utf8(listing.stdout)?;
+        for (old, new) in operators() {
+            if used.split_whitespace().any(|name| name == format!("{PREFIX}{old}")) {
+                run(Command::new(objcopy()).arg(format!("--redefine-sym={PREFIX}{old}={PREFIX}{new}")).arg(&object))?;
+            }
+        }
     }
     engine::write_if_changed(&signature, &fingerprint)?;
     Ok(object)
 }
 
-fn undefined(errors: &str) -> BTreeSet<String> {
+fn linux_undefined(errors: &str) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
     for line in errors.lines() {
         if let Some((_, tail)) = line.split_once("undefined reference to `") {
@@ -239,13 +373,131 @@ fn undefined(errors: &str) -> BTreeSet<String> {
     names
 }
 
+fn printed_symbols(errors: &str) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for line in errors.lines() {
+        let Some(rest) = line.strip_prefix(char::is_whitespace).map(str::trim_start) else {
+            continue;
+        };
+        if let Some(rest) = rest.strip_prefix('"') {
+            if let Some((name, _)) = rest.split_once("\", referenced from") {
+                names.insert(name.to_string());
+            }
+        }
+    }
+    names
+}
+
+fn demangled(names: &[String]) -> Result<Vec<String>> {
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut child =
+        Command::new("c++filt").stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().context("cannot run c++filt")?;
+    child.stdin.take().context("c++filt has no input")?.write_all(names.join("\n").as_bytes())?;
+    let output = child.wait_with_output()?;
+    Ok(String::from_utf8(output.stdout)?.lines().map(str::to_string).collect())
+}
+
+fn undefined(errors: &str, objects: &[PathBuf]) -> Result<BTreeSet<String>> {
+    if !DARWIN {
+        return Ok(linux_undefined(errors));
+    }
+    let printed = printed_symbols(errors);
+    let listing = run(Command::new(nm()).args(["-u", "-j"]).args(objects))?;
+    let symbols: BTreeSet<String> = String::from_utf8(listing.stdout)?
+        .split_whitespace()
+        .filter_map(|name| name.strip_prefix('_'))
+        .map(str::to_string)
+        .collect();
+    let symbols: Vec<String> = symbols.into_iter().collect();
+    let readable = demangled(&symbols)?;
+    Ok(symbols
+        .into_iter()
+        .zip(readable)
+        .filter(|(name, text)| printed.contains(&format!("_{name}")) || printed.contains(text))
+        .map(|(name, _)| name)
+        .collect())
+}
+
+fn group_of(text: &str) -> &'static str {
+    let word = |rest: &str| !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_');
+    let split = text.starts_with("Vu_prog") && text.chars().all(|c| c.is_alphanumeric() || c == '_')
+        || text == "My_dma_start0"
+        || text == "_gp";
+    if split {
+        return "split data from the disc's executable";
+    }
+    for (group, prefixes, bounded) in LIBRARIES {
+        for prefix in *prefixes {
+            if let Some(rest) = text.strip_prefix(prefix) {
+                if !bounded || word(rest) {
+                    return group;
+                }
+            }
+        }
+    }
+    "the engine and other"
+}
+
+fn write_missing(out: &Path, readable: &[(String, String)]) -> Result<()> {
+    let mut groups: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for (_, text) in readable {
+        groups.entry(group_of(text)).or_default().push(text);
+    }
+    let mut ordered: Vec<_> = groups.into_iter().collect();
+    ordered.sort_by(|first, second| second.1.len().cmp(&first.1.len()).then(first.0.cmp(second.0)));
+    let mut lines = Vec::new();
+    for (group, mut texts) in ordered {
+        texts.sort();
+        lines.push(format!("## {group}: {}", texts.len()));
+        lines.extend(texts.into_iter().map(|text| format!("  {text}")));
+    }
+    engine::write_if_changed(&out.join("missing.txt"), format!("{}\n", lines.join("\n")).as_bytes())?;
+    Ok(())
+}
+
+fn write_stubs(out: &Path, readable: &[(String, String)]) -> Result<PathBuf> {
+    let mut lines = vec!["#include <stdio.h>".to_string(), "#include <stdlib.h>".to_string()];
+    for (number, (name, text)) in readable.iter().enumerate() {
+        if SPLIT_DATA.contains(&name.as_str()) {
+            lines.push(format!(
+                "__attribute__((used, aligned(16))) char stub_data_{number}[64] __asm__(\"{PREFIX}{name}\");"
+            ));
+            continue;
+        }
+        let text = text.replace('\\', "\\\\").replace('"', "\\\"");
+        lines.push(format!("__attribute__((used)) void stub_{number}(void) __asm__(\"{PREFIX}{name}\");"));
+        lines.push(format!("void stub_{number}(void) {{ fputs(\"unimplemented: {text}\\n\", stderr); abort(); }}"));
+    }
+    let source = out.join("stubs.c");
+    engine::write_if_changed(&source, format!("{}\n", lines.join("\n")).as_bytes())?;
+    let target = out.join("stubs.o");
+    let mut command = Command::new("clang");
+    command.args(["-c", "-O0"]);
+    if !DARWIN {
+        command.arg("-fno-pie");
+    }
+    run(command.arg("-w").arg(&source).arg("-o").arg(&target))?;
+    Ok(target)
+}
+
 fn link(objects: &[PathBuf], output: &Path, libraries: &[String]) -> Result<Output> {
     let mut command = Command::new("clang++");
-    command.arg("-no-pie").arg("-pthread").arg("-o").arg(output).args(objects).arg("-Wl,--no-demangle");
-    for (alias, target) in ALIASES {
-        command.arg(format!("-Wl,--defsym={alias}={target}"));
+    command.arg("-o").arg(output).args(objects);
+    if DARWIN {
+        for (alias, target) in ALIASES {
+            command.arg(format!("-Wl,-alias,_{target},_{alias}"));
+        }
+        command.args(["-Wl,-segaddr,__PS2,0x110000000", "-Wl,-segprot,__PS2,rw,rw"]);
+        command.args(["-Wl,-segaddr,__PS2SPR,0x170000000", "-Wl,-segprot,__PS2SPR,rw,rw"]);
+    } else {
+        command.args(["-no-pie", "-Wl,--no-demangle"]);
+        for (alias, target) in ALIASES {
+            command.arg(format!("-Wl,--defsym={alias}={target}"));
+        }
     }
-    command.args(libraries).output().context("cannot run clang++ to link the native port")
+    command.arg("-pthread").args(libraries).output().context("cannot run clang++ to link the native port")
 }
 
 pub fn build(
@@ -257,8 +509,8 @@ pub fn build(
     checking: bool,
     movies: bool,
 ) -> Result<()> {
-    if std::env::consts::OS != "linux" || std::env::consts::ARCH != "x86_64" {
-        bail!("--native requires Linux x86-64");
+    if !DARWIN && std::env::consts::OS != "linux" {
+        bail!("--native requires Linux or macOS");
     }
     let root = files::root();
     let engine = engine::engine_dir(None)?;
@@ -318,20 +570,10 @@ pub fn build(
         &out.join("generated/port_build.h"),
         format!("#define PORT_EXECUTABLE_SHA256 \"{:x}\"\n", Sha256::digest(executable)).as_bytes(),
     )?;
-    let (mut cflags, mut libraries) = graphics()?;
-    if movies {
-        let sdk = root.join("build/port/movie-sdk");
-        if !sdk.join("include/libavcodec/avcodec.h").is_file() {
-            bail!("movie SDK missing: run python3 -I tools/movie_sdk.py");
-        }
-        cflags.extend(["-DPORT_MOVIES".to_string(), format!("-I{}", sdk.join("include").display())]);
-        libraries.extend([
-            format!("-L{}", sdk.join("lib").display()),
-            format!("-Wl,-rpath,{}", sdk.join("lib").display()),
-            "-lavcodec".into(),
-            "-lavutil".into(),
-        ]);
-    }
+    let (mut cflags, mut libraries) = if movies { movie_flags()? } else { (Vec::new(), Vec::new()) };
+    let (graphics_cflags, graphics_libraries) = graphics()?;
+    cflags.extend(graphics_cflags);
+    libraries.extend(graphics_libraries);
     fs::create_dir_all(out.join("obj"))?;
     let mut jobs = Vec::new();
     for path in units(&copy.join("ps2/src"))? {
@@ -342,19 +584,7 @@ pub fn build(
         jobs.push((engine.join(format!("port/src/{name}.cpp")), format!("upstream_{name}")));
     }
     jobs.push((engine.join("tools/kazarov/src/cpp/sce/libvu0.cpp"), "kazarov_vu0".into()));
-    let grouped = ["gs_memory.c", "gs_clut.c", "gs_raster.c"];
-    let mut combined = String::new();
-    for name in grouped {
-        let source = root.join("port/src").join(name);
-        combined.push_str(&format!("#include {}\n", serde_json::to_string(&source.to_string_lossy())?));
-    }
-    let bundle = out.join("gs_bundle.c");
-    engine::write_if_changed(&bundle, combined.as_bytes())?;
-    jobs.push((bundle, "port_gs_bundle".into()));
     for path in units(&root.join("port/src"))? {
-        if grouped.iter().any(|name| path.file_name().is_some_and(|file| file == *name)) {
-            continue;
-        }
         let name = format!("port_{}", path.file_stem().context("source has no name")?.to_string_lossy());
         jobs.push((path, name));
     }
@@ -376,24 +606,25 @@ pub fn build(
     ));
     let first = link(&objects, &temporary, &libraries)?;
     let errors = String::from_utf8_lossy(&first.stderr);
-    let names = undefined(&errors);
+    let names: Vec<String> = undefined(&errors, &objects)?.into_iter().collect();
     if !first.status.success() && names.is_empty() {
         let _ = fs::remove_file(&temporary);
         bail!("native link failed:\n{errors}");
     }
-    engine::write_if_changed(
-        &out.join("missing.txt"),
-        names.iter().cloned().collect::<Vec<_>>().join("\n").as_bytes(),
-    )?;
+    let readable: Vec<(String, String)> = names.iter().cloned().zip(demangled(&names)?).collect();
+    write_missing(&out, &readable)?;
+    let mut linked = objects.clone();
     if !names.is_empty() {
-        let _ = fs::remove_file(&temporary);
-        bail!(
-            "native link has undefined symbols (build/port/missing.txt):\n{}",
-            names.into_iter().collect::<Vec<_>>().join("\n")
-        );
+        linked.push(write_stubs(&out, &readable)?);
+        let last = link(&linked, &temporary, &libraries)?;
+        if !last.status.success() {
+            let _ = fs::remove_file(&temporary);
+            bail!("native link failed:\n{}", String::from_utf8_lossy(&last.stderr));
+        }
     }
     fs::rename(&temporary, &output).context("cannot install the linked native binary")?;
-    engine::write_if_changed(&out.join("objects.json"), &serde_json::to_vec_pretty(&objects)?)?;
+    engine::write_if_changed(&out.join("objects.json"), &serde_json::to_vec_pretty(&linked)?)?;
+    println!("{} symbols stubbed (build/port/missing.txt)", names.len());
     println!("native port written to {}", output.display());
     Ok(())
 }
@@ -430,8 +661,24 @@ mod tests {
 
     #[test]
     fn linker_symbols_are_deduplicated_for_missing_symbol_diagnostics() {
-        let names = undefined("a: undefined reference to `_Z4testv'\nb: undefined reference to `Vu_prog0'\nc: undefined reference to `_Z4testv'");
+        let names = linux_undefined("a: undefined reference to `_Z4testv'\nb: undefined reference to `Vu_prog0'\nc: undefined reference to `_Z4testv'");
         assert_eq!(names, BTreeSet::from(["Vu_prog0".to_string(), "_Z4testv".to_string()]));
-        assert!(undefined("duplicate symbol: Test").is_empty());
+        assert!(linux_undefined("duplicate symbol: Test").is_empty());
+    }
+
+    #[test]
+    fn ld64_prints_symbols_under_their_demangled_names() {
+        let names = printed_symbols(
+            "Undefined symbols for architecture arm64:\n  \"_Vu_prog0\", referenced from:\n      x in a.o\n  \"test(int)\", referenced from:\n",
+        );
+        assert_eq!(names, BTreeSet::from(["_Vu_prog0".to_string(), "test(int)".to_string()]));
+    }
+
+    #[test]
+    fn missing_symbols_are_grouped_by_library() {
+        assert_eq!(group_of("sceGsSetDefDBuff"), "libgraph");
+        assert_eq!(group_of("sceOpen(char const*, int)"), "sifdev");
+        assert_eq!(group_of("sceOpenFoo"), "the engine and other");
+        assert_eq!(group_of("Vu_prog_wtr"), "split data from the disc's executable");
     }
 }

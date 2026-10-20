@@ -1,5 +1,4 @@
 #include <string.h>
-#include "iop_midi.h"
 #include "sce/libpad.h"
 #ifdef PORT_GRAPHICS
 #include "input.h"
@@ -76,8 +75,3 @@ int sceDevConsOpen(unsigned int x, unsigned int y, unsigned int width, unsigned 
 void sceDevConsClose(int handle) {}
 void sceDevConsAttribute(int handle, unsigned char attributes) {}
 void sceDevConsDraw(int handle) {}
-
-struct sceCslCtx;
-int sceMSIn_Init(struct sceCslCtx *ctx) { return 0; }
-int sceMSIn_PutMsg(struct sceCslCtx *ctx, unsigned int port, unsigned int msg) { return iop_midi_message(port, msg); }
-int sceMSIn_PutHsMsg(struct sceCslCtx *ctx, unsigned int port, unsigned char *msg) { return iop_midi_hs_message(port, msg); }

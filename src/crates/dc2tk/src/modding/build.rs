@@ -60,7 +60,7 @@ pub struct BuildArgs {
     /// build` wrote.
     #[arg(long, value_name = "FILE")]
     executable: Option<PathBuf>,
-    #[arg(long, num_args = 0..=1, default_missing_value = "build/port/darkchronicle", value_name = "FILE", help = "Build the Linux SDL3 port, optionally writing it to FILE")]
+    #[arg(long, num_args = 0..=1, default_missing_value = "build/port/darkchronicle", value_name = "FILE", help = "Build the SDL3 native port, optionally writing it to FILE")]
     native: Option<PathBuf>,
     #[arg(long, requires = "native", help = "Enable MPEG2 playback in the native port using the local movie SDK")]
     movies: bool,
