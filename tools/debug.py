@@ -6,8 +6,10 @@
     python3 -I tools/debug.py press buttons=cross frames=6
     python3 -I tools/debug.py step frames=10
     python3 -I tools/debug.py screenshot out.png         or windowshot out.png for the debug window
+    python3 -I tools/debug.py screenshot out.png full=1  the picture at the internal resolution (--scale)
     python3 -I tools/debug.py stats frames=50 --summary
     python3 -I tools/debug.py launch [--debug]           start the debug build and wait for its API
+    python3 -I tools/debug.py launch --scale 2 --msaa 4  render at twice the PS2 resolution with 4x MSAA
 
 DC2TK_DEBUG_PORT picks the port (default 7777).
 """
@@ -24,7 +26,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PORT = int(os.environ.get("DC2TK_DEBUG_PORT", "7777"))
-IMAGES = {"screenshot", "windowshot", "texture"}
+IMAGES = {"screenshot", "windowshot", "texture", "grab"}
 
 
 def request(command, arguments, timeout=120):
@@ -83,6 +85,8 @@ def main():
     show_summary = "--summary" in words
     words = [word for word in words if word != "--summary"]
     arguments = dict(word.split("=", 1) for word in words)
+    if command == "screenshot" and arguments.pop("full", "0") != "0":
+        command = "grab"
     status, body = request(command, arguments)
     if command in IMAGES and status == 200:
         path = Path(output or f"build/port/{command}.png")

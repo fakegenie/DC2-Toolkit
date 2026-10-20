@@ -33,6 +33,7 @@ layout(set = 1, binding = 1) uniform Bones {
 layout(location = 0) out vec4 frag_color;
 layout(location = 1) out vec2 frag_uv;
 layout(location = 2) out float frag_fog;
+layout(location = 3) flat out vec4 frag_limits;
 
 const uint REAL = 0x008u;
 const uint POINT_LIGHTS = 0x010u;
@@ -148,4 +149,5 @@ void main() {
     frag_uv = st * depth.yz;
     float fogged = clip.w > 0.0 ? fog.x + fog.w / clip.w : fog.x;
     frag_fog = floor(max(max(min(fogged, fog.y), fog.z), 0.0)) / 255.0;
+    frag_limits = vec4(0.0);
 }

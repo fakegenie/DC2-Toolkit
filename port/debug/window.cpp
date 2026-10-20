@@ -412,6 +412,7 @@ void debug_window_draw(void) {
     ImGui::SetNextWindowPos(viewport->WorkPos);
     ImGui::SetNextWindowSize(viewport->WorkSize);
     ImGui::Begin("debug", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+    debug_reload_bar();
     if (ImGui::BeginTabBar("tabs")) {
         if (tab("Performance")) {
             performance_tab();

@@ -196,6 +196,47 @@ pub fn run_build(args: &BuildArgs) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// Every game file a build of the tree with these mods writes, by its path on the disc, and whether
+/// the build also changes the executable, which no file can carry: what `mod watch` puts into the
+/// native port's override folder. Nothing is written.
+pub fn built_game_files(
+    source: &Path,
+    disc: &Path,
+    mod_names: &[String],
+    mods: &ModsDir,
+    common: &Common,
+) -> Result<(Files, bool)> {
+    let args = BuildArgs {
+        source: source.to_path_buf(),
+        disc: disc.to_path_buf(),
+        output: None,
+        dry_run: true,
+        start_at: None,
+        mod_names: mod_names.to_vec(),
+        mods: mods.clone(),
+        no_start_at: true,
+        play: false,
+        pcsx2: None,
+        full: false,
+        executable: None,
+        native: None,
+        movies: false,
+        common: common.clone(),
+    };
+    let mut tools = args.common.tools()?;
+    let mod_dirs = mod_folders(args.mods.path(), &args.mod_names)?;
+    let prepared = crate::engine::prepare_mods(&args.disc, &mod_dirs)?;
+    if let Some(prepared) = &prepared {
+        crate::engine_natives::regenerate(&prepared.copy, &mut tools)?;
+    }
+    let mut planned = plan(&args, &tools)?;
+    print_mods(&args, &planned)?;
+    let found = compile(&args, &tools, &mut planned)?;
+    let made = game_files(&args, &tools, &planned, &found)?;
+    memory_check(&args, &made.data.files)?;
+    Ok((made.data.files, prepared.is_some() || made.data.executable.is_some()))
+}
+
 /// The chosen mods, what they change and the numbers they are given; mods that change one thing
 /// two ways are an error.
 fn plan(args: &BuildArgs, tools: &Tools) -> Result<Planned> {

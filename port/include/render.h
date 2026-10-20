@@ -12,6 +12,7 @@ typedef struct {
     float u, v;
     uint8_t r, g, b, a;
     float fog;
+    float limits[4];
 } RenderVertex;
 
 typedef struct {
@@ -105,6 +106,8 @@ typedef struct {
     int height;
     uint32_t base;
     int drawn;
+    int scale;
+    int samples;
 } RenderSlot;
 
 extern RenderToggles render_toggles;
@@ -114,14 +117,19 @@ extern int render_highlight;
 int render_init(void);
 void render_shutdown(void);
 int render_poll(void);
+void render_set_quality(int scale, int samples);
+void render_quality(int *scale, int *samples);
 
 int render_target(uint32_t base, int width, int height);
 int render_texture(int width, int height);
+int render_scaled_texture(int width, int height);
 void render_release(int texture);
 int render_width(int texture);
 int render_height(int texture);
+int render_scale(int texture);
 void render_upload(int texture, int x, int y, int width, int height, const uint32_t *pixels);
 void render_download(int texture, int x, int y, int width, int height, uint32_t *pixels);
+void render_download_full(int texture, int width, int height, uint32_t *pixels);
 void render_download_depth(int target, int x, int y, int width, int height, uint32_t *pixels);
 void render_copy(int source, int source_x, int source_y, int destination, int destination_x, int destination_y,
                  int width, int height);

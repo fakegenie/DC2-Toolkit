@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cdvd.h"
 #include "port_kernel.h"
+#include "port_overrides.h"
 #include "port_stats.h"
 #include <ctype.h>
 #include <fcntl.h>
@@ -28,6 +29,7 @@ static struct {
     int used;
     struct sceCdlFILE file;
     uint32_t position;
+    int override;
 } handles[32];
 
 static uint32_t le32(const unsigned char *p) {
@@ -242,7 +244,10 @@ void sceFsReset(void) { memset(handles, 0, sizeof(handles)); }
 int sceOpen(const char *name, int flags, ...) {
     struct sceCdlFILE file;
     if ((flags & 3) != 1 || flags & (0x200 | 0x400)) return -1;
-    if (!port_cdvd_find(name, &file) || file.flag & 2) {
+    int override = port_overrides_find(name);
+    memset(&file, 0, sizeof file);
+    file.size = port_overrides_size(override);
+    if (override < 0 && (!port_cdvd_find(name, &file) || file.flag & 2)) {
         log_missing(name);
         return -1;
     }
@@ -251,6 +256,7 @@ int sceOpen(const char *name, int flags, ...) {
         handles[i].used = 1;
         handles[i].file = file;
         handles[i].position = 0;
+        handles[i].override = override;
         log_file(name, &file);
         return i + 3;
     }
@@ -277,7 +283,10 @@ int sceRead(int fd, void *buffer, int size) {
     if (handles[index].position >= handles[index].file.size) return 0;
     uint32_t available = handles[index].file.size - handles[index].position;
     if ((uint32_t)size > available) size = (int)available;
-    if (!port_cdvd_read_file(&handles[index].file, handles[index].position, buffer, (size_t)size)) return -1;
+    int read = handles[index].override >= 0
+                   ? port_overrides_read(handles[index].override, handles[index].position, buffer, (size_t)size)
+                   : port_cdvd_read_file(&handles[index].file, handles[index].position, buffer, (size_t)size);
+    if (!read) return -1;
     handles[index].position += (uint32_t)size;
     return size;
 }
@@ -289,7 +298,10 @@ int sceIoctl(int fd, int request, void *argument) {
 }
 int sceGetstat(const char *name, struct sce_stat *stat) {
     struct sceCdlFILE file;
-    if (!stat || !port_cdvd_find(name, &file)) return -1;
+    int override = port_overrides_find(name);
+    memset(&file, 0, sizeof file);
+    file.size = port_overrides_size(override);
+    if (!stat || (override < 0 && !port_cdvd_find(name, &file))) return -1;
     memset(stat, 0, sizeof(*stat));
     stat->st_mode = file.flag & 2 ? 0x1000 : 0x2000;
     stat->st_size = file.size;

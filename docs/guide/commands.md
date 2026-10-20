@@ -69,6 +69,7 @@ The first build makes the container image, which takes a while; later builds reu
 | `dc2tk mod slim extracted/scripts <name>` | Convert full-file script copies in a mod into small function patches. |
 | `dc2tk mod header extracted/scripts <name>` | Regenerate `.editor/` headers and `compile_commands.json` for `clangd`. |
 | `dc2tk mod apply extracted/scripts <name>...` | Write mods' files into a source tree. |
+| `dc2tk mod watch extracted/scripts dc2.iso <name>...` | Rebuild mods into the native port's override folder whenever they change and make the running debug build reload them (see [Hot reloading](mods.md#hot-reloading-in-the-native-port)). |
 
 ## Searching and inspecting the game
 

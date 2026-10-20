@@ -70,7 +70,8 @@ def main():
     with tempfile.TemporaryDirectory() as temporary:
         folder = pathlib.Path(temporary)
         library = folder / 'cdvd.so'
-        subprocess.run(['clang', '-std=c11', '-Wall', '-Wextra', '-Werror', '-shared', '-fPIC', '-I' + str(root / 'port/include'), str(root / 'port/src/cdvd.c'), str(root / 'port/src/split_data.c'), str(root / 'port/src/hooks.c'), '-o', str(library)], check=True)
+        subprocess.run(['clang', '-std=c11', '-Wall', '-Wextra', '-Werror', '-shared', '-fPIC', '-I' + str(root / 'port/include'), str(root / 'port/src/cdvd.c'), str(root / 'port/src/overrides.c'), str(root / 'port/src/split_data.c'), str(root / 'port/src/hooks.c'), '-o', str(library)], check=True)
+        os.environ['DC2TK_OVERRIDES'] = str(folder / 'overrides')
         iso = folder / 'test.iso'
         iso.write_bytes(image())
         cd = ctypes.CDLL(str(library))
@@ -148,6 +149,15 @@ def main():
         assert cd.port_cdvd_init(bytes(broken)) == 0
         assert cd.sceOpen(b'ROOT.BIN', 1) == -1
         assert cd.port_cdvd_init(bytes(iso)) == 1
+        (folder / 'overrides' / 'data').mkdir(parents=True)
+        (folder / 'overrides' / 'data' / 'test.bin').write_bytes(b'overridden text')
+        assert cd.port_overrides_count() == 0
+        cd.port_overrides_scan()
+        assert cd.port_overrides_count() == 1
+        fd = cd.sceOpen(b'cdrom0:\\DATA\\TEST.BIN;1', 1)
+        assert cd.sceRead(fd, buffer, 100) == 15
+        assert buffer.raw[:15] == b'overridden text'
+        assert cd.sceClose(fd) == 0
         cd.port_cdvd_close()
     print('cdvd checks passed')
 

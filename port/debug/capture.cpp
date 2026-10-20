@@ -1,6 +1,7 @@
 #include "debug.h"
 #include "draw.hpp"
 #include "imgui.h"
+#include "port_graphics.h"
 #include "render.h"
 #include <cstdint>
 #include <cstdio>
@@ -62,6 +63,11 @@ static int selected_slot;
 static float zoom = 1.0f;
 static int only_source = -1;
 static bool highlight_on;
+static int shown_target;
+static int shown_width;
+static int shown_height;
+static const int scales[] = {1, 2, 3, 4};
+static const int sample_counts[] = {1, 2, 4, 8};
 
 static void describe(const RenderState &state, Described *text) {
     int a = (int)(state.alpha & 3), b = (int)((state.alpha >> 2) & 3), c = (int)((state.alpha >> 4) & 3),
@@ -280,6 +286,55 @@ static int command_skip(const DebugArgs *args, DebugReply *reply) {
     return 0;
 }
 
+static void print_quality(DebugReply *reply) {
+    int scale, samples;
+    render_quality(&scale, &samples);
+    debug_print(reply, "{\"scale\": %d, \"msaa\": %d}", scale, samples);
+}
+
+static int command_scale(const DebugArgs *args, DebugReply *reply) {
+    render_set_quality((int)debug_arg_int(args, "value", 0), 0);
+    debug_print(reply, "{\"requested\": %ld, \"now\": ", debug_arg_int(args, "value", 0));
+    print_quality(reply);
+    debug_print(reply, "}");
+    return 0;
+}
+
+static int command_msaa(const DebugArgs *args, DebugReply *reply) {
+    render_set_quality(0, (int)debug_arg_int(args, "value", 0));
+    debug_print(reply, "{\"requested\": %ld, \"now\": ", debug_arg_int(args, "value", 0));
+    print_quality(reply);
+    debug_print(reply, "}");
+    return 0;
+}
+
+static int command_grab(const DebugArgs *args, DebugReply *reply) {
+    (void)args;
+    if (!shown_target || shown_width <= 0 || shown_height <= 0) return debug_fail(reply, "nothing shown yet");
+    int scale = render_scale(shown_target);
+    std::vector<uint32_t> pixels((size_t)(shown_width * scale) * (size_t)(shown_height * scale));
+    render_download_full(shown_target, shown_width, shown_height, pixels.data());
+    reply->body = debug_png(pixels.data(), shown_width * scale, shown_height * scale, &reply->body_length);
+    reply->content_type = "image/png";
+    return 0;
+}
+
+static int command_depth(const DebugArgs *args, DebugReply *reply) {
+    int x = (int)debug_arg_int(args, "x", 252), y = (int)debug_arg_int(args, "y", 204);
+    int size = (int)debug_arg_int(args, "size", 8);
+    if (size < 1 || size > 64) return debug_fail(reply, "size 1..64");
+    std::vector<unsigned> pixels((size_t)(size * size));
+    port_depth_download(x, y, size, size, pixels.data());
+    unsigned nearest = 0, farthest = 0xffffff;
+    for (unsigned value : pixels) {
+        if (value > nearest) nearest = value;
+        if (value < farthest) farthest = value;
+    }
+    debug_print(reply, "{\"x\": %d, \"y\": %d, \"size\": %d, \"nearest\": %u, \"farthest\": %u}", x, y, size, nearest,
+                farthest);
+    return 0;
+}
+
 extern const DebugCommand debug_capture_commands[] = {
     {"capture", command_capture, 0, "record every draw of the next frame; last=1 returns the previous capture (from=N limit=N)"},
     {"draw", command_draw, 1, "one draw of the last capture; index=N"},
@@ -288,6 +343,10 @@ extern const DebugCommand debug_capture_commands[] = {
     {"texture", command_texture, 0, "a slot as PNG; slot=N, alpha=1 for its alpha channel as grey"},
     {"skip", command_skip, 1, "skip draws numbered from=A to=B (exclusive) in every frame, to find which draws make a picture; to=0 clears"},
     {"toggle", command_toggle, 1, "name=models|2d|shadows|water|sprites|fog|textures|wireframe|overdraw value=0|1; no arguments lists them"},
+    {"scale", command_scale, 0, "internal resolution value=1|2|3|4 times the PS2 size; applied at the next frame"},
+    {"msaa", command_msaa, 0, "multisampling value=1|2|4|8, lowered to what the GPU supports; applied at the next frame"},
+    {"depth", command_depth, 0, "reads the depth buffer like the game's photo and pick-z; x=N y=N size=N (8)"},
+    {"grab", command_grab, 0, "the shown picture as PNG at the full internal resolution"},
     {NULL, NULL, 0, NULL},
 };
 
@@ -328,6 +387,27 @@ static void draw_details(const Draw &draw) {
     ImGui::Text("GPU command %d%s  render pass %d", r.command, r.merged ? " (merged)" : "", r.pass);
 }
 
+static void quality_panel(void) {
+    int scale, samples;
+    render_quality(&scale, &samples);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("scale");
+    for (int value : scales) {
+        ImGui::SameLine();
+        char label[16];
+        snprintf(label, sizeof label, "%dx##scale", value);
+        if (ImGui::RadioButton(label, scale == value)) render_set_quality(value, 0);
+    }
+    ImGui::SameLine();
+    ImGui::TextUnformatted("  msaa");
+    for (int value : sample_counts) {
+        ImGui::SameLine();
+        char label[16];
+        snprintf(label, sizeof label, "%d##msaa", value);
+        if (ImGui::RadioButton(label, samples == value)) render_set_quality(0, value);
+    }
+}
+
 static void toggle_panel(void) {
     for (const Toggle &toggle : toggles) {
         bool on = toggle.inverted ? !*toggle.flag : *toggle.flag;
@@ -335,6 +415,7 @@ static void toggle_panel(void) {
         ImGui::SameLine();
     }
     ImGui::NewLine();
+    quality_panel();
 }
 
 static void draws_panel(void) {
@@ -432,7 +513,8 @@ static void textures_panel(void) {
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(info.target ? "target" : "texture");
             ImGui::TableNextColumn();
-            ImGui::Text("%dx%d", info.width, info.height);
+            if (info.scale > 1 || info.samples > 1) ImGui::Text("%dx%d x%d msaa %d", info.width, info.height, info.scale, info.samples);
+            else ImGui::Text("%dx%d", info.width, info.height);
             ImGui::TableNextColumn();
             ImGui::Text("%u", info.base);
             ImGui::TableNextColumn();
@@ -469,9 +551,9 @@ void debug_capture_panel(void) {
 void debug_capture_frame(void) {}
 
 void debug_capture_present(int target, int width, int height) {
-    (void)target;
-    (void)width;
-    (void)height;
+    shown_target = target;
+    shown_width = width;
+    shown_height = height;
     if (!waiting || (debug_paused && debug_steps == 0)) return;
     finish_capture();
 }

@@ -1,10 +1,13 @@
 #include "debug.h"
+#include "dataread.hpp"
 #include "dng_main.hpp"
+#include "editdata.hpp"
 #include "gamedata.hpp"
 #include "imgui.h"
 #include "mainloop.hpp"
 #include "mapselect.hpp"
 #include "savedata.hpp"
+#include "vlgr_info.hpp"
 #include <cctype>
 #include <cstdarg>
 #include <cstdio>
@@ -16,13 +19,82 @@ typedef struct {
     char label[80];
 } Entry;
 
-enum { MAP_LIMIT = 1024, ITEM_LIMIT = ITEM_NO_MAX };
+typedef struct {
+    const char *name;
+    const char *summary;
+} Preset;
+
+typedef struct {
+    int map;
+    const char *label;
+} Place;
+
+enum { MAP_LIMIT = 1024, ITEM_LIMIT = ITEM_NO_MAX, LIST_LIMIT = 64, PARTS_LIMIT = 0x100, CHAPTER_LIMIT = 9 };
 
 static const char *loop_names[LOOP_MODE_NUM] = {"menu",       "town",       "dungeon",    "title",      "chara viewer",
                                                 "tex viewer", "map viewer", "snd viewer", "movie viewer", "save convert"};
 static const char *character_names[USER_CHARA_NUM] = {"max", "monica", "ridepod", "monster"};
 static const int item_sets[] = {0, 1, 2, 6};
 static const char *item_set_names[] = {"presentation", "game start", "start debug", "weapons only"};
+
+static const Preset chapter_presets[] = {
+    {"cap1", "Chapter 1 start: progress 2, Max with the starting kit (item set 7)"},
+    {"cap2", "Chapter 2 start: progress 4, item set 8 (drill wrench, trumpet gun), 48 HP, defence 8"},
+    {"cap3", "Chapter 3 start: progress 4, item set 9, flags 207-209, 64 HP and defence 16 for Max and Monica"},
+    {"cap4", "Chapter 4 start: progress 6, item set 9, flag 360, better weapons for both, 96 HP, defence 28"},
+    {"cap5", "Chapter 5 start: progress 7, item set 9, weapons 4/29 and 76/95, 128 HP, defence 34"},
+    {"cap6", "Chapter 6 start: progress 8, item set 9, weapons 7/27 and 71/100, 160 HP, defence 50"},
+    {"cap7", "Chapter 7 start: progress 9, item set 9, weapons 19/30 and 77/107, 200 HP, defence 70"},
+    {"cap8", "Chapter 8 start: progress 10, item set 9, weapons 20/39 and 79/101, 240 HP, defence 94"},
+};
+
+static const Preset other_presets[] = {
+    {"db_cap1", "Chapter 1 start: progress 2, presentation item set 0 (Max and Monica, Ridepod kit)"},
+    {"db_cap2", "Chapter 2 start: progress 4, item set 0, drill wrench and trumpet gun, 48 HP"},
+    {"db_cap3", "Chapter 3 start: progress 4, item set 0, weapons 18/25 and 48/92, 64 HP"},
+    {"db_cap4", "Chapter 4 start: progress 46, item set 0, weapons 4/27 and 76/95, 96 HP"},
+    {"db_cap5", "Chapter 5 start: progress 7, item set 0, weapons 5/30 and 50/98, 128 HP"},
+    {"db_cap6", "Chapter 6 start: progress 8, item set 0, weapons 7/27 and 71/100, 160 HP"},
+    {"db_cap7", "Chapter 7 start: progress 9, item set 0, weapons 20/38 and 77/108, 200 HP"},
+    {"db_cap8", "Chapter 8 start: progress 10, item set 0, weapons 20/39 and 79/101, 240 HP"},
+    {"dbg1", "Chapter 1 start: progress 2, item set 7"},
+    {"dbg2", "Chapter 2 start: progress 4, item set 8"},
+    {"dbg3", "Chapter 3 start: progress 4, item set 9"},
+    {"dbg4", "Sphida fight: weapons only, item 10 equipped"},
+    {"dbg5", "Fish: weapons only plus fish items 309 and 320-326"},
+    {"dbg6", "Fishing: weapons only plus rods, bait 312-314 x10"},
+    {"dbg7", "Chapter 1 start: progress 2, item set 0"},
+    {"game0", "Chapter 2, full party: Monica, Ridepod, monster, townsperson 12, active Monica"},
+    {"game1", "Chapter 1 first Underground Channel kit: progress 3, weapons only, basics, Max"},
+    {"game2", "Same as game1"},
+    {"game3", "Chapter 1 channel with armour 260 equipped: progress 3"},
+    {"game4", "Chapter 2 with Monica active: progress 4, Monica, Ridepod, monster, townsperson 12"},
+    {"game5", "Chapter 2 town menu kit: progress 4, camera, Max"},
+    {"game6", "Chapter 2 with every character fully equipped: progress 4, item set 0"},
+    {"game7", "Chapter 1 with full equipment and fishing gear: progress 3"},
+    {"game9", "Chapter 1 channel with armour 260 equipped: progress 3"},
+    {"game10", "Chapter 2 party menu: progress 4, Monica, Ridepod, monster, townsperson 13, camera"},
+    {"game20", "Chapter 2 Monica rush: progress 4, Monica with 120 HP, active Monica"},
+    {"game21", "Chapter 1 Max battle: progress 3, 140 HP, defence 100"},
+    {"game22", "Chapter 2 Monica battle: progress 4, Monica with 48 HP, active Monica"},
+    {"pb", "Chapter 2: progress 4, item set 0, fishing gear, 48 HP"},
+    {"sg0", "Sphida fight: weapons only, item 10 equipped"},
+    {"sg1", "Fish: weapons only plus fish items"},
+    {"sg2", "Fishing: weapons only plus rods and bait"},
+    {"geo", "Georama: progress 1, flags 34, 250 and 254, every georama part"},
+};
+
+static const Place chapter_places[CHAPTER_LIMIT] = {
+    {-1, ""},
+    {10, "Palm Brinks"},
+    {0, "Sindain"},
+    {1, "Balance Valley"},
+    {2, "Veniccio"},
+    {3, "Heim Rada"},
+    {4, "Moon Flower Palace"},
+    {4, "Moon Flower Palace"},
+    {10, "Palm Brinks"},
+};
 
 static Entry maps[MAP_LIMIT];
 static int map_total;
@@ -39,9 +111,17 @@ static int pick_money = 99999;
 static int pick_hour = 12;
 static int pick_day;
 static int pick_progress;
+static bool pick_warp = true;
+static bool pick_geo;
+static int pick_preset_money;
+static int pick_town;
+static int pick_part;
+static int pick_part_count = 30;
+static bool pick_conditions_lifted;
 static char map_filter[64];
 static char item_filter[64];
-static char result[256];
+static char result[1024];
+static char geo_path[] = "dbg/geo.cfg";
 
 static void clean(char *out, size_t size, const char *text) {
     size_t length = 0;
@@ -110,7 +190,7 @@ static int in_playable_loop(void) {
     return loop == LOOP_EDIT || loop == LOOP_DUNGEON;
 }
 
-static int enter(int loop, INIT_LOOP_ARG arg, DebugReply *reply) {
+static int warp(int loop, INIT_LOOP_ARG arg, DebugReply *reply) {
     int now = GetNowLoopNo();
     if (now != LOOP_TITLE && !in_playable_loop())
         return debug_fail(reply, "cannot leave the %s loop; only title, town and dungeon can be left",
@@ -120,6 +200,12 @@ static int enter(int loop, INIT_LOOP_ARG arg, DebugReply *reply) {
         DebugFlag = 1;
         debug_run("press?buttons=start,select&frames=1");
     } else GetMainScene()->exit_flag = 1;
+    return 0;
+}
+
+static int enter(int loop, INIT_LOOP_ARG arg, DebugReply *reply) {
+    int now = GetNowLoopNo();
+    if (warp(loop, arg, reply)) return 1;
     debug_print(reply, "{\"ok\": 1, \"from\": \"%s\", \"to\": \"%s\", \"map\": %d, \"floor\": %d, \"event\": %d}",
                 loop_names[now], loop_names[loop], arg.map_no, arg.floor_no, arg.event_no);
     return 0;
@@ -266,7 +352,196 @@ static int command_progress(const DebugArgs *args, DebugReply *reply) {
     if (!ready()) return debug_fail(reply, "the game is still starting");
     CSaveData *data = save();
     if (debug_arg(args, "value", NULL)) data->game_progress = (int)debug_arg_int(args, "value", data->game_progress);
-    debug_print(reply, "{\"game_progress\": %d}", data->game_progress);
+    debug_print(reply, "{\"game_progress\": %d, \"chapter\": %d", data->game_progress, GetGameChapter(data->game_progress));
+    if (debug_arg_int(args, "list", 0)) {
+        debug_print(reply, ", \"points\": [");
+        int shown = 0;
+        for (int i = 0; i < GetGameProgressNum(); ++i) {
+            GAME_PROGRESS_INFO *info = GetGameProgressInfo(i);
+            if (!info->chapter) continue;
+            debug_print(reply, "%s[%d, %d, %d, %d]", shown++ ? ", " : "", i, info->chapter, info->section, info->order);
+        }
+        debug_print(reply, "]");
+    }
+    debug_print(reply, "}");
+    return 0;
+}
+
+static int parse_list(const char *text, int *out) {
+    int count = 0;
+    while (*text && count < LIST_LIMIT) {
+        char *end;
+        long number = strtol(text, &end, 0);
+        if (end == text) break;
+        out[count++] = (int)number;
+        text = *end == ',' ? end + 1 : end;
+    }
+    return count;
+}
+
+static void all_geo_parts(void) {
+    int progress = save()->game_progress;
+    LoadGameConfig(geo_path);
+    save()->game_progress = progress;
+}
+
+static int preset_path(const DebugArgs *args, char *path, size_t size) {
+    const char *given = debug_arg(args, "path", NULL);
+    const char *name = debug_arg(args, "name", NULL);
+    if (given) snprintf(path, size, "%s", given);
+    else if (name) snprintf(path, size, "dbg/%s.cfg", name);
+    else return 0;
+    return 1;
+}
+
+static int command_preset(const DebugArgs *args, DebugReply *reply) {
+    if (!ready()) return debug_fail(reply, "the game is still starting");
+    char path[64];
+    if (!preset_path(args, path, sizeof path))
+        return debug_fail(reply, "name=cap1..cap8|db_cap1..8|game0..22|dbg1..7|geo|pb|sg0..2 or path=dbg/x.cfg "
+                                 "[warp=0] [geo=1] [money=N] [event=N]");
+    int size = 0;
+    if (!LoadFile2(path, NULL, &size, LOAD_FILE_SIZE)) return debug_fail(reply, "%s is not on the disc", path);
+    int now = GetNowLoopNo();
+    int warping = debug_arg_int(args, "warp", 1);
+    if (warping && now != LOOP_TITLE && !in_playable_loop())
+        return debug_fail(reply, "cannot warp from the %s loop; pass warp=0", now >= 0 && now < LOOP_MODE_NUM ? loop_names[now] : "unknown");
+    InitSaveData();
+    LoadGameConfig(path);
+    if (debug_arg_int(args, "geo", 0)) all_geo_parts();
+    if (debug_arg(args, "money", NULL)) save()->user_data.AddMoney((int)debug_arg_int(args, "money", 0));
+    int chapter = GetGameChapter(save()->game_progress);
+    const Place *place = chapter > 0 && chapter < CHAPTER_LIMIT ? &chapter_places[chapter] : NULL;
+    debug_print(reply, "{\"ok\": 1, \"path\": ");
+    debug_print_string(reply, path);
+    debug_print(reply, ", \"game_progress\": %d, \"chapter\": %d", save()->game_progress, chapter);
+    if (!warping || !place || place->map < 0) {
+        debug_print(reply, ", \"warped\": 0}");
+        return 0;
+    }
+    INIT_LOOP_ARG arg;
+    arg.map_no = place->map;
+    arg.event_no = event_arg(args);
+    if (warp(LOOP_EDIT, arg, reply)) return 1;
+    debug_print(reply, ", \"warped\": 1, \"map\": %d, \"place\": \"%s\"}", place->map, place->label);
+    return 0;
+}
+
+static int command_flag(const DebugArgs *args, DebugReply *reply) {
+    if (!ready()) return debug_fail(reply, "the game is still starting");
+    int on[LIST_LIMIT];
+    int off[LIST_LIMIT];
+    int get[LIST_LIMIT];
+    int on_count = parse_list(debug_arg(args, "on", ""), on);
+    int off_count = parse_list(debug_arg(args, "off", ""), off);
+    int get_count = parse_list(debug_arg(args, "get", ""), get);
+    if (!on_count && !off_count && !get_count) return debug_fail(reply, "[on=N,N] [off=N,N] [get=N,N] sets or reads bit flags");
+    for (int i = 0; i < on_count; ++i) save()->SetBitFlag(on[i], 1);
+    for (int i = 0; i < off_count; ++i) save()->SetBitFlag(off[i], 0);
+    debug_print(reply, "{\"flags\": [");
+    for (int i = 0; i < on_count; ++i) debug_print(reply, "%s[%d, %d]", i ? ", " : "", on[i], save()->GetBitFlag(on[i]));
+    for (int i = 0; i < off_count; ++i)
+        debug_print(reply, "%s[%d, %d]", on_count || i ? ", " : "", off[i], save()->GetBitFlag(off[i]));
+    for (int i = 0; i < get_count; ++i)
+        debug_print(reply, "%s[%d, %d]", on_count || off_count || i ? ", " : "", get[i], save()->GetBitFlag(get[i]));
+    debug_print(reply, "]}");
+    return 0;
+}
+
+static int command_party(const DebugArgs *args, DebugReply *reply) {
+    if (!ready()) return debug_fail(reply, "the game is still starting");
+    const char *who = debug_arg(args, "who", "");
+    CUserDataManager *user = &save()->user_data;
+    if (!strcmp(who, "monica")) {
+        user->JoinPartyMember(USER_CHARA_MONICA);
+        user->EnableCharaChange(USER_CHARA_MONICA);
+    } else if (!strcmp(who, "ridepod")) {
+        user->JoinPartyMember(USER_CHARA_ROBO);
+        user->EnableCharaChange(USER_CHARA_ROBO);
+        user->GetItemNotOver(ITEM_ID_CORE, 1);
+    } else if (!strcmp(who, "monster")) {
+        user->JoinPartyMember(USER_CHARA_MONSTER);
+        user->EnableCharaChange(USER_CHARA_MONSTER);
+        user->GetItemNotOver(ITEM_ID_BADGE_BOX, 1);
+    } else if (!strcmp(who, "townsperson")) {
+        long id = debug_arg_int(args, "id", 0);
+        if (id <= 0 || id > 0x1A) return debug_fail(reply, "id=1..26");
+        user->JoinPartyChara((int)id, PARTY_CHARA_STATUS_JOIN, 1);
+        user->SetPartyCharaStatus((int)id, PARTY_CHARA_STATUS_IN_PARTY);
+    } else return debug_fail(reply, "who=monica|ridepod|monster|townsperson [id=1..26]");
+    debug_print(reply, "{\"ok\": 1, \"who\": \"%s\", \"party_member\": %d}", who, user->party_member);
+    return 0;
+}
+
+static int command_equip(const DebugArgs *args, DebugReply *reply) {
+    if (!ready()) return debug_fail(reply, "the game is still starting");
+    long chara = debug_arg_int(args, "chara", -1);
+    long item = debug_arg_int(args, "item", -1);
+    if (chara < 0 || chara >= USER_CHARA_NUM) return debug_fail(reply, "chara=0..%d", USER_CHARA_NUM - 1);
+    if (item <= 0 || item >= ITEM_NO_MAX || !GetItemMessage((int)item)) return debug_fail(reply, "item=%ld is not an item", item);
+    CUserDataManager *user = &save()->user_data;
+    if (!user->GetNumSameItem((int)item)) user->GetItem((int)item, 1);
+    int result = user->SetChrEquip((int)chara, (int)item);
+    debug_print(reply, "{\"ok\": 1, \"chara\": %ld, \"item\": %ld, \"result\": %d}", chara, item, result);
+    return 0;
+}
+
+static int command_stats(const DebugArgs *args, DebugReply *reply) {
+    if (!ready()) return debug_fail(reply, "the game is still starting");
+    long chara = debug_arg_int(args, "chara", -1);
+    CHARA_DATA *data = chara >= 0 && chara < USER_CHARA_NUM ? save()->user_data.GetCharaDataPtr((int)chara) : NULL;
+    if (!data) return debug_fail(reply, "chara=0..%d [hp=N] [defence=N]", USER_CHARA_NUM - 1);
+    if (debug_arg(args, "hp", NULL)) {
+        data->hp.max = (float)debug_arg_number(args, "hp", data->hp.max);
+        data->hp.now = data->hp.max;
+    }
+    if (debug_arg(args, "defence", NULL)) data->defence = (int)debug_arg_int(args, "defence", data->defence);
+    debug_print(reply, "{\"chara\": %ld, \"hp\": %.0f, \"defence\": %d}", chara, data->hp.max, (int)data->defence);
+    return 0;
+}
+
+static int command_geo(const DebugArgs *args, DebugReply *reply) {
+    if (!ready()) return debug_fail(reply, "the game is still starting");
+    CSaveData *data = save();
+    if (debug_arg_int(args, "all", 0)) all_geo_parts();
+    if (debug_arg(args, "debug", NULL)) DebugInfo.georama_debug = debug_arg_int(args, "debug", 0) != 0;
+    if (debug_arg(args, "free", NULL)) DebugInfo.chara_move = (int)debug_arg_int(args, "free", 0);
+    long town = debug_arg_int(args, "town", -1);
+    if (town >= 0) {
+        CEditData *edit = data->GetEditData((int)town);
+        if (!edit) return debug_fail(reply, "town=0..%d", SAVE_EDIT_DATA_MAX - 1);
+        edit->dbgSetAllContintionFlag((int)town, debug_arg_int(args, "conditions", 1) != 0);
+    }
+    long part = debug_arg_int(args, "part", -1);
+    if (part >= 0) {
+        if (part >= PARTS_LIMIT) return debug_fail(reply, "part=0..%d", PARTS_LIMIT - 1);
+        data->SetBuildPartsNum((int)part, (int)debug_arg_int(args, "count", 30));
+    }
+    int owned = 0;
+    for (int i = 0; i < PARTS_LIMIT; ++i) owned += data->GetBuildPartsNum(i) > 0;
+    debug_print(reply, "{\"georama_debug\": %d, \"free_edit\": %d, \"flags\": {\"start\": %d, \"geostone\": %d, \"migration\": %d}, "
+                       "\"parts_owned\": %d, \"towns\": [",
+                DebugInfo.georama_debug, DebugInfo.chara_move, data->GetBitFlag(250), data->GetBitFlag(254), data->GetBitFlag(34), owned);
+    for (int i = 0; i < SAVE_EDIT_DATA_MAX; ++i) {
+        CEditData *edit = data->GetEditData(i);
+        int told = 0;
+        int met = 0;
+        for (int c = 0; c < EDIT_ANALYZE_CONDITION_MAX; ++c) {
+            told += edit->analyze.condition_open[c] != 0;
+            met += edit->analyze.condition[c] != 0;
+        }
+        debug_print(reply, "%s{\"town\": %d, \"saves\": %d, \"culture\": %d, \"parts_placed\": %d, \"houses\": %d, "
+                           "\"conditions_known\": %d, \"conditions_met\": %d}",
+                    i ? ", " : "", i, edit->save_count, edit->culture_point, edit->parts_max, edit->house_max, told, met);
+    }
+    debug_print(reply, "]");
+    if (debug_arg_int(args, "list", 0)) {
+        debug_print(reply, ", \"parts\": [");
+        for (int i = 0, shown = 0; i < PARTS_LIMIT; ++i)
+            if (data->GetBuildPartsNum(i) > 0) debug_print(reply, "%s[%d, %d]", shown++ ? ", " : "", i, data->GetBuildPartsNum(i));
+        debug_print(reply, "]");
+    }
+    debug_print(reply, "}");
     return 0;
 }
 
@@ -299,7 +574,13 @@ extern const DebugCommand debug_scenario_commands[] = {
     {"money", command_money, 0, "[amount=N] [add=N] sets or adds money"},
     {"heal", command_heal, 0, "refills the party's health and repairs weapons"},
     {"time", command_time, 0, "[hour=H] [day=D] [freeze=0|1] sets the time of day"},
-    {"progress", command_progress, 0, "[value=N] sets game_progress"},
+    {"progress", command_progress, 0, "[value=N] [list=1] sets game_progress, or lists the story points"},
+    {"preset", command_preset, 0, "name=cap1..8|db_cap1..8|game0..22|dbg1..7|geo|pb|sg0..2 or path=dbg/x.cfg [warp=0] [geo=1] [money=N] applies a disc config and warps to that point of the story"},
+    {"flag", command_flag, 0, "[on=N,N] [off=N,N] [get=N,N] sets or reads bit flags"},
+    {"party", command_party, 0, "who=monica|ridepod|monster|townsperson [id=1..26] adds a party member"},
+    {"equip", command_equip, 0, "chara=0..2 item=N equips an item, giving it first if missing"},
+    {"charstats", command_stats, 0, "chara=0..2 [hp=N] [defence=N] sets a character's health and defence"},
+    {"geo", command_geo, 0, "[all=1] [debug=0|1] [free=0|1] [town=N [conditions=0|1]] [part=N [count=30]] [list=1] georama parts, conditions and state"},
     {"names", command_names, 1, "kind=maps|items [q=text] lists map or item names"},
     {NULL, NULL, 0, NULL},
 };
@@ -331,6 +612,17 @@ static int pick_from(const char *id, Entry *list, int total, const char *filter,
     return changed;
 }
 
+static void preset_rows(const Preset *list, int total) {
+    for (int i = 0; i < total; ++i) {
+        ImGui::PushID(list[i].name);
+        if (ImGui::Button("Apply"))
+            run("preset?name=%s&warp=%d&geo=%d&money=%d", list[i].name, (int)pick_warp, (int)pick_geo, pick_preset_money);
+        ImGui::SameLine();
+        ImGui::TextWrapped("%s  %s", list[i].name, list[i].summary);
+        ImGui::PopID();
+    }
+}
+
 static void panel_status(void) {
     int loop = GetNowLoopNo();
     CSaveData *data = save();
@@ -359,7 +651,38 @@ void debug_scenario_panel(void) {
     panel_status();
     if (result[0]) ImGui::TextWrapped("%s", result);
     ImGui::Separator();
-    if (ImGui::CollapsingHeader("Town", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (ImGui::CollapsingHeader("Story presets", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::TextWrapped("Applies the developers' own config from the disc to a fresh save, then warps to the town of that chapter.");
+        ImGui::Checkbox("warp to the chapter's town", &pick_warp);
+        ImGui::Checkbox("also all georama parts", &pick_geo);
+        ImGui::InputInt("starting money (0 keeps none)", &pick_preset_money);
+        preset_rows(chapter_presets, (int)(sizeof chapter_presets / sizeof chapter_presets[0]));
+        if (ImGui::TreeNode("Other disc configs")) {
+            preset_rows(other_presets, (int)(sizeof other_presets / sizeof other_presets[0]));
+            ImGui::TreePop();
+        }
+        if (ImGui::TreeNode("Chapter towns")) {
+            for (int i = 1; i < CHAPTER_LIMIT; ++i) ImGui::Text("chapter %d  %s", i, chapter_places[i].label);
+            ImGui::TreePop();
+        }
+    }
+    if (ImGui::CollapsingHeader("Georama")) {
+        if (ImGui::Button("All parts")) run("geo?all=1");
+        ImGui::SameLine();
+        if (ImGui::Button("Show state")) run("geo?list=1");
+        ImGui::SameLine();
+        if (ImGui::Button("Select edits anywhere")) run("geo?free=1");
+        pick_conditions_lifted = DebugInfo.georama_debug != 0;
+        if (ImGui::Checkbox("lift placement conditions", &pick_conditions_lifted)) run("geo?debug=%d", (int)pick_conditions_lifted);
+        ImGui::InputInt("town (0 Sindain, 1 Balance Valley, 2 Veniccio, 3 Heim Rada, 4 Moon Flower Palace)", &pick_town);
+        if (ImGui::Button("Open all conditions")) run("geo?town=%d&conditions=1", pick_town);
+        ImGui::SameLine();
+        if (ImGui::Button("Close all conditions")) run("geo?town=%d&conditions=0", pick_town);
+        ImGui::InputInt("part", &pick_part);
+        ImGui::InputInt("count##part", &pick_part_count);
+        if (ImGui::Button("Set part count")) run("geo?part=%d&count=%d", pick_part, pick_part_count);
+    }
+    if (ImGui::CollapsingHeader("Town")) {
         ImGui::InputText("filter##map", map_filter, sizeof map_filter);
         pick_from("maps", maps, map_total, map_filter, &pick_map);
         ImGui::InputInt("event##town", &pick_event);

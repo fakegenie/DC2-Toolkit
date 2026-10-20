@@ -1,10 +1,11 @@
 //! build, mod and play: compiling a tree with mods layered over it into a new disc image (build),
-//! making and checking mods (one run_mod_<name> for each mod command; check), and booting an image
-//! in PCSX2 (pcsx2).
+//! making and checking mods (one run_mod_<name> for each mod command; check), booting an image in
+//! PCSX2 (pcsx2), and rebuilding mods into the native port's override folder as they change (watch).
 
 mod build;
 mod check;
 mod pcsx2;
+mod watch;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -193,6 +194,9 @@ pub enum ModCommand {
         #[command(flatten)]
         common: Common,
     },
+    /// Build mods' changed game files into the native port's override folder, rebuild them
+    /// whenever a file of the mods changes, and make the running debug build reload them.
+    Watch(watch::WatchArgs),
 }
 
 pub fn run_mod(command: &ModCommand) -> Result<ExitCode> {
@@ -223,6 +227,7 @@ pub fn run_mod(command: &ModCommand) -> Result<ExitCode> {
             check::run_mod_check(source, names, mods, disc.as_deref(), *native, common)
         }
         ModCommand::Make { iso, name, extracted, mods, common } => run_mod_make(iso, name, extracted, mods, common),
+        ModCommand::Watch(args) => watch::run_watch(args),
     }
 }
 

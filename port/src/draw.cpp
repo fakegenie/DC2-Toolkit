@@ -4,6 +4,7 @@
 #include "mglib.hpp"
 #include "port_graphics.h"
 #include "sce/libgraph.h"
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <unordered_map>
@@ -16,6 +17,8 @@ enum {
     GS_TEXA = 0x3b, GS_BITBLTBUF = 0x50, GS_TRXPOS = 0x51, GS_TRXREG = 0x52, GS_TRXDIR = 0x53, GS_FOGCOL = 0x3d, GS_SCISSOR = 0x40, GS_ALPHA = 0x42, GS_TEST = 0x47, GS_FRAME = 0x4c,
     GS_ZBUF = 0x4e
 };
+static const float SAMPLE_OFFSET = 0.46875f;
+
 enum { PRIM_POINT, PRIM_LINE, PRIM_LINE_STRIP, PRIM_TRIANGLE, PRIM_TRIANGLE_STRIP, PRIM_TRIANGLE_FAN, PRIM_SPRITE };
 
 struct CachedTexture {
@@ -271,7 +274,7 @@ static int target_copy(int target, int width, int height) {
         if (!copies[i].render || (copies[i].width == width && copies[i].height == height)) copy = &copies[i];
     if (!copy) return target;
     if (!copy->render) {
-        copy->render = render_texture(width, height);
+        copy->render = render_scaled_texture(width, height);
         copy->width = width;
         copy->height = height;
     }
@@ -438,6 +441,30 @@ static float depth_scale() {
     }
 }
 
+static int sample_range(float p0, float p1, float t0, float t1, float *low, float *high) {
+    float start = p0 < p1 ? p0 : p1, end = p0 < p1 ? p1 : p0;
+    float first = ceilf(start - 0.5f) + 0.5f, last = ceilf(end - 0.5f) - 0.5f;
+    if (last < first) return 0;
+    float at_first = t0 + (first - p0) * (t1 - t0) / (p1 - p0);
+    float at_last = t0 + (last - p0) * (t1 - t0) / (p1 - p0);
+    *low = at_first < at_last ? at_first : at_last;
+    *high = at_first < at_last ? at_last : at_first;
+    return 1;
+}
+
+static void align_sprite(RenderVertex *a, RenderVertex *b, int textured) {
+    float limits[4];
+    int clamped = textured && sample_range(a->x, b->x, a->u, b->u, &limits[0], &limits[2]) &&
+                  sample_range(a->y, b->y, a->v, b->v, &limits[1], &limits[3]);
+    float shift_u = b->x != a->x ? SAMPLE_OFFSET * (b->u - a->u) / (b->x - a->x) : 0.0f;
+    float shift_v = b->y != a->y ? SAMPLE_OFFSET * (b->v - a->v) / (b->y - a->y) : 0.0f;
+    a->x -= SAMPLE_OFFSET, b->x -= SAMPLE_OFFSET, a->y -= SAMPLE_OFFSET, b->y -= SAMPLE_OFFSET;
+    a->u -= shift_u, b->u -= shift_u, a->v -= shift_v, b->v -= shift_v;
+    if (!clamped) return;
+    memcpy(a->limits, limits, sizeof limits);
+    memcpy(b->limits, limits, sizeof limits);
+}
+
 static void kick(u_int x, u_int y, u_int z, int fog, int draw) {
     RenderVertex *vertex = &queue[queued < 3 ? queued : 2];
     if (queued == 3) {
@@ -446,8 +473,8 @@ static void kick(u_int x, u_int y, u_int z, int fog, int draw) {
         queued = 2;
         vertex = &queue[2];
     }
-    vertex->x = (float)((int)(x & 0xffff) - (int)field(gs.xyoffset, 0, 16)) / 16.0f + 0.46875f;
-    vertex->y = (float)((int)(y & 0xffff) - (int)field(gs.xyoffset, 32, 16)) / 16.0f + 0.46875f;
+    vertex->x = (float)((int)(x & 0xffff) - (int)field(gs.xyoffset, 0, 16)) / 16.0f + SAMPLE_OFFSET;
+    vertex->y = (float)((int)(y & 0xffff) - (int)field(gs.xyoffset, 32, 16)) / 16.0f + SAMPLE_OFFSET;
     float depth = (float)z * depth_scale();
     vertex->z = depth > 1.0f ? 1.0f : depth;
     vertex->r = (unsigned char)field(gs.rgbaq, 0, 8);
@@ -493,6 +520,9 @@ static void kick(u_int x, u_int y, u_int z, int fog, int draw) {
         int topology = type == PRIM_POINT ? RENDER_POINTS : type <= PRIM_LINE_STRIP ? RENDER_LINES : RENDER_TRIANGLES;
         if (type == PRIM_SPRITE) {
             RenderVertex a = out[0], b = out[1];
+            RenderSlot target;
+            if (render_slot(render_bound(), &target) && (target.scale > 1 || target.samples > 1))
+                align_sprite(&a, &b, state.texture != 0);
             RenderVertex corner_b = b, corner_c = b;
             corner_b.x = b.x, corner_b.y = a.y, corner_b.u = b.u, corner_b.v = a.v;
             corner_c.x = a.x, corner_c.y = b.y, corner_c.u = a.u, corner_c.v = b.v;

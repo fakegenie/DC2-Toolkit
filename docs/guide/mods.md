@@ -201,9 +201,36 @@ Set `"start_at"` in `mod.json` (or pass `--start-at` to `dc2tk build`) to make *
 
 `dc2tk build` prints how the new game gets there, and warns when the game never enters the map that way (so the warp may not work). `dc2tk map extracted/scripts s51` lists a map's programs. Pass `--no-start-at` to build a mod for a normal New Game.
 
+## Hot reloading in the native port
+
+The native port's debug build (`python3 -I tools/port.py --movies --debug`) can pick up a mod's
+changes while the game runs. Start the game, then watch the mod:
+
+```sh
+dc2tk mod watch extracted/scripts dc2.iso my-mod
+```
+
+`mod watch` builds the mod as `dc2tk build` would, but instead of an image it writes the game
+files the mod changes into `build/port/overrides/` (by their path on the disc, for example
+`map/s/s42/s42_1.stb`). Whenever a file in the mod's folder changes it rebuilds, writes only the
+files that changed, removes the ones the mod no longer changes, and tells the game to reload
+through its API (`http://127.0.0.1:7777/reload`, or `$DC2TK_DEBUG_PORT`). Pass `--once` to build
+and reload once, and `--overrides DIR` (or set `DC2TK_OVERRIDES` for both) to use another folder.
+
+The port reads a file from the override folder instead of the disc whenever one is there, at any
+size. On a reload it rescans the folder and re-enters the current town map with the player where
+they stood, so scripts, maps, models and textures load again; in a dungeon it re-enters the
+floor. `reload?event=N` (or `rerun=1`, which re-runs the event in progress) starts an event
+instead. The debug window's **Reload** button does the same; **auto** lights up while
+`mod watch` is running.
+
+Engine files and executable table edits are not reloaded: rebuild the port for those. The
+override folder stays in use after `mod watch` stops, so delete `build/port/overrides/` to play
+the disc as it is.
+
 ## The mod commands
 
-See [CLI Reference: Creating and managing mods](commands.md#creating-and-managing-mods) for all `dc2tk mod` subcommands (`make`, `asset`, `override`, `new`, `save`, `check`, `test`, `list`, `slim`, `apply`, `header`).
+See [CLI Reference: Creating and managing mods](commands.md#creating-and-managing-mods) for all `dc2tk mod` subcommands (`make`, `asset`, `override`, `new`, `save`, `check`, `test`, `list`, `slim`, `apply`, `header`, `watch`).
 
 ## Tests
 

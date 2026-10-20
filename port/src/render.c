@@ -2,6 +2,7 @@
 #include "port_stats.h"
 #include "shaders.h"
 #include <SDL3/SDL.h>
+#include <math.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,8 +10,10 @@
 
 enum { TEXTURE_LIMIT = 4096, PIPELINE_LIMIT = 1024, COMMAND_LIMIT = 65536, MODEL_LIMIT = 16384, BONE_LIMIT = 2048,
        VERTEX_BYTES = 64 * 1024 * 1024 };
-enum { KEY_MESH = 1 << 22, KEY_CULL_SHIFT = 23, KEY_WIRE = 1 << 25, RECORD_LIMIT = 32768 };
-enum { KEY_KEEP = (3 << 15) | KEY_MESH | (3 << 23) };
+enum { KEY_MESH = 1 << 22, KEY_CULL_SHIFT = 23, KEY_WIRE = 1 << 25, KEY_SAMPLES_SHIFT = 26, KEY_MIRROR = 1 << 28,
+       RECORD_LIMIT = 32768 };
+enum { KEY_KEEP = (3 << 15) | KEY_MESH | (3 << 23) | (3 << KEY_SAMPLES_SHIFT) };
+enum { SCALE_LIMIT = 4, SAMPLE_LIMIT = 8, WIDEN_LIMIT = 1024 };
 enum { WINDOW_WIDTH = 960, WINDOW_HEIGHT = 720, TARGET_WIDTH = 640, TARGET_HEIGHT = 512, DEPTH_TILE = 64 };
 
 enum {
@@ -20,10 +23,15 @@ enum {
 
 typedef struct {
     SDL_GPUTexture *color;
+    SDL_GPUTexture *multi;
     int width;
     int height;
+    int scale;
+    int samples;
     uint32_t base;
     int target;
+    int scaled;
+    int stale;
     int used;
     int drawn;
 } Texture;
@@ -67,7 +75,15 @@ static SDL_GPUBuffer *vertex_buffer;
 static SDL_GPUTransferBuffer *vertex_transfer;
 static SDL_GPUCommandBuffer *commands;
 static SDL_GPUTextureFormat depth_format;
-static struct { SDL_GPUTexture *texture; int width; int height; int cleared; } depths[8];
+static struct {
+    SDL_GPUTexture *texture;
+    SDL_GPUTexture *color;
+    SDL_GPUTexture *resolved;
+    int width;
+    int height;
+    int samples;
+    int cleared;
+} depths[8];
 static Texture textures[TEXTURE_LIMIT];
 static Pipeline pipelines[PIPELINE_LIMIT];
 static int pipeline_count;
@@ -90,6 +106,11 @@ static int record_count;
 static int record_dropped;
 static int command_base;
 static int pass_base;
+static int quality_scale = 1;
+static int quality_samples = 1;
+static int wanted_scale = 1;
+static int wanted_samples = 1;
+static int restore_slot;
 
 RenderToggles render_toggles;
 int render_source;
@@ -132,7 +153,24 @@ static SDL_GPUShader *create_shader(const unsigned char *spirv, size_t spirv_siz
     return shader;
 }
 
-static SDL_GPUTexture *create_texture(int width, int height, SDL_GPUTextureFormat format, SDL_GPUTextureUsageFlags usage) {
+static SDL_GPUSampleCount sample_count(int samples) {
+    return samples >= 8 ? SDL_GPU_SAMPLECOUNT_8
+           : samples >= 4 ? SDL_GPU_SAMPLECOUNT_4
+           : samples >= 2 ? SDL_GPU_SAMPLECOUNT_2
+                          : SDL_GPU_SAMPLECOUNT_1;
+}
+
+static int supported_samples(int samples) {
+    while (samples > 1 &&
+           !(SDL_GPUTextureSupportsSampleCount(device, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, sample_count(samples)) &&
+             SDL_GPUTextureSupportsSampleCount(device, SDL_GPU_TEXTUREFORMAT_R32_FLOAT, sample_count(samples)) &&
+             SDL_GPUTextureSupportsSampleCount(device, depth_format, sample_count(samples))))
+        samples /= 2;
+    return samples;
+}
+
+static SDL_GPUTexture *create_texture(int width, int height, SDL_GPUTextureFormat format, SDL_GPUTextureUsageFlags usage,
+                                      int samples) {
     SDL_GPUTextureCreateInfo info = {0};
     info.type = SDL_GPU_TEXTURETYPE_2D;
     info.format = format;
@@ -141,6 +179,7 @@ static SDL_GPUTexture *create_texture(int width, int height, SDL_GPUTextureForma
     info.height = (Uint32)height;
     info.layer_count_or_depth = 1;
     info.num_levels = 1;
+    info.sample_count = sample_count(samples);
     SDL_GPUTexture *texture = SDL_CreateGPUTexture(device, &info);
     if (!texture) render_error("texture");
     return texture;
@@ -169,6 +208,8 @@ int render_init(void) {
                                                 SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET)
                        ? SDL_GPU_TEXTUREFORMAT_D24_UNORM_S8_UINT
                        : SDL_GPU_TEXTUREFORMAT_D32_FLOAT_S8_UINT;
+    quality_scale = wanted_scale;
+    quality_samples = wanted_samples = supported_samples(wanted_samples);
     vertex_shader = create_shader(draw_vert_spirv, sizeof draw_vert_spirv, draw_vert_msl, sizeof draw_vert_msl,
                                   SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
     mesh_shader = create_shader(mesh_vert_spirv, sizeof mesh_vert_spirv, mesh_vert_msl, sizeof mesh_vert_msl,
@@ -289,11 +330,12 @@ static SDL_GPUGraphicsPipeline *pipeline_for(uint32_t key) {
     int mesh = (key & KEY_MESH) != 0;
     SDL_GPUVertexBufferDescription buffer = {0, mesh ? sizeof(MeshVertex) : sizeof(RenderVertex),
                                              SDL_GPU_VERTEXINPUTRATE_VERTEX, 0};
-    SDL_GPUVertexAttribute flat[4] = {
+    SDL_GPUVertexAttribute flat[5] = {
         {0, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, offsetof(RenderVertex, x)},
         {1, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, offsetof(RenderVertex, u)},
         {2, 0, SDL_GPU_VERTEXELEMENTFORMAT_UBYTE4_NORM, offsetof(RenderVertex, r)},
         {3, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT, offsetof(RenderVertex, fog)},
+        {4, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, offsetof(RenderVertex, limits)},
     };
     SDL_GPUVertexAttribute model[6] = {
         {0, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, offsetof(MeshVertex, position)},
@@ -303,24 +345,30 @@ static SDL_GPUGraphicsPipeline *pipeline_for(uint32_t key) {
         {4, 0, SDL_GPU_VERTEXELEMENTFORMAT_UBYTE4_NORM, offsetof(MeshVertex, bone)},
         {5, 0, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, offsetof(MeshVertex, weight)},
     };
-    SDL_GPUColorTargetDescription target = {0};
-    target.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
-    target.blend_state.enable_blend = true;
-    target.blend_state.src_color_blendfactor = (SDL_GPUBlendFactor)(key & 15);
-    target.blend_state.dst_color_blendfactor = (SDL_GPUBlendFactor)((key >> 4) & 15);
-    target.blend_state.color_blend_op = (SDL_GPUBlendOp)((key >> 8) & 7);
-    target.blend_state.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
-    target.blend_state.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ZERO;
-    target.blend_state.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
-    target.blend_state.enable_color_write_mask = true;
-    target.blend_state.color_write_mask = (SDL_GPUColorComponentFlags)((key >> 11) & 15);
+    SDL_GPUColorTargetDescription targets[2];
+    memset(targets, 0, sizeof targets);
+    SDL_GPUColorTargetDescription *target = &targets[0];
+    target->format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+    target->blend_state.enable_blend = true;
+    target->blend_state.src_color_blendfactor = (SDL_GPUBlendFactor)(key & 15);
+    target->blend_state.dst_color_blendfactor = (SDL_GPUBlendFactor)((key >> 4) & 15);
+    target->blend_state.color_blend_op = (SDL_GPUBlendOp)((key >> 8) & 7);
+    target->blend_state.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+    target->blend_state.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ZERO;
+    target->blend_state.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
+    target->blend_state.enable_color_write_mask = true;
+    target->blend_state.color_write_mask = (SDL_GPUColorComponentFlags)((key >> 11) & 15);
+    SDL_GPUSampleCount samples = (SDL_GPUSampleCount)((key >> KEY_SAMPLES_SHIFT) & 3);
+    targets[1].format = SDL_GPU_TEXTUREFORMAT_R32_FLOAT;
+    targets[1].blend_state.enable_color_write_mask = true;
+    targets[1].blend_state.color_write_mask = (key >> 21) & 1 ? SDL_GPU_COLORCOMPONENT_R : 0;
     SDL_GPUGraphicsPipelineCreateInfo info = {0};
     info.vertex_shader = mesh ? mesh_shader : vertex_shader;
     info.fragment_shader = fragment_shader;
     info.vertex_input_state.vertex_buffer_descriptions = &buffer;
     info.vertex_input_state.num_vertex_buffers = 1;
     info.vertex_input_state.vertex_attributes = mesh ? model : flat;
-    info.vertex_input_state.num_vertex_attributes = mesh ? 6 : 4;
+    info.vertex_input_state.num_vertex_attributes = mesh ? 6 : 5;
     static const SDL_GPUPrimitiveType topologies[3] = {
         SDL_GPU_PRIMITIVETYPE_POINTLIST, SDL_GPU_PRIMITIVETYPE_LINELIST, SDL_GPU_PRIMITIVETYPE_TRIANGLELIST};
     info.primitive_type = topologies[(key >> 15) & 3];
@@ -331,8 +379,9 @@ static SDL_GPUGraphicsPipeline *pipeline_for(uint32_t key) {
     info.depth_stencil_state.enable_depth_test = true;
     info.depth_stencil_state.compare_op = (SDL_GPUCompareOp)((key >> 17) & 15);
     info.depth_stencil_state.enable_depth_write = (key >> 21) & 1;
-    info.target_info.color_target_descriptions = &target;
-    info.target_info.num_color_targets = 1;
+    info.multisample_state.sample_count = samples;
+    info.target_info.color_target_descriptions = targets;
+    info.target_info.num_color_targets = (key & KEY_MIRROR) ? 2 : 1;
     info.target_info.depth_stencil_format = depth_format;
     info.target_info.has_depth_stencil_target = true;
     SDL_GPUGraphicsPipeline *pipeline = SDL_CreateGPUGraphicsPipeline(device, &info);
@@ -342,6 +391,46 @@ static SDL_GPUGraphicsPipeline *pipeline_for(uint32_t key) {
     port_stats.pipelines = (uint32_t)pipeline_count + 1;
     pipeline_count++;
     return pipeline;
+}
+
+static int depth_for(int slot) {
+    Texture *target = &textures[slot];
+    for (int i = 0; i < 8; ++i)
+        if (depths[i].texture && depths[i].width == target->width * target->scale &&
+            depths[i].height == target->height * target->scale && depths[i].samples == target->samples)
+            return i;
+    return -1;
+}
+
+static void create_depth(int index, int width, int height, int samples) {
+    SDL_GPUTextureUsageFlags usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
+    if (samples == 1) usage |= SDL_GPU_TEXTUREUSAGE_SAMPLER;
+    depths[index].texture = create_texture(width, height, depth_format, usage, samples);
+    if (samples > 1) {
+        depths[index].color = create_texture(width, height, SDL_GPU_TEXTUREFORMAT_R32_FLOAT,
+                                             SDL_GPU_TEXTUREUSAGE_COLOR_TARGET, samples);
+        depths[index].resolved = create_texture(width, height, SDL_GPU_TEXTUREFORMAT_R32_FLOAT,
+                                                SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER, 1);
+    }
+    depths[index].width = width;
+    depths[index].height = height;
+    depths[index].samples = samples;
+    depths[index].cleared = 0;
+}
+
+static void release_depths(void) {
+    for (int i = 0; i < 8; ++i) {
+        if (depths[i].texture) SDL_ReleaseGPUTexture(device, depths[i].texture);
+        if (depths[i].color) SDL_ReleaseGPUTexture(device, depths[i].color);
+        if (depths[i].resolved) SDL_ReleaseGPUTexture(device, depths[i].resolved);
+    }
+    memset(depths, 0, sizeof depths);
+}
+
+static int writes_depth(void) {
+    for (int i = 0; i < pending_count; ++i)
+        if ((pending[i].key >> 21) & 1) return 1;
+    return 0;
 }
 
 static void flush(void) {
@@ -361,22 +450,22 @@ static void flush(void) {
     SDL_EndGPUCopyPass(copy);
     vertex_cycle = 0;
     Texture *target = &textures[bound];
-    int shared = 0;
-    while (shared < 8 && depths[shared].texture &&
-           (depths[shared].width != target->width || depths[shared].height != target->height))
-        shared++;
-    if (shared == 8) render_error("depth buffers");
-    if (!depths[shared].texture) {
-        depths[shared].texture = create_texture(target->width, target->height, depth_format,
-                                                SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER);
-        depths[shared].width = target->width;
-        depths[shared].height = target->height;
+    int shared = depth_for(bound);
+    if (shared < 0) {
+        shared = 0;
+        while (shared < 8 && depths[shared].texture) shared++;
+        if (shared == 8) render_error("depth buffers");
+        create_depth(shared, target->width * target->scale, target->height * target->scale, target->samples);
     }
-    SDL_GPUColorTargetInfo color = {0};
-    color.texture = target->color;
-    color.load_op = target->drawn ? SDL_GPU_LOADOP_LOAD : SDL_GPU_LOADOP_CLEAR;
-    color.clear_color.a = 1.0f;
-    color.store_op = SDL_GPU_STOREOP_STORE;
+    int multi = target->samples > 1;
+    int mirror = multi && (writes_depth() || !depths[shared].cleared);
+    SDL_GPUColorTargetInfo color[2];
+    memset(color, 0, sizeof color);
+    color[0].texture = multi ? target->multi : target->color;
+    color[0].load_op = target->drawn ? SDL_GPU_LOADOP_LOAD : SDL_GPU_LOADOP_CLEAR;
+    color[0].clear_color.a = 1.0f;
+    color[0].store_op = multi ? SDL_GPU_STOREOP_RESOLVE_AND_STORE : SDL_GPU_STOREOP_STORE;
+    color[0].resolve_texture = target->color;
     SDL_GPUDepthStencilTargetInfo depth = {0};
     depth.texture = depths[shared].texture;
     depth.load_op = depths[shared].cleared ? SDL_GPU_LOADOP_LOAD : SDL_GPU_LOADOP_CLEAR;
@@ -384,8 +473,12 @@ static void flush(void) {
     depth.store_op = SDL_GPU_STOREOP_STORE;
     depth.stencil_load_op = depth.load_op;
     depth.stencil_store_op = SDL_GPU_STOREOP_STORE;
+    color[1].texture = depths[shared].color;
+    color[1].load_op = depth.load_op;
+    color[1].store_op = SDL_GPU_STOREOP_RESOLVE_AND_STORE;
+    color[1].resolve_texture = depths[shared].resolved;
     target->drawn = 1;
-    SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(buffer, &color, 1, &depth);
+    SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(buffer, color, mirror ? 2 : 1, &depth);
     pass_serial++;
     port_stats.render_passes++;
     port_stats.gpu_commands += (uint32_t)pending_count;
@@ -404,7 +497,7 @@ static void flush(void) {
             scale_pushed = 1;
         }
         if (i == 0 || command->key != pending[i - 1].key) port_stats.pipeline_changes++;
-        SDL_BindGPUGraphicsPipeline(pass, pipeline_for(command->key));
+        SDL_BindGPUGraphicsPipeline(pass, pipeline_for(command->key | (mirror ? KEY_MIRROR : 0)));
         SDL_SetGPUScissor(pass, &command->scissor);
         SDL_FColor constant = {command->blend_constant, command->blend_constant, command->blend_constant,
                                command->blend_constant};
@@ -429,6 +522,30 @@ static void flush_if_used(int texture) {
         }
 }
 
+static void create_storage(Texture *texture) {
+    int width = texture->width * texture->scale, height = texture->height * texture->scale;
+    texture->color = create_texture(width, height, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+                                    SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET, 1);
+    texture->multi = texture->samples > 1 ? create_texture(width, height, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+                                                           SDL_GPU_TEXTUREUSAGE_COLOR_TARGET, texture->samples)
+                                          : NULL;
+}
+
+static int new_texture(int width, int height, int scale, int samples) {
+    int slot = free_slot();
+    Texture *texture = &textures[slot];
+    memset(texture, 0, sizeof *texture);
+    texture->width = width;
+    texture->height = height;
+    texture->scale = scale;
+    texture->samples = samples;
+    texture->used = 1;
+    texture->drawn = 1;
+    create_storage(texture);
+    port_stats.textures_live++;
+    return slot;
+}
+
 int render_target(uint32_t base, int width, int height) {
     if (width < TARGET_WIDTH) width = TARGET_WIDTH;
     if (height < TARGET_HEIGHT) height = TARGET_HEIGHT;
@@ -440,33 +557,21 @@ int render_target(uint32_t base, int width, int height) {
         render_release(i);
         break;
     }
-    int slot = free_slot();
+    int slot = new_texture(width, height, quality_scale, quality_samples);
     Texture *texture = &textures[slot];
-    texture->color = create_texture(width, height, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
-                                    SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET);
-    texture->width = width;
-    texture->height = height;
     texture->base = base;
     texture->target = 1;
-    texture->used = 1;
+    texture->scaled = 1;
     texture->drawn = 0;
     port_stats.target_creates++;
-    port_stats.textures_live++;
     return slot;
 }
 
-int render_texture(int width, int height) {
-    int slot = free_slot();
-    Texture *texture = &textures[slot];
-    texture->color = create_texture(width, height, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
-                                    SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET);
-    texture->width = width;
-    texture->height = height;
-    texture->base = 0;
-    texture->target = 0;
-    texture->used = 1;
-    texture->drawn = 1;
-    port_stats.textures_live++;
+int render_texture(int width, int height) { return new_texture(width, height, 1, 1); }
+
+int render_scaled_texture(int width, int height) {
+    int slot = new_texture(width, height, quality_scale, 1);
+    textures[slot].scaled = 1;
     return slot;
 }
 
@@ -478,11 +583,14 @@ void render_release(int slot) {
         bound = 0;
     }
     SDL_ReleaseGPUTexture(device, textures[slot].color);
+    if (textures[slot].multi) SDL_ReleaseGPUTexture(device, textures[slot].multi);
     memset(&textures[slot], 0, sizeof textures[slot]);
     port_stats.textures_live--;
 }
 
 int render_width(int slot) { return textures[slot].width; }
+
+int render_scale(int slot) { return textures[slot].scale; }
 
 struct SDL_GPUDevice *render_device(void) { return device; }
 
@@ -494,10 +602,37 @@ struct SDL_GPUTexture *render_gpu_texture(int slot) {
 
 int render_height(int slot) { return textures[slot].height; }
 
-void render_upload(int slot, int x, int y, int width, int height, const uint32_t *pixels) {
-    if (width <= 0 || height <= 0) return;
-    flush_if_used(slot);
-    if (bound == slot) flush();
+static void blit(SDL_GPUTexture *source, int x, int y, int width, int height, SDL_GPUTexture *destination, int to_x,
+                 int to_y, int to_width, int to_height, SDL_GPUFilter filter) {
+    SDL_GPUBlitInfo info = {0};
+    info.source.texture = source;
+    info.source.x = (Uint32)x;
+    info.source.y = (Uint32)y;
+    info.source.w = (Uint32)width;
+    info.source.h = (Uint32)height;
+    info.destination.texture = destination;
+    info.destination.x = (Uint32)to_x;
+    info.destination.y = (Uint32)to_y;
+    info.destination.w = (Uint32)to_width;
+    info.destination.h = (Uint32)to_height;
+    info.load_op = SDL_GPU_LOADOP_LOAD;
+    info.filter = filter;
+    SDL_BlitGPUTexture(command_buffer(), &info);
+}
+
+static void blit_slots(int source, int x, int y, int width, int height, int destination, int to_x, int to_y,
+                       SDL_GPUFilter filter) {
+    int from = textures[source].scale, to = textures[destination].scale;
+    blit(textures[source].color, x * from, y * from, width * from, height * from, textures[destination].color, to_x * to,
+         to_y * to, width * to, height * to, filter);
+}
+
+static void changed(int slot) {
+    textures[slot].drawn = 1;
+    textures[slot].stale = textures[slot].samples > 1;
+}
+
+static void upload(SDL_GPUTexture *texture, int x, int y, int width, int height, const uint32_t *pixels) {
     uint32_t size = (uint32_t)(width * height * 4);
     port_stats.texture_uploads++;
     port_stats.upload_bytes += size;
@@ -508,22 +643,33 @@ void render_upload(int slot, int x, int y, int width, int height, const uint32_t
     SDL_UnmapGPUTransferBuffer(device, transfer);
     SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(command_buffer());
     SDL_GPUTextureTransferInfo from = {transfer, 0, (Uint32)width, (Uint32)height};
-    SDL_GPUTextureRegion to = {textures[slot].color, 0, 0, (Uint32)x, (Uint32)y, 0, (Uint32)width, (Uint32)height, 1};
+    SDL_GPUTextureRegion to = {texture, 0, 0, (Uint32)x, (Uint32)y, 0, (Uint32)width, (Uint32)height, 1};
     SDL_UploadToGPUTexture(copy, &from, &to, false);
     SDL_EndGPUCopyPass(copy);
     SDL_ReleaseGPUTransferBuffer(device, transfer);
-    textures[slot].drawn = 1;
 }
 
-void render_download(int slot, int x, int y, int width, int height, uint32_t *pixels) {
+void render_upload(int slot, int x, int y, int width, int height, const uint32_t *pixels) {
     if (width <= 0 || height <= 0) return;
-    flush();
+    flush_if_used(slot);
+    if (bound == slot) flush();
+    if (textures[slot].scale == 1) upload(textures[slot].color, x, y, width, height, pixels);
+    else {
+        int temporary = render_texture(width, height);
+        upload(textures[temporary].color, 0, 0, width, height, pixels);
+        blit_slots(temporary, 0, 0, width, height, slot, x, y, SDL_GPU_FILTER_NEAREST);
+        render_release(temporary);
+    }
+    changed(slot);
+}
+
+static void download(SDL_GPUTexture *texture, int x, int y, int width, int height, uint32_t *pixels) {
     uint32_t size = (uint32_t)(width * height * 4);
     port_stats.downloads++;
     SDL_GPUTransferBufferCreateInfo info = {SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD, size, 0};
     SDL_GPUTransferBuffer *transfer = SDL_CreateGPUTransferBuffer(device, &info);
     SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(command_buffer());
-    SDL_GPUTextureRegion from = {textures[slot].color, 0, 0, (Uint32)x, (Uint32)y, 0, (Uint32)width, (Uint32)height, 1};
+    SDL_GPUTextureRegion from = {texture, 0, 0, (Uint32)x, (Uint32)y, 0, (Uint32)width, (Uint32)height, 1};
     SDL_GPUTextureTransferInfo to = {transfer, 0, (Uint32)width, (Uint32)height};
     SDL_DownloadFromGPUTexture(copy, &from, &to);
     SDL_EndGPUCopyPass(copy);
@@ -539,35 +685,61 @@ void render_download(int slot, int x, int y, int width, int height, uint32_t *pi
     SDL_ReleaseGPUTransferBuffer(device, transfer);
 }
 
+void render_download(int slot, int x, int y, int width, int height, uint32_t *pixels) {
+    if (width <= 0 || height <= 0) return;
+    flush();
+    if (textures[slot].scale == 1) {
+        download(textures[slot].color, x, y, width, height, pixels);
+        return;
+    }
+    int temporary = render_texture(width, height);
+    blit_slots(slot, x, y, width, height, temporary, 0, 0, SDL_GPU_FILTER_LINEAR);
+    download(textures[temporary].color, 0, 0, width, height, pixels);
+    render_release(temporary);
+}
+
+void render_download_full(int slot, int width, int height, uint32_t *pixels) {
+    if (width <= 0 || height <= 0) return;
+    flush();
+    int scale = textures[slot].scale;
+    download(textures[slot].color, 0, 0, width * scale, height * scale, pixels);
+}
+
 void render_copy(int source, int source_x, int source_y, int destination, int destination_x, int destination_y,
                  int width, int height) {
     if (width <= 0 || height <= 0) return;
     if (bound == source || bound == destination) flush();
     flush_if_used(destination);
-    SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(command_buffer());
-    SDL_GPUTextureLocation from = {textures[source].color, 0, 0, (Uint32)source_x, (Uint32)source_y, 0};
-    SDL_GPUTextureLocation to = {textures[destination].color, 0, 0, (Uint32)destination_x, (Uint32)destination_y, 0};
-    SDL_CopyGPUTextureToTexture(copy, &from, &to, (Uint32)width, (Uint32)height, 1, false);
-    SDL_EndGPUCopyPass(copy);
-    textures[destination].drawn = 1;
+    int scale = textures[source].scale;
+    if (scale == textures[destination].scale) {
+        SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(command_buffer());
+        SDL_GPUTextureLocation from = {textures[source].color, 0, 0, (Uint32)(source_x * scale),
+                                       (Uint32)(source_y * scale), 0};
+        SDL_GPUTextureLocation to = {textures[destination].color, 0, 0, (Uint32)(destination_x * scale),
+                                     (Uint32)(destination_y * scale), 0};
+        SDL_CopyGPUTextureToTexture(copy, &from, &to, (Uint32)(width * scale), (Uint32)(height * scale), 1, false);
+        SDL_EndGPUCopyPass(copy);
+    } else {
+        blit_slots(source, source_x, source_y, width, height, destination, destination_x, destination_y,
+                   SDL_GPU_FILTER_NEAREST);
+    }
+    changed(destination);
 }
 
 void render_download_depth(int target, int x, int y, int width, int height, uint32_t *pixels) {
     if (width <= 0 || height <= 0) return;
     memset(pixels, 0, (size_t)width * (size_t)height * sizeof *pixels);
-    int found = -1;
-    for (int i = 0; i < 8 && target; ++i)
-        if (depths[i].texture && depths[i].width == textures[target].width &&
-            depths[i].height == textures[target].height)
-            found = i;
+    int found = target ? depth_for(target) : -1;
     if (found < 0) return;
     flush();
     int previous = bound;
     int source = free_slot();
     memset(&textures[source], 0, sizeof textures[source]);
-    textures[source].color = depths[found].texture;
-    textures[source].width = depths[found].width;
-    textures[source].height = depths[found].height;
+    textures[source].color = depths[found].samples > 1 ? depths[found].resolved : depths[found].texture;
+    textures[source].width = textures[target].width;
+    textures[source].height = textures[target].height;
+    textures[source].scale = textures[target].scale;
+    textures[source].samples = 1;
     textures[source].used = 1;
     textures[source].drawn = 1;
     int tile = render_texture(DEPTH_TILE, DEPTH_TILE);
@@ -576,10 +748,10 @@ void render_download_depth(int target, int x, int y, int width, int height, uint
         for (int tile_x = 0; tile_x < width; tile_x += DEPTH_TILE) {
             int w = width - tile_x < DEPTH_TILE ? width - tile_x : DEPTH_TILE;
             int h = height - tile_y < DEPTH_TILE ? height - tile_y : DEPTH_TILE;
-            float u0 = (float)(x + tile_x) / (float)depths[found].width;
-            float u1 = (float)(x + tile_x + w) / (float)depths[found].width;
-            float v0 = (float)(y + tile_y) / (float)depths[found].height;
-            float v1 = (float)(y + tile_y + h) / (float)depths[found].height;
+            float u0 = (float)(x + tile_x) / (float)textures[source].width;
+            float u1 = (float)(x + tile_x + w) / (float)textures[source].width;
+            float v0 = (float)(y + tile_y) / (float)textures[source].height;
+            float v1 = (float)(y + tile_y + h) / (float)textures[source].height;
             RenderVertex a = {0, 0, 0, u0, v0}, b = {(float)w, 0, 0, u1, v0};
             RenderVertex c = {0, (float)h, 0, u0, v1}, d = {(float)w, (float)h, 0, u1, v1};
             RenderVertex quad[6] = {a, b, c, b, d, c};
@@ -632,7 +804,8 @@ static int prepare(Command *command, const RenderState *state, uint32_t key_extr
     if ((state->color_mask & 0xff000000) != 0xff000000) mask |= SDL_GPU_COLORCOMPONENT_A;
     memset(command, 0, sizeof *command);
     command->key = source | destination << 4 | op << 8 | mask << 11 | (uint32_t)depth_compare(state->test) << 17 |
-                   (uint32_t)(state->depth_write != 0) << 21 | key_extra;
+                   (uint32_t)(state->depth_write != 0) << 21 | key_extra |
+                   (uint32_t)sample_count(textures[bound].samples) << KEY_SAMPLES_SHIFT;
     int textured = state->texture && !(render_toggles.no_textures && !state->depth_read);
     if (textured) flags |= TEXTURED;
     if (state->texa) flags |= TEXA;
@@ -665,10 +838,10 @@ static int prepare(Command *command, const RenderState *state, uint32_t key_extr
     int y0 = state->scissor[1] < 0 ? 0 : state->scissor[1];
     int x1 = state->scissor[2] >= target->width ? target->width - 1 : state->scissor[2];
     int y1 = state->scissor[3] >= target->height ? target->height - 1 : state->scissor[3];
-    command->scissor.x = x0;
-    command->scissor.y = y0;
-    command->scissor.w = x1 >= x0 ? x1 - x0 + 1 : 0;
-    command->scissor.h = y1 >= y0 ? y1 - y0 + 1 : 0;
+    command->scissor.x = x0 * target->scale;
+    command->scissor.y = y0 * target->scale;
+    command->scissor.w = x1 >= x0 ? (x1 - x0 + 1) * target->scale : 0;
+    command->scissor.h = y1 >= y0 ? (y1 - y0 + 1) * target->scale : 0;
     return 1;
 }
 
@@ -731,13 +904,40 @@ static void record(int source, const RenderState *state, int topology, int cull,
     }
 }
 
-void render_draw(const RenderState *state, int topology, const RenderVertex *vertices, int count) {
-    if (!bound || count <= 0) return;
-    port_stats.draw_calls++;
-    port_stats.vertices += (uint32_t)count;
-    int index = frame_draws++;
-    if (index >= render_toggles.skip_from && index < render_toggles.skip_to) return;
-    int source = render_source;
+static void restore(void) {
+    Texture *target = &textures[bound];
+    target->stale = 0;
+    int width = target->width, height = target->height, scale = target->scale;
+    if (!restore_slot || textures[restore_slot].width != width || textures[restore_slot].height != height ||
+        textures[restore_slot].scale != scale) {
+        render_release(restore_slot);
+        restore_slot = new_texture(width, height, scale, 1);
+    }
+    SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(command_buffer());
+    SDL_GPUTextureLocation from = {target->color, 0, 0, 0, 0, 0};
+    SDL_GPUTextureLocation to = {textures[restore_slot].color, 0, 0, 0, 0, 0};
+    SDL_CopyGPUTextureToTexture(copy, &from, &to, (Uint32)(width * scale), (Uint32)(height * scale), 1, false);
+    SDL_EndGPUCopyPass(copy);
+    RenderVertex a = {0, 0, 0, 0, 0}, b = {(float)width, 0, 0, 1, 0};
+    RenderVertex c = {0, (float)height, 0, 0, 1}, d = {(float)width, (float)height, 0, 1, 1};
+    RenderVertex quad[6] = {a, b, c, b, d, c};
+    RenderState state;
+    memset(&state, 0, sizeof state);
+    state.texture = restore_slot;
+    state.scissor[2] = width - 1;
+    state.scissor[3] = height - 1;
+    Command command;
+    if (!prepare(&command, &state, (uint32_t)RENDER_TRIANGLES << 15)) return;
+    command.key = SDL_GPU_BLENDFACTOR_ONE | SDL_GPU_BLENDFACTOR_ZERO << 4 | SDL_GPU_BLENDOP_ADD << 8 | 15 << 11 |
+                  (uint32_t)SDL_GPU_COMPAREOP_ALWAYS << 17 | (uint32_t)RENDER_TRIANGLES << 15 |
+                  (uint32_t)sample_count(target->samples) << KEY_SAMPLES_SHIFT;
+    command.fragment.flags = TEXTURED | DECAL;
+    if (store_vertices(&command, quad, sizeof quad, 6)) append(&command);
+}
+
+static void submit(const RenderState *state, int topology, const RenderVertex *vertices, int count, int index,
+                   int source) {
+    if (!pending_count && textures[bound].stale) restore();
     Command command;
     if (!prepare(&command, state, (uint32_t)topology << 15) ||
         !store_vertices(&command, vertices, (uint32_t)(count * (int)sizeof(RenderVertex)), count)) {
@@ -756,6 +956,44 @@ void render_draw(const RenderState *state, int topology, const RenderVertex *ver
     if (index == render_highlight) highlight(&command);
 }
 
+static void widen(const RenderState *state, int topology, const RenderVertex *vertices, int count, int index,
+                  int source) {
+    static RenderVertex quads[WIDEN_LIMIT * 6];
+    int step = topology == RENDER_LINES ? 2 : 1;
+    int used = 0;
+    for (int i = 0; i + step <= count; i += step) {
+        RenderVertex a = vertices[i], b = vertices[i + step - 1];
+        if (step == 1) {
+            a.x -= 0.5f;
+            b.x += 0.5f;
+        }
+        float across_x = fabsf(b.x - a.x) >= fabsf(b.y - a.y) ? 0.0f : 0.5f;
+        float across_y = 0.5f - across_x;
+        RenderVertex corners[4] = {a, b, a, b};
+        for (int k = 0; k < 4; ++k) {
+            corners[k].x += k < 2 ? -across_x : across_x;
+            corners[k].y += k < 2 ? -across_y : across_y;
+        }
+        RenderVertex *quad = &quads[used * 6];
+        quad[0] = corners[0], quad[1] = corners[1], quad[2] = corners[2];
+        quad[3] = corners[1], quad[4] = corners[3], quad[5] = corners[2];
+        if (++used < WIDEN_LIMIT) continue;
+        submit(state, RENDER_TRIANGLES, quads, used * 6, index, source);
+        used = 0;
+    }
+    if (used) submit(state, RENDER_TRIANGLES, quads, used * 6, index, source);
+}
+
+void render_draw(const RenderState *state, int topology, const RenderVertex *vertices, int count) {
+    if (!bound || count <= 0) return;
+    port_stats.draw_calls++;
+    port_stats.vertices += (uint32_t)count;
+    int index = frame_draws++;
+    if (index >= render_toggles.skip_from && index < render_toggles.skip_to) return;
+    if (textures[bound].scale > 1 && topology != RENDER_TRIANGLES) widen(state, topology, vertices, count, index, render_source);
+    else submit(state, topology, vertices, count, index, render_source);
+}
+
 void render_mesh(const RenderState *state, int cull, const MeshUniforms *uniforms, const float *bones,
                  const MeshVertex *vertices, int count) {
     if (!bound || count <= 0 || render_toggles.no_models) return;
@@ -764,6 +1002,7 @@ void render_mesh(const RenderState *state, int cull, const MeshUniforms *uniform
     int index = frame_draws++;
     if (index >= render_toggles.skip_from && index < render_toggles.skip_to) return;
     if (model_count == MODEL_LIMIT || (bones && bone_count == BONE_LIMIT)) flush();
+    if (!pending_count && textures[bound].stale) restore();
     Command command;
     uint32_t key = KEY_MESH | (uint32_t)RENDER_TRIANGLES << 15 | (uint32_t)cull << KEY_CULL_SHIFT;
     if (!prepare(&command, state, key) ||
@@ -817,7 +1056,52 @@ int render_slot(int slot, RenderSlot *info) {
     info->height = textures[slot].height;
     info->base = textures[slot].base;
     info->drawn = textures[slot].drawn;
+    info->scale = textures[slot].scale;
+    info->samples = textures[slot].samples;
     return 1;
+}
+
+static int clamp_scale(int scale) {
+    return scale < 1 ? 1 : scale > SCALE_LIMIT ? SCALE_LIMIT : scale;
+}
+
+static int clamp_samples(int samples) {
+    int power = 1;
+    while (power * 2 <= samples && power * 2 <= SAMPLE_LIMIT) power *= 2;
+    return power;
+}
+
+void render_set_quality(int scale, int samples) {
+    if (scale > 0) wanted_scale = clamp_scale(scale);
+    if (samples > 0) wanted_samples = clamp_samples(samples);
+}
+
+void render_quality(int *scale, int *samples) {
+    *scale = quality_scale;
+    *samples = quality_samples;
+}
+
+static void apply_quality(void) {
+    if (wanted_scale == quality_scale && wanted_samples == quality_samples) return;
+    quality_scale = wanted_scale;
+    quality_samples = wanted_samples = supported_samples(wanted_samples);
+    for (int i = 1; i < TEXTURE_LIMIT; ++i) {
+        Texture *texture = &textures[i];
+        if (!texture->used || !texture->scaled) continue;
+        Texture old = *texture;
+        texture->scale = quality_scale;
+        texture->samples = texture->target ? quality_samples : 1;
+        create_storage(texture);
+        if (old.drawn)
+            blit(old.color, 0, 0, old.width * old.scale, old.height * old.scale, texture->color, 0, 0,
+                 texture->width * texture->scale, texture->height * texture->scale, SDL_GPU_FILTER_LINEAR);
+        texture->stale = texture->samples > 1 && texture->drawn;
+        SDL_ReleaseGPUTexture(device, old.color);
+        if (old.multi) SDL_ReleaseGPUTexture(device, old.multi);
+    }
+    release_depths();
+    render_release(restore_slot);
+    restore_slot = 0;
 }
 
 void render_present(int target, int width, int height) {
@@ -833,8 +1117,8 @@ void render_present(int target, int width, int height) {
                                                                              : (float)window_height / 3.0f;
         SDL_GPUBlitInfo blit = {0};
         blit.source.texture = textures[target].color;
-        blit.source.w = (Uint32)width;
-        blit.source.h = (Uint32)height;
+        blit.source.w = (Uint32)(width * textures[target].scale);
+        blit.source.h = (Uint32)(height * textures[target].scale);
         blit.destination.texture = swapchain;
         blit.destination.w = (Uint32)(fit * 4.0f);
         blit.destination.h = (Uint32)(fit * 3.0f);
@@ -848,4 +1132,5 @@ void render_present(int target, int width, int height) {
     commands = NULL;
     vertex_cycle = 1;
     vertex_used = vertex_flushed = 0;
+    apply_quality();
 }

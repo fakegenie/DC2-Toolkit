@@ -123,7 +123,7 @@ static void water_strip(std::vector<RenderVertex> &out, const WaterView &view, c
                         const WaterGrid &grid, int row, int first, int count) {
     float row_step = (water->max[0] - water->min[0]) / (float)(water->rows - 1);
     float column_step = (water->max[2] - water->min[2]) / (float)(water->columns - 1);
-    RenderVertex strip[2 * STRIP_COLUMNS];
+    RenderVertex strip[2 * STRIP_COLUMNS] = {};
     int flags[2 * STRIP_COLUMNS];
     for (int i = 0; i < 2 * count; i++) {
         int line = row + (i & 1);

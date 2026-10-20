@@ -119,7 +119,7 @@ static void draw_triangle(const ShadowSetup &setup, const float *v0, const float
                                 {t[2], t[1], t[0], t[0]}, {c[0], c[1], c[2], c[2]}};
         memcpy(quads, a, sizeof quads);
     }
-    RenderVertex projected[5][4];
+    RenderVertex projected[5][4] = {};
     int back[5];
     int fronts = 0;
     for (int g = 0; g < 5; g++) {

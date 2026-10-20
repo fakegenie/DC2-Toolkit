@@ -891,5 +891,20 @@
     "find": "0x210",
     "replace": "0x400",
     "count": 2
+  },
+  {
+    "file": "ps2/src/dataread.cpp",
+    "find": "static BG_READ_INFO bg_read_info[BG_READ_MAX];",
+    "replace": "BG_READ_INFO bg_read_info[BG_READ_MAX];"
+  },
+  {
+    "file": "ps2/src/dataread.cpp",
+    "find": "int LoadFileBG(char *name, u_long128 *buffer, int *out_size) {",
+    "replace": "int LoadFileBGRetail(char *name, u_long128 *buffer, int *out_size) {"
+  },
+  {
+    "file": "ps2/src/dataread.cpp",
+    "find": "int LoadFile2(char *path, void *buffer, int *out_size, int mode) {",
+    "replace": "int LoadFile2Retail(char *path, void *buffer, int *out_size, int mode) {"
   }
 ]

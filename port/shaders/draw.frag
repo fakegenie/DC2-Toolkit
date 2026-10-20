@@ -3,6 +3,7 @@
 layout(location = 0) in vec4 frag_color;
 layout(location = 1) in vec2 frag_uv;
 layout(location = 2) in float frag_fog;
+layout(location = 3) flat in vec4 frag_limits;
 
 layout(set = 2, binding = 0) uniform sampler2D source;
 
@@ -14,6 +15,7 @@ layout(set = 3, binding = 0) uniform State {
 };
 
 layout(location = 0) out vec4 result;
+layout(location = 1) out vec4 stored_depth;
 
 const uint TEXTURED = 1u;
 const uint TEXA = 2u;
@@ -46,6 +48,7 @@ bool alpha_passes(float value) {
 }
 
 void main() {
+    stored_depth = vec4(gl_FragCoord.z);
     if ((flags & DEPTH_READ) != 0u) {
         uint depth = uint(texture(source, frag_uv).r * 16777215.0 + 0.5);
         result = vec4(float(depth & 255u), float((depth >> 8) & 255u), float((depth >> 16) & 255u), 255.0) / 255.0;
@@ -57,7 +60,8 @@ void main() {
     }
     vec4 color = vec4(frag_color.rgb, frag_color.a * MODULATE);
     if ((flags & TEXTURED) != 0u) {
-        vec4 texel = texture(source, frag_uv);
+        vec2 uv = frag_limits == vec4(0.0) ? frag_uv : clamp(frag_uv, frag_limits.xy, frag_limits.zw);
+        vec4 texel = texture(source, uv);
         if ((flags & TEXA) != 0u) {
             bool black = texel.r + texel.g + texel.b == 0.0;
             texel.a = (flags & AEM) != 0u && black ? 0.0 : float(alpha >> 24) / 128.0;

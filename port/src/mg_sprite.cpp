@@ -144,7 +144,7 @@ static void draw_sprite(const SpriteFrame &frame, const SpriteOp &item, const Re
         float hy = s[1] * frame.axis_y * 0.5f * q;
         float x0 = cx - hx, y0 = cy - hy, x1 = cx + hx, y1 = cy + hy;
         if (!(x0 > 1.0f && y0 > 1.0f && x1 < 4095.0f && y1 < 4095.0f)) return;
-        RenderVertex a, b, c, d;
+        RenderVertex a = {}, b = {}, c = {}, d = {};
         sprite_vertex(&a, x0, y0, cz, u0, v0, item, fog);
         sprite_vertex(&b, x1, y0, cz, u1, v0, item, fog);
         sprite_vertex(&c, x0, y1, cz, u0, v1, item, fog);
@@ -159,7 +159,7 @@ static void draw_sprite(const SpriteFrame &frame, const SpriteOp &item, const Re
         float low_x = corners[0][0], low_y = corners[0][1], high_x = corners[3][0], high_y = corners[3][1];
         if (!(low_x > 1.0f && low_y > 1.0f && high_x < 4095.0f && high_y < 4095.0f)) return;
         float uvs[4][2] = {{u0, v0}, {u1, v0}, {u0, v1}, {u1, v1}};
-        RenderVertex v[4];
+        RenderVertex v[4] = {};
         for (int i = 0; i < 4; i++) sprite_vertex(&v[i], corners[i][0], corners[i][1], cz, uvs[i][0], uvs[i][1], item, fog);
         out[0] = v[0], out[1] = v[1], out[2] = v[2], out[3] = v[1], out[4] = v[3], out[5] = v[2];
     }

@@ -89,11 +89,13 @@ extern const DebugCommand debug_scenario_commands[];
 extern const DebugCommand debug_capture_commands[];
 extern const DebugCommand debug_replay_commands[];
 extern const DebugCommand debug_savestate_commands[];
+extern const DebugCommand debug_reload_commands[];
 
 void debug_scenario_panel(void);
 void debug_capture_panel(void);
 void debug_replay_panel(void);
 void debug_savestate_panel(void);
+void debug_reload_bar(void);
 
 void debug_scenario_status(DebugReply *reply);
 void debug_capture_frame(void);
@@ -101,6 +103,7 @@ void debug_capture_present(int target, int width, int height);
 void debug_replay_input(struct port_input_state *state);
 void debug_replay_frame(void);
 void debug_savestate_frame(void);
+void debug_reload_frame(void);
 
 #ifdef __cplusplus
 }

@@ -28,7 +28,7 @@ def main():
                  "-ftrivial-auto-var-init=zero",
                  "-include", "port/include/port.h", *include]
     cases = [
-        ("devices", [*c_flags, "-Wno-unused-parameter", "port/tests/devices.c", "port/src/devices.c", "port/src/iop.c", "port/src/audio.c", "port/src/midi.c", "port/src/spu2.c", "port/src/cdvd.c", "-lm", "port/src/hooks.c"]),
+        ("devices", [*c_flags, "-Wno-unused-parameter", "port/tests/devices.c", "port/src/devices.c", "port/src/iop.c", "port/src/audio.c", "port/src/midi.c", "port/src/spu2.c", "port/src/cdvd.c", "port/src/overrides.c", "-lm", "port/src/hooks.c"]),
         ("graphics", [*c_flags, *NO_PIE, *SEGMENTS, "port/tests/graphics.c", "port/src/graphics.c", "port/src/packets.c", "port/src/memory.c", "port/src/hooks.c"]),
         ("kernel", [*c_flags, *NO_PIE, "port/tests/kernel.c"]),
         ("memory", [*c_flags, *NO_PIE, *SEGMENTS, "-pthread", "port/tests/memory.c", "port/src/memory.c", "port/src/hooks.c"]),
@@ -120,7 +120,7 @@ def main():
             movie_flags = ["-DPORT_MOVIES", f"-I{movie_sdk / 'include'}"]
             movie_libraries = [f"-L{movie_sdk / 'lib'}", f"-Wl,-rpath,{movie_sdk / 'lib'}", "-lavcodec", "-lavutil"]
         subprocess.run([*c_flags, "-Wno-unused-parameter", *movie_flags,
-                        "port/tests/movie_decode.c", "port/src/movie_decode.c", "port/src/cdvd.c", "port/src/hooks.c",
+                        "port/tests/movie_decode.c", "port/src/movie_decode.c", "port/src/cdvd.c", "port/src/overrides.c", "port/src/hooks.c",
                         *(["-Dclock_gettime=__wrap_clock_gettime"] if DARWIN else ["-Wl,--wrap=clock_gettime"]), *movie_libraries, "-o", str(movie_test)], cwd=root, check=True)
         subprocess.run([str(movie_test)], cwd=root, check=True, timeout=15)
         if options.iso:
