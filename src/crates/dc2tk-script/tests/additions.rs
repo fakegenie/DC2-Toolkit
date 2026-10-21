@@ -2,7 +2,7 @@
 
 mod build_common;
 
-use build_common::{consts, make_tree, map, strings, write, TempDir};
+use build_common::{consts, make_tree, map, strings, TempDir};
 use dc2tk_script::node::Node;
 use dc2tk_script::{additions, mods, node, pathnames};
 use indexmap::IndexMap;
@@ -81,9 +81,10 @@ fn several_mods_can_add_to_one_script_and_a_mod_needs_no_copies() {
     let mods_dir = folder.path().join("mods");
     let (first, second) = (mods_dir.join("first"), mods_dir.join("second"));
     for (module, program) in [(&first, "9000"), (&second, "9001")] {
-        let index = serde_json::json!({"additions": [{"map": "s17", "programs": {program: "go"}}]});
-        std::fs::create_dir_all(module).unwrap();
-        write(module, mods::INDEX, &index.to_string());
+        build_common::write_manifest(
+            module,
+            serde_json::json!({"additions": [{"map": "s17", "programs": {program: "go"}}]}),
+        );
     }
     let (texts, clashes) = mods::overlay(&[first, second], &root, &names()).unwrap();
     assert!(clashes.is_empty());

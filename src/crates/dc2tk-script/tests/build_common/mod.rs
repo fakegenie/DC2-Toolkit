@@ -269,3 +269,19 @@ pub fn disc_for(tools: &Tools, folder: &Path, root: &Path) -> PathBuf {
     fs::write(&path, iso_image(&[("DATA.HD4", index), ("DATA.DAT", dat), ("DMMY", vec![0; 4 * SECTOR])])).unwrap();
     path
 }
+
+pub fn test_id(folder: &str) -> String {
+    dc2tk_script::manifest::default_id(folder).replacen("local.", "test.", 1)
+}
+
+pub fn write_manifest(module: &Path, extra: serde_json::Value) {
+    let mut body =
+        serde_json::json!({"format": 2, "id": test_id(&dc2tk_script::paths::file_name(module)), "version": "1.0.0"});
+    if let (Some(body), Some(extra)) = (body.as_object_mut(), extra.as_object()) {
+        for (key, value) in extra {
+            body.insert(key.clone(), value.clone());
+        }
+    }
+    fs::create_dir_all(module).unwrap();
+    fs::write(module.join("mod.json"), serde_json::to_string_pretty(&body).unwrap()).unwrap();
+}

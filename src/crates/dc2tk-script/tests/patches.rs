@@ -6,7 +6,10 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use build_common::{disc_for, fails, make_tree, map, read, recorded, sdk_dir, strings, tables, write, TempDir, Tools};
+use build_common::{
+    disc_for, fails, make_tree, map, read, recorded, sdk_dir, strings, tables, test_id, write, write_manifest, TempDir,
+    Tools,
+};
 use dc2tk_script::node::Node;
 use dc2tk_script::patches::{self, Plan, Scripts, Target, TargetKind};
 use dc2tk_script::vm::{self, Machine, Value};
@@ -50,6 +53,9 @@ fn setup(folder: &Path, mod_files: &ModFiles) -> (PathBuf, Vec<PathBuf>) {
     for (name, texts) in mod_files {
         let module = folder.join("mods").join(name);
         fs::create_dir_all(&module).unwrap();
+        if !texts.iter().any(|(path, _)| *path == "mod.json") {
+            write_manifest(&module, serde_json::json!({}));
+        }
         for (path, text) in *texts {
             write(&module, path, text);
         }
@@ -139,7 +145,7 @@ fn two_mods_replacing_one_function_without_original_are_refused() {
     let folder = TempDir::new("patches-refused");
     let (root, dirs) = setup(folder.path(), &[("a", &[("p.c", &a)]), ("b", &[("p.c", &b)])]);
     let plan = plan_of(&dirs, &root).unwrap();
-    fails(program_of(&root, &plan, "map/s/s17_valley/s17_1.c"), "which mod a overrides too");
+    fails(program_of(&root, &plan, "map/s/s17_valley/s17_1.c"), "which mod test.a overrides too");
 }
 
 #[test]
@@ -177,13 +183,13 @@ fn mods_adding_the_same_names_each_keep_their_own() {
         .iter()
         .map(|entry| (entry["no"].as_i64().unwrap(), entry["function"].as_str().unwrap().to_string()))
         .collect();
-    assert!(by_number[&9000] == "bump" && by_number[&9001] == "bump_b");
+    assert!(by_number[&9000] == "bump" && by_number[&9001] == "bump_test_b");
     let globals: Vec<&str> =
         program["globals"].as_array().unwrap().iter().map(|declared| declared["name"].as_str().unwrap()).collect();
-    assert_eq!(globals, ["visits", "count", "count_b"]);
+    assert_eq!(globals, ["visits", "count", "count_test_b"]);
     let table = vm::table_of(&program, &tables()).unwrap();
     let mut machine = Machine::new(&table, machine_globals(&program));
-    for name in ["bump", "bump_b", "bump"] {
+    for name in ["bump", "bump_test_b", "bump"] {
         machine.run(name, Vec::new()).unwrap();
     }
     assert_eq!(machine.printed, strings(&["1", "10", "2"]));
@@ -244,7 +250,7 @@ fn a_patch_in_standard_c_carries_every_feature_into_the_script() {
     let program = program_with_headers(&root, &plan_of(&dirs, &root).unwrap(), "map/s/s17_valley/s17_1.c").unwrap();
     let table = vm::table_of(&program, &tables()).unwrap();
     let mut machine = Machine::new(&table, machine_globals(&sdk::resolve(&program, &tables()).unwrap()));
-    for name in ["checks", "checks_d"] {
+    for name in ["checks", "checks_test_d"] {
         machine.run(name, Vec::new()).unwrap();
     }
     assert_eq!(machine.printed, strings(&["511", "511"]));
@@ -439,7 +445,7 @@ fn given(pairs: &[(&str, &[(&str, i64)])]) -> BTreeMap<String, IndexMap<String, 
     pairs
         .iter()
         .map(|(module, names)| {
-            (module.to_string(), names.iter().map(|(name, number)| (name.to_string(), *number)).collect())
+            (test_id(module), names.iter().map(|(name, number)| (name.to_string(), *number)).collect())
         })
         .collect()
 }
@@ -468,13 +474,13 @@ fn numbers_are_given_once_kept_and_never_shared() {
         program["programs"].as_array().unwrap().iter().map(|entry| entry["no"].as_i64().unwrap()).collect();
     assert_eq!(numbers, BTreeSet::from([100, 500, 9000, 9001]));
     assert_eq!(run(&program, "show"), strings(&["1024 9000"]));
-    assert_eq!(run(&program, "show_b"), strings(&["1026 9001"]));
+    assert_eq!(run(&program, "show_test_b"), strings(&["1026 9001"]));
     let held: serde_json::Value = serde_json::from_str(&read(&lock)).unwrap();
-    assert_eq!(held["flag"], serde_json::json!({"a/FIGHT": 1024, "b/FIGHT": 1026}));
+    assert_eq!(held["flag"], serde_json::json!({"test.a/FIGHT": 1024, "test.b/FIGHT": 1026}));
     // b alone keeps its numbers, and a's stay reserved
     assert_eq!(plan_of(&dirs[1..], &root).unwrap().numbers, given(&[("b", &[("FIGHT", 1026), ("SHOW", 9001)])]));
     let mine = dirs[0].parent().unwrap().join("c");
-    fs::create_dir_all(&mine).unwrap();
+    write_manifest(&mine, serde_json::json!({}));
     write(&mine, "p.c", "NEW_FLAG(MINE);\n");
     assert_eq!(plan_of(&[mine], &root).unwrap().numbers, given(&[("c", &[("MINE", 1027)])]));
 }
@@ -522,8 +528,8 @@ fn counters_are_given_from_32_kept_and_never_shared() {
     let program = program_of(&root, &plan, "map/s/s17_valley/s17_1.c").unwrap();
     assert_eq!(run(&program, "score"), strings(&["34 1024"]));
     let held: serde_json::Value = serde_json::from_str(&read(&folder.path().join("mods").join(numbers::LOCK))).unwrap();
-    assert_eq!(held["counter"], serde_json::json!({"a/WINS": 34, "b/LOSSES": 35, "b/WINS": 36}));
-    assert_eq!(held["flag"], serde_json::json!({"a/WON": 1024}));
+    assert_eq!(held["counter"], serde_json::json!({"test.a/WINS": 34, "test.b/LOSSES": 35, "test.b/WINS": 36}));
+    assert_eq!(held["flag"], serde_json::json!({"test.a/WON": 1024}));
 }
 
 #[test]
@@ -609,43 +615,59 @@ fn names_of(dirs: &[PathBuf]) -> Vec<String> {
 
 #[test]
 fn required_mods_are_added_and_every_mod_comes_after_those_it_names() {
+    let manifest =
+        |id: &str, extra: &str| format!("{{\"format\": 2, \"id\": \"{id}\", \"version\": \"1.2.0\"{extra}}}");
     let folder = TempDir::new("patches-requires");
     let (root, dirs) = setup(
         folder.path(),
         &[
-            ("a", &[("mod.json", "{\"requires\": [\"b\"]}")]),
-            ("b", &[("mod.json", "{\"after\": [\"c\", \"unknown\"]}")]),
+            ("a", &[("mod.json", &manifest("test.a", ", \"dependencies\": {\"test.b\": \"^1.0\"}"))]),
+            ("b", &[("mod.json", &manifest("test.b", ", \"after\": [\"test.c\", \"test.unknown\"]"))]),
             ("c", &[("p.c", "NEW_FLAG(C);\n")]),
         ],
     );
     let mods_dir = dirs[0].parent().unwrap();
-    let found = mods::chosen(mods_dir, &strings(&["a", "c"])).unwrap();
+    let found = mods::chosen(mods_dir, &strings(&["a", "test.c"])).unwrap();
     assert_eq!(names_of(&found.dirs), strings(&["c", "b", "a"]));
-    assert_eq!(found.added, [("b".to_string(), "a".to_string())]);
+    assert_eq!(found.added, [("test.b".to_string(), "test.a".to_string())]);
     // after orders only mods that are chosen
-    assert_eq!(names_of(&mods::chosen(mods_dir, &strings(&["a"])).unwrap().dirs), strings(&["b", "a"]));
+    assert_eq!(names_of(&mods::chosen(mods_dir, &strings(&["test.a"])).unwrap().dirs), strings(&["b", "a"]));
     let listed = mods::listing(mods_dir, &root, &IndexMap::new()).unwrap();
-    assert!(listed.contains("a  (0 files)\n    requires b\n"), "{listed}");
-    assert!(listed.contains("    built after c, unknown\n"), "{listed}");
-    write(&dirs[2], "mod.json", "{\"requires\": [\"a\"]}");
-    fails(mods::chosen(mods_dir, &strings(&["c"])), "(c after a, a after b, b after c)");
+    assert!(listed.contains("test.a in a  (0 files)\n    1.2.0\n    needs test.b ^1.0\n"), "{listed}");
+    assert!(listed.contains("    built after test.c, test.unknown\n"), "{listed}");
+    write(&dirs[0], "mod.json", &manifest("test.a", ", \"dependencies\": {\"test.b\": \"^2.0\"}"));
+    fails(mods::chosen(mods_dir, &strings(&["a"])), "mod test.a needs test.b ^2.0, and the one in");
+    write(&dirs[0], "mod.json", &manifest("test.a", ", \"conflicts\": {\"test.c\": \"*\"}"));
+    fails(mods::chosen(mods_dir, &strings(&["a", "c"])), "mod test.a cannot be built with test.c 1.0.0");
+    write(&dirs[0], "mod.json", &manifest("test.a", ", \"dependencies\": {\"test.b\": \"^1.0\"}"));
+    write(&dirs[2], "mod.json", &manifest("test.c", ", \"dependencies\": {\"test.a\": \"*\"}"));
+    fails(mods::chosen(mods_dir, &strings(&["c"])), "(test.c after test.a, test.a after test.b, test.b after test.c)");
     assert!(mods::listing(mods_dir, &root, &IndexMap::new()).unwrap().contains("go round in a cycle"));
-    write(&dirs[2], "mod.json", "{\"requires\": [\"gone\"]}");
-    fails(mods::chosen(mods_dir, &strings(&["c"])), "mod c requires gone, which is not in");
-    write(&dirs[2], "mod.json", "{\"requires\": \"a\"}");
-    fails(mods::chosen(mods_dir, &strings(&["c"])), "\"requires\" is a list of mod names");
+    write(&dirs[2], "mod.json", &manifest("test.c", ", \"dependencies\": {\"test.gone\": \"*\"}"));
+    fails(mods::chosen(mods_dir, &strings(&["c"])), "mod test.c needs test.gone *, which is not in");
+    write(&dirs[2], "mod.json", "{\"requires\": [\"a\"]}");
+    fails(mods::chosen(mods_dir, &strings(&["c"])), "it is an older mod; convert it with dc2tk mod upgrade c");
 }
 
 #[test]
 fn a_mod_uses_the_library_numbers_and_overrides_of_the_mods_it_requires() {
     let base_patch = "#pragma target map s17\n#include \"names.h\"\n\n#pragma override\nvoid greet(void)\n{\n    PRINT(\"base\");\n    original();\n}\n";
-    let patch = "#pragma target map s17\n#include \"base/names.h\"\n#include \"base/value.c\"\n\nNEW_FLAG(OWN);\n\n\
+    let patch = "#pragma target map s17\n#include \"test.base/names.h\"\n#include \"base/value.c\"\n\nNEW_FLAG(OWN);\n\n\
                  #pragma override\nvoid greet(void)\n{\n    PRINT(\"top\", SHARED, OWN, base_value());\n    original();\n}\n";
     let folder = TempDir::new("patches-requires-use");
     let (root, dirs) = setup(
         folder.path(),
         &[
-            ("top", &[("mod.json", "{\"requires\": [\"base\"]}"), ("p.c", patch)]),
+            (
+                "top",
+                &[
+                    (
+                        "mod.json",
+                        r#"{"format": 2, "id": "test.top", "version": "1.0.0", "dependencies": {"test.base": "*"}}"#,
+                    ),
+                    ("p.c", patch),
+                ],
+            ),
             (
                 "base",
                 &[
@@ -732,13 +754,14 @@ fn a_native_override_wraps_every_call_the_target_makes() {
         lines
     };
     let old = without(&before, &|line| line == "    push 67", &|line| line.starts_with("    ext "));
-    let new = without(&after, &|line| line.starts_with("    call place_monster_swap"), &|line| line == "    pop");
+    let new = without(&after, &|line| line.starts_with("    call place_monster_test_swap"), &|line| line == "    pop");
     assert_eq!(old, new[..old.len()]);
     let calls: Vec<&str> = after.lines().filter(|line| line.starts_with("    call ")).collect();
-    assert_eq!(calls, ["    call place_monster_swap_7", "    call place_monster_swap_1"]);
+    assert_eq!(calls, ["    call place_monster_test_swap_7", "    call place_monster_test_swap_1"]);
     let added = new[old.len()..].join("\n");
     assert!(
-        added.starts_with("\n.function place_monster_swap_7 ") && added.contains(".function place_monster_swap_1 ")
+        added.starts_with("\n.function place_monster_test_swap_7 ")
+            && added.contains(".function place_monster_test_swap_1 ")
     );
     assert!(added.contains("ext 8") && added.contains("ext 2"), "{added}");
     // other scripts are left alone
@@ -770,7 +793,7 @@ fn native_wrappers_chain_across_mods_and_can_have_names_of_their_own() {
     let (root, dirs, tools) =
         fight_setup(&folder.path().join("hidden"), &[("a", &[("p.c", &first)]), ("b", &[("p.c", &hiding)])]);
     let plan = plan_of(&dirs, &root).unwrap();
-    fails(assembly(&root, Some(&plan), script, &tools), "which mod a wraps too");
+    fails(assembly(&root, Some(&plan), script, &tools), "which mod test.a wraps too");
 }
 
 #[test]
@@ -784,7 +807,7 @@ fn native_wrappers_are_checked_against_the_native() {
             "returns nothing, so its wrapper place_monster is void",
         ),
         (WRAPPER.replace(", int talk_param)", ", int talk_param, int more)"), "which takes 1 to 8 arguments"),
-        (short.to_string(), "calls place_monster with 7 arguments, but mod m's wrapper of it takes 1"),
+        (short.to_string(), "calls place_monster with 7 arguments, but mod test.m's wrapper of it takes 1"),
         (
             WRAPPER.replace("#pragma override\nvoid place_monster(", "#pragma override place_monsters\nvoid mine("),
             "knows no native place_monsters",
@@ -819,7 +842,9 @@ fn override_starts_a_wrapper_of_a_native_with_its_parameters() {
     let (root, dirs, tools) = fight_setup(folder.path(), &[("m", &[("p.c", &patch)])]);
     let plan = plan_of(&dirs, &root).unwrap();
     let after = assembly(&root, Some(&plan), "map/s/s17_valley/s17_1.c", &tools).unwrap();
-    assert!(after.contains("call place_monster_wrapper_m_7") && after.contains("call place_monster_wrapper_m_1"));
+    assert!(
+        after.contains("call place_monster_wrapper_test_m_7") && after.contains("call place_monster_wrapper_test_m_1")
+    );
 }
 
 #[test]
@@ -858,7 +883,7 @@ fn slim_turns_whole_files_into_patches_that_build_the_same() {
     let mods_dir = folder.path().join("mods");
     let module = mods_dir.join("fat");
     let copied = ["map/s/s17_valley/s17_1.c", "map/s/s17_valley/s17_2.c", "map/s/s18/s18_1.c", "lib/map/s/s17/greet.c"];
-    mods::new(&root, &module, &strings(&copied)).unwrap();
+    mods::new(&root, &module, &strings(&copied), None).unwrap();
     let edit = |path: &str, from: &str, to: &str| {
         let place = module.join("files").join(path);
         let text = read(&place);
@@ -918,8 +943,8 @@ fn slim_turns_whole_files_into_patches_that_build_the_same() {
     assert!(!patch.contains("void start(void)"), "{patch}");
     assert!(read(&module.join("greet.c")).contains("#pragma target library lib/map/s/s17/greet.c\n"));
     assert_eq!(mods::mod_files(&module).unwrap(), [copied[1]]);
-    let listed: serde_json::Value = serde_json::from_str(&read(&module.join("mod.json"))).unwrap();
-    assert_eq!(listed["files"].as_object().unwrap().keys().collect::<Vec<_>>(), [copied[1]]);
+    let lock = dc2tk_script::manifest::read_lock(&module).unwrap();
+    assert_eq!(lock.files.keys().collect::<Vec<_>>(), [copied[1]]);
     // what a patch cannot say keeps the copy
     edit(copied[1], "void early(void)\n{\n}\n\n", "");
     edit(copied[1], "PROGRAM(500, talk);\n", "");

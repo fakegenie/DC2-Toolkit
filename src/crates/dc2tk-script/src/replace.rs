@@ -266,20 +266,10 @@ fn suffix_is(path: &Path, suffix: &str) -> bool {
 /// A mod's replace and add lines, in the order mod.json gives them, each file checked to be in
 /// the mod.
 pub fn lines(mod_dir: &Path) -> Result<Vec<Line>> {
-    let found = mods::entries(mod_dir)?;
-    let module = paths::file_name(mod_dir);
+    let found = crate::manifest::read(mod_dir)?;
+    let module = found.id.clone();
     let mut out = Vec::new();
-    for (section, add) in [(REPLACE, false), (ADD, true)] {
-        let listed = match &found[section] {
-            Value::Null => continue,
-            Value::Object(listed) => listed,
-            _ => {
-                return Err(Error::invalid(format!(
-                    "{module}: \"{section}\" in {} maps asset ids to files",
-                    mods::INDEX
-                )))
-            }
-        };
+    for (listed, add) in [(&found.replace, false), (&found.add, true)] {
         for (key, value) in listed {
             out.push(line(mod_dir, &module, key, value, add)?);
         }
@@ -1487,13 +1477,11 @@ pub fn add_music(iso_path: &Path, lines: &[Line], files: &Files) -> Result<(File
 /// (ignoring case) is refused.
 pub fn add_lines(mod_dir: &Path, new: &[(String, Value)]) -> Result<()> {
     let path = mod_dir.join(mods::INDEX);
-    let mut body: serde_json::Map<String, Value> = if path.is_file() {
-        match serde_json::from_str(&dc2tk_disc::textfile::read_text(&path)?) {
-            Ok(Value::Object(body)) => body,
-            _ => return Err(Error::invalid(format!("{} is not a JSON object", path.display()))),
-        }
-    } else {
-        serde_json::Map::new()
+    crate::manifest::create(mod_dir, None)?;
+    let mut body: serde_json::Map<String, Value> = match serde_json::from_str(&dc2tk_disc::textfile::read_text(&path)?)
+    {
+        Ok(Value::Object(body)) => body,
+        _ => return Err(Error::invalid(format!("{} is not a JSON object", path.display()))),
     };
     let mut listed = match body.remove(REPLACE) {
         Some(Value::Object(listed)) => listed,
@@ -1691,7 +1679,7 @@ pub fn wav_constants(mod_dir: &Path) -> Result<IndexMap<String, i64>> {
                 Some(&known) if known != number as i64 => {
                     return Err(Error::invalid(format!(
                         "{}: {} names entry {number} {name}, which another WAV gives entry {known}",
-                        paths::file_name(mod_dir),
+                        mods::name(mod_dir),
                         paths::file_name(&path)
                     )));
                 }
@@ -1726,7 +1714,7 @@ pub fn sound_constants(
 ) -> Result<BTreeMap<String, IndexMap<String, i64>>> {
     let mut out = added.clone();
     for mod_dir in mod_dirs {
-        let module = paths::file_name(mod_dir);
+        let module = mods::name(mod_dir);
         for (name, number) in wav_constants(mod_dir)? {
             match consts.get(&name) {
                 Some(&known) if known == number => continue,

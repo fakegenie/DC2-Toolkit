@@ -1,7 +1,8 @@
 {
- "title": "Calculator",
+ "format": 2,
+ "id": "dc2tk.calculator",
  "version": "2.0.0",
- "start_at": "s17:CALC_START",
+ "name": "Calculator",
  "add": {
   "file:mods/calculator/calc_ui.img": {
    "file": "ui",
@@ -35,5 +36,8 @@
    "file": "sounds/close.wav",
    "bank": "SP_042"
   }
+ },
+ "dev": {
+  "start_at": "s17:CALC_START"
  }
 }

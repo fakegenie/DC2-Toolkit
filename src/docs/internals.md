@@ -129,8 +129,9 @@ description.
   about it: `index`, `flags`, `xref`, `maps`, `loads`, `constants`,
   `pathnames` (readable names and the `UNNAMED` record), `tree` (the record
   of what the decompiler wrote, which tells edits from its output).
-- Mods and building: `mods` (mod folders, whole files, `mod.json`),
-  `patches` (`#pragma target`), `additions`, `numbers` (`NEW_FLAG` and its
+- Mods and building: `mods` (mod folders, whole files, choosing mods by
+  id), `manifest` (`mod.json` and `mod.lock` as typed records, `mod
+  upgrade`), `semver` (versions and ranges), `patches` (`#pragma target`), `additions`, `numbers` (`NEW_FLAG` and its
   kin, kept in the lock file), `slim`, `capture`
   (`diff`, `mod make`), `editor`, `replace` (assets by id), `discfiles`
   (`disc/` and `file:`), `datatables` and `itemtext`, `mapedit`,

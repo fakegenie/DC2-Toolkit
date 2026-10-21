@@ -2,6 +2,7 @@
 #include "spu2.h"
 #include "midi.h"
 #include "cdvd.h"
+#include "port_debug.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,8 +18,6 @@ static struct {
 } streams[2];
 static int16_t movie_pcm[192000 * 2];
 static size_t movie_head, movie_count;
-static FILE *dump;
-static int dump_checked;
 
 static uint32_t u32(const void *address) {
     const unsigned char *p = address;
@@ -197,19 +196,13 @@ int audio_init(int enabled) {
 void audio_frame(void) {
     int16_t samples[960 * 2];
     audio_render(samples, 960);
-    if (!dump_checked) {
-        dump_checked = 1;
-        const char *path = getenv("DC2TK_SOUND_DUMP");
-        if (path) dump = fopen(path, "wb");
-    }
-    if (dump) { fwrite(samples, sizeof(samples), 1, dump); fflush(dump); }
+    debug_audio(samples, 960);
 #ifdef PORT_GRAPHICS
     if (audio && SDL_GetAudioStreamQueued(audio) < (int)sizeof(samples) * 5 && !SDL_PutAudioStreamData(audio, samples, sizeof(samples))) fprintf(stderr, "sound: %s\n", SDL_GetError());
 #endif
 }
 
 void audio_shutdown(void) {
-    if (dump) { fclose(dump); dump = NULL; }
 #ifdef PORT_GRAPHICS
     SDL_DestroyAudioStream(audio);
     audio = NULL;

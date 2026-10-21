@@ -162,11 +162,19 @@ int port_cdvd_read_file(const struct sceCdlFILE *file, uint64_t offset, void *bu
     return file && offset <= file->size && size <= file->size - offset && read_disc((uint64_t)file->lsn * 2048 + offset, buffer, size);
 }
 
+static int log_files;
+
+void port_cdvd_log_files(int enabled) {
+    log_files = enabled;
+}
+
 static void log_file(const char *path, const struct sceCdlFILE *file) {
+    if (!log_files) return;
     fprintf(stderr, "file: %s (%u bytes)\n", path, file->size);
 }
 
 static void log_archive_read(uint32_t sector) {
+    if (!log_files) return;
     if (!archive_checked) {
         archive_checked = 1;
         struct sceCdlFILE data;

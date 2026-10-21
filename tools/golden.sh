@@ -85,7 +85,7 @@ hash_iso "$OUT/full.iso" build_full
 # in the logs the output folder's name (either slash) becomes <out> and timings <t>, so the logs
 # of two runs compare
 perl "$ROOT/tools/normalize.pl" "$OUT" "$OUT"/logs/*.txt
-( cd "$OUT" && find . -type f ! -name hashes.txt ! -name diff.txt | LC_ALL=C sort | xargs -d '\n' sha1sum ) \
+( cd "$OUT" && find . -type f ! -name hashes.txt ! -name diff.txt | LC_ALL=C sort | tr '\n' '\0' | xargs -0 sha1sum ) \
   > "$OUT/hashes.txt"
 echo "files: $(wc -l < "$OUT/hashes.txt")" >&2
 [ -n "$BASE" ] || exit 0

@@ -417,11 +417,9 @@ pub fn slim(
             keep(&mut outcome, &reason);
             continue;
         }
-        let mut found = mods::entries(&mod_dir)?;
-        if let Some(files) = found["files"].as_object_mut() {
-            files.remove(&file);
-        }
-        mods::write_entries(&mod_dir, &found)?;
+        let mut lock = crate::manifest::read_lock(&mod_dir)?;
+        lock.files.remove(&file);
+        crate::manifest::write_lock(&mod_dir, &lock)?;
         remove_empty_folders(&mod_dir.join(mods::FILES), &place);
         outcome.slimmed.push(Slimmed { file, patch, overrides: draft.overrides, added: draft.added });
     }

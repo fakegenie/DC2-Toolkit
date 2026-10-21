@@ -31,7 +31,7 @@ use indexmap::IndexMap;
 use regex::Regex;
 
 use crate::index::{self, Folded};
-use crate::{maptable, mods, pathnames, sdk, source, Error, Result};
+use crate::{maptable, pathnames, sdk, source, Error, Result};
 
 pub const START_PROGRAM: &str = "floor_start";
 pub const START_FLAG: i64 = 2047;
@@ -333,12 +333,12 @@ pub fn warp_warnings(tree: &Path, consts: &IndexMap<String, i64>, target: &Targe
     Ok(lines)
 }
 
-/// The scene the chosen mods' mod.json "start_at" names, for a build given no --start-at: none, or
-/// the one they agree on. Mods that name different scenes are an error.
+/// The scene the chosen mods' mod.json "dev": {"start_at"} names, for a build given --dev and no
+/// --start-at: none, or the one they agree on. Mods that name different scenes are an error.
 pub fn chosen_scene(mod_dirs: &[PathBuf]) -> Result<Option<String>> {
     let mut wanted: Vec<String> = Vec::new();
     for mod_dir in mod_dirs {
-        if let Some(scene) = mods::entries(mod_dir)?["start_at"].as_str().filter(|scene| !scene.is_empty()) {
+        if let Some(scene) = crate::manifest::read(mod_dir)?.start_at() {
             if !wanted.iter().any(|known| known == scene) {
                 wanted.push(scene.to_string());
             }
@@ -347,7 +347,7 @@ pub fn chosen_scene(mod_dirs: &[PathBuf]) -> Result<Option<String>> {
     wanted.sort();
     if wanted.len() > 1 {
         return Err(Error::invalid(format!(
-            "the chosen mods start at different scenes ({}); pick one with --start-at, or --no-start-at",
+            "the chosen mods start at different scenes ({}); pick one with --start-at, or leave out --dev",
             wanted.join(", ")
         )));
     }

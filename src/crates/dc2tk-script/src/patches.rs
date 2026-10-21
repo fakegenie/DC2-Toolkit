@@ -47,7 +47,7 @@ use regex::Regex;
 use crate::asm::{self, Token};
 use crate::index;
 use crate::node::{Map, Node};
-use crate::{additions, library, names, numbers, parse, pathnames, paths, sdk, Error, Result};
+use crate::{additions, library, names, numbers, parse, pathnames, sdk, Error, Result};
 
 pub const LANGUAGES: [(&str, i64); 6] = [
     ("LANGUAGE_JAPANESE", 0),
@@ -239,6 +239,7 @@ impl Scripts {
 /// texts of its other files, and the mods it requires (mods::chosen), whose numbers it sees.
 pub struct ModTexts {
     pub name: String,
+    pub dir: PathBuf,
     pub texts: Vec<(PathBuf, String)>,
     pub written: Vec<String>,
     pub requires: Vec<String>,
@@ -251,6 +252,7 @@ pub struct Patch {
     pub scripts: Vec<String>,
     pub plain: HashMap<String, String>,
     pub numbers: IndexMap<String, i64>,
+    pub includes: IndexMap<String, String>,
 }
 
 impl Patch {
@@ -296,7 +298,7 @@ pub fn merge_constants(into: &mut ModConstants, more: &ModConstants) {
 
 /// Constants every chosen mod sees (the new maps' MAP_ constants), as ModConstants.
 pub fn for_every_mod(constants: &IndexMap<String, i64>, mod_dirs: &[PathBuf]) -> ModConstants {
-    mod_dirs.iter().map(|dir| (paths::file_name(dir), constants.clone())).collect()
+    mod_dirs.iter().map(|dir| (crate::mods::name(dir), constants.clone())).collect()
 }
 
 /// Which scripts each patch of the chosen mods changes, and the numbers the mods ask for. written
@@ -349,6 +351,17 @@ pub fn plan(
         }
         numbers.extend(given.get(&patch.module).into_iter().flatten().map(|(name, value)| (name.clone(), *value)));
         patch.numbers = numbers;
+        let reached: Vec<&str> = std::iter::once(patch.module.as_str())
+            .chain(requires.get(patch.module.as_str()).copied().unwrap_or_default().iter().map(String::as_str))
+            .collect();
+        for module in mod_list.iter().filter(|module| reached.contains(&module.name.as_str())) {
+            for (path, text) in &module.texts {
+                if let Ok(relative) = path.strip_prefix(&module.dir) {
+                    let relative = relative.to_string_lossy().replace('\\', "/");
+                    patch.includes.insert(format!("{}/{relative}", module.name), text.clone());
+                }
+            }
+        }
     }
     Ok(Plan { scripts, patches, numbers: given })
 }
@@ -395,6 +408,7 @@ pub fn located(mod_list: &[ModTexts], tree: &Path) -> Result<(ByScript, Vec<Patc
                 plain: chosen.iter().map(|script| (script.clone(), scripts.plain[script].clone())).collect(),
                 scripts: chosen.into_iter().collect(),
                 numbers: IndexMap::new(),
+                includes: IndexMap::new(),
             });
         }
     }
@@ -422,6 +436,14 @@ pub fn prepared(
     defines.insert("LANGUAGE".into(), language.to_string());
     let file = patch.path.to_string_lossy();
     let extra = [tree.to_path_buf()];
+    let merged: Option<IndexMap<String, String>> = (!patch.includes.is_empty()).then(|| {
+        let mut merged = overlay.cloned().unwrap_or_default();
+        for (path, text) in &patch.includes {
+            merged.entry(path.clone()).or_insert_with(|| text.clone());
+        }
+        merged
+    });
+    let overlay = merged.as_ref().or(overlay);
     let libraries = library::include_texts(&patch.text, &patch.path, overlay, sdk_dir, &extra)?;
     let options = parse::ParseOptions {
         file: &file,

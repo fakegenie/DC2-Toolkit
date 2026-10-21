@@ -485,3 +485,10 @@ dc2tk defs rename definitions/pal FLAG_S18_ARRIVAL_SEEN FLAG_YORDA_TREE_ARRIVAL_
 - Target another version: the NTSC or Japanese disc, Dark Cloud 1.
 - Ship a mod with a set that extends `pal`, so others can decompile it.
 - Check a set against a disc and see how much is still unknown.
+
+## The mod schema
+
+`mod.schema.json` is not a definition set: it is the JSON schema of a mod's `mod.json`
+(format 2), for editors that complete and check JSON. `dc2tk` reads `mod.json` into typed
+records that refuse unknown keys, and a unit test keeps this schema's keys the same as those
+records'.

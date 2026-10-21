@@ -15,7 +15,6 @@ static unsigned movie_width;
 static unsigned movie_height;
 static int movie_age;
 static int movie_new;
-static int screenshot_saved;
 static char requested_path[1024];
 
 int port_present_init(int enabled) {
@@ -87,24 +86,6 @@ void port_present_save(const char *path) {
 
 static void save_frame(int target, int width, int height) {
     if (requested_path[0]) save_requested(target, width, height);
-    const char *path = getenv("DC2TK_SCREENSHOT");
-    if (!path || !*path) return;
-    const char *every_text = getenv("DC2TK_SCREENSHOT_EVERY");
-    unsigned long every = every_text ? strtoul(every_text, NULL, 10) : 0;
-    const char *field_text = getenv("DC2TK_SCREENSHOT_FIELD");
-    unsigned long field = field_text ? strtoul(field_text, NULL, 10) : 100;
-    if (port_graphics.fields < field || (every ? port_graphics.fields % every > 1 : screenshot_saved)) return;
-    char name[1024];
-    if (every) snprintf(name, sizeof name, "%s%06llu.bmp", path, (unsigned long long)port_graphics.fields);
-    else snprintf(name, sizeof name, "%s", path);
-    uint32_t *pixels = malloc((size_t)width * (size_t)height * 4);
-    render_download(target, 0, 0, width, height, pixels);
-    SDL_Surface *surface = SDL_CreateSurfaceFrom(width, height, SDL_PIXELFORMAT_RGBA32, pixels, width * 4);
-    if (!surface || !SDL_SaveBMP(surface, name)) fprintf(stderr, "display: %s\n", SDL_GetError());
-    SDL_DestroySurface(surface);
-    free(pixels);
-    screenshot_saved = 1;
-    fprintf(stderr, "display: saved field %llu to %s\n", (unsigned long long)port_graphics.fields, name);
 }
 
 void port_present_show(int target, int width, int height) {

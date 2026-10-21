@@ -3,9 +3,9 @@
 // digits, and sound effects for every key.
 //
 // It is a patch of every language of map s17's script. It adds the start program the mod's
-// start_at warps a new game to, and replaces program 500, which runs when the player presses the
-// action button at the map's "talk" point (the Spheda trial's, unused while the mod's game starts
-// here). Its files come from mod.json: the model (mods/calculator/calc.chr), the face, cursor and
+// "dev": {"start_at"} warps a --dev build's new game to, and replaces program 500, which runs
+// when the player presses the action button at the map's "talk" point (the Spheda trial's, unused
+// while the mod's game starts here). Its files come from mod.json: the model (mods/calculator/calc.chr), the face, cursor and
 // digits (mods/calculator/calc_ui.img) and the sounds, added to bank SP_042, which nothing else
 // loads.
 #pragma target map s17
@@ -261,7 +261,7 @@ int calc_press(int state[], int pressed)
     return CALC_IGNORED;
 }
 
-// The program a new game starts at (mod.json's start_at), numbered by build.
+// The program a --dev build's new game starts at (mod.json's "dev": {"start_at"}), numbered by build.
 NEW_PROGRAM(CALC_START);
 PROGRAM(CALC_START, start_calculator_valley);
 

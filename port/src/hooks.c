@@ -23,6 +23,11 @@ __attribute__((weak)) void debug_frame_drawn(void) {}
 
 __attribute__((weak)) void debug_overlay(void) {}
 
+__attribute__((weak)) void debug_audio(const short *samples, int frames) {
+    (void)samples;
+    (void)frames;
+}
+
 __attribute__((weak)) void debug_frame_exit(void) {}
 
 __attribute__((weak)) void debug_present(int target, int width, int height) {

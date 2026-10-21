@@ -1,10 +1,9 @@
-#define _POSIX_C_SOURCE 200809L
 #include "movie.h"
 #include "cdvd.h"
+#include "port_graphics.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-#include <time.h>
 
 static uint64_t picture_hash;
 static unsigned pictures;
@@ -12,14 +11,11 @@ static unsigned changed;
 static size_t audio_frames;
 static uint64_t audio_hash = 1469598103934665603ull;
 static unsigned audible;
-static double elapsed;
+PortGraphicsState port_graphics;
 
-int __wrap_clock_gettime(clockid_t clock, struct timespec *time) {
-    (void)clock;
-    elapsed += 0.041;
-    time->tv_sec = (time_t)elapsed;
-    time->tv_nsec = (long)((elapsed - time->tv_sec) * 1000000000);
-    return 0;
+static void step(void) {
+    port_graphics.fields += 2;
+    port_movie_step();
 }
 
 void port_present_movie(const uint32_t *rgba, unsigned width, unsigned height) {
@@ -75,7 +71,7 @@ int main(int argc, char **argv) {
     assert(port_movie_open(argv[2], 1, 0));
     assert(!port_movie_end() && !port_movie_started());
     port_movie_start();
-    for (unsigned i = 0; !port_movie_end() && i < 20000; i++) port_movie_step();
+    for (unsigned i = 0; !port_movie_end() && i < 20000; i++) step();
     assert(port_movie_end() && port_movie_started());
     assert(pictures == port_movie_frames() && pictures > 100 && changed > 20);
     if (!strcmp(argv[2], "TUTO/VTUTO6.PSS")) assert(pictures == 1275 && audio_frames == 2448128 && audible == 2328886 && audio_hash == 0xccb04ff0603af46dull);
@@ -89,7 +85,7 @@ int main(int argc, char **argv) {
     unsigned previous = 0;
     unsigned loops = 0;
     for (unsigned i = 0; !loops && i < 20000; i++) {
-        port_movie_step();
+        step();
         unsigned count = port_movie_frames();
         loops += count < previous;
         previous = count;

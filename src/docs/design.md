@@ -208,18 +208,24 @@ file places build back, no problems.
 
 ## 2. Mods by name
 
-A mod is a folder with a `mod.json`. Where files sit inside the folder does
-not matter: `mod.json` says what each one replaces, by asset id (section
-1). Built in `dc2tk` (`dc2tk-script`'s `replace`, the index of ids
+A mod is a folder with a `mod.json`, read into typed records that refuse
+an unknown key (`dc2tk-script`'s `manifest`): its format (2), its id
+(`author.name`, which other mods, numbers and messages use instead of the
+folder's name), its version, the mods it depends on, follows or conflicts
+with (semver ranges), the targets it runs on, and its `dev` settings.
+Where files sit inside the folder does not matter: `mod.json` says what
+each one replaces, by asset id (section 1). Built in `dc2tk` (`dc2tk-script`'s `replace`, the index of ids
 in `dc2tk-assets`' `ids`).
 
 ```json
 {
-  "title": "Castle showcase",
+  "format": 2,
+  "id": "andrew.castle-showcase",
   "version": "1.0.0",
+  "name": "Castle showcase",
   "authors": ["Andrew"],
   "description": "Monica's clothes reshaped, a green soldier, new event sounds.",
-  "start_at": "s51:500",
+  "dev": {"start_at": "s51:500"},
 
   "replace": {
     "texture:e254a1": "art/soldier_green.png",

@@ -24,7 +24,7 @@ blender --background --python docs/scripting/examples/spinning-cult/make_gill.py
 blender --background --python docs/scripting/examples/spinning-cult/make_gyros.py
 blender --background --python docs/scripting/examples/spinning-cult/make_mod.py
 blender --background --python docs/scripting/examples/spinning-cult/make_villagers.py
-dc2tk build extracted/scripts dc2.iso -o spinning-cult.iso --mod spinning-cult
+dc2tk build extracted/scripts dc2.iso -o spinning-cult.iso --mod spinning-cult --dev
 ```
 
 ### Asset generation scripts
@@ -54,7 +54,7 @@ dc2tk build extracted/scripts dc2.iso -o spinning-cult.iso --mod spinning-cult
 
 ## Playing the mod in-game
 
-Selecting **New Game** starts in Palm Brinks (`"start_at": "m01"`) and advances `SAVE_SET_PROGRESS` to `3` so the townspeople are outside.
+With `--dev`, selecting **New Game** starts in Palm Brinks (`"dev": {"start_at": "m01"}`) and advances `SAVE_SET_PROGRESS` to `3` so the townspeople are outside.
 
 1. **Enter the Fish Room and talk to Brother Gill**: Enter the house door near the start of the street and talk to Brother Gill beneath the rotating fish to receive the Camera, Notebook, Photo Album, and a Scrap of Metal.
 2. **Photograph the fish from three angles**: Equip the Camera and take three photographs as the fish rotates to capture **Turning**, **More Turning**, and **Endless Turning**.

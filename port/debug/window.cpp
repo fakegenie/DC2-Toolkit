@@ -68,7 +68,10 @@ static uint32_t counter_value(const PortStats *stats, size_t offset) {
 void debug_window_toggle(void) {
     if (!window) return;
     visible = !visible;
-    if (visible) SDL_ShowWindow(window);
+    if (visible) {
+        SDL_ShowWindow(window);
+        if (render_background()) render_send_back(window);
+    }
     else SDL_HideWindow(window);
 }
 
@@ -105,7 +108,12 @@ void debug_window_start(void) {
     info.ColorTargetFormat = canvas_format;
     info.MSAASamples = SDL_GPU_SAMPLECOUNT_1;
     ImGui_ImplSDLGPU3_Init(&info);
-    SDL_RaiseWindow(render_window());
+    if (render_background()) {
+        render_send_back(window);
+        render_send_back(render_window());
+    } else {
+        SDL_RaiseWindow(render_window());
+    }
 }
 
 int debug_window_event(const void *event) {

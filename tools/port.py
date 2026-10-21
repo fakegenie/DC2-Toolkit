@@ -50,14 +50,14 @@ NM = OBJCOPY.replace("objcopy", "nm")
 
 UPSTREAM_ASM = ["mg_math.cpp", "collision_asm.cpp", "gameutil_asm.cpp", "mg_drawprim_asm.cpp"]
 FLAGS = [
-    "-O0", "-g", "-pthread", *([] if DARWIN else ["-fno-pie", "-fno-pic"]), "-DPORT", "-DPAL", "-DPORT_SOUND",
+    "-O0", "-g", "-pthread", *([] if DARWIN else ["-fno-pie", "-fno-pic"]), "-DPORT", "-DPAL",
     "-fms-extensions", "-fno-strict-aliasing", "-fwrapv", "-ffp-contract=off",
     "-fno-strict-return", "-ftrivial-auto-var-init=zero",
     "-Wno-c++11-narrowing", "-Wno-register", "-Wno-return-mismatch", "-w",
 ]
 LINK_FLAGS = ["-pthread"]
 if DARWIN:
-    LINK_FLAGS += ["-Wl,-segaddr,__PS2,0x110000000", "-Wl,-segprot,__PS2,rw,rw",
+    LINK_FLAGS += ["-lobjc", "-Wl,-segaddr,__PS2,0x110000000", "-Wl,-segprot,__PS2,rw,rw",
                    "-Wl,-segaddr,__PS2SPR,0x170000000", "-Wl,-segprot,__PS2SPR,rw,rw"]
 IOS = {
     "simulator": {"sdk": "iphonesimulator", "target": "arm64-apple-ios17.0-simulator", "platform": "iPhoneSimulator"},

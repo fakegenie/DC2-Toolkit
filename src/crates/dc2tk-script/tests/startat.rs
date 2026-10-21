@@ -131,18 +131,18 @@ fn a_target_is_the_whole_text() {
 fn the_chosen_mods_agree_on_one_scene_or_name_none() {
     let folder = TempDir::new("startat-chosen");
     let mods = folder.path().join("mods");
-    let mod_json = |name: &str, text: &str| {
-        build_common::write(&mods, &format!("{name}/mod.json"), text);
+    let mod_json = |name: &str, extra: serde_json::Value| {
+        build_common::write_manifest(&mods.join(name), extra);
         mods.join(name)
     };
     let (castle, again, plain) = (
-        mod_json("castle", r#"{"start_at": "s51:story_50"}"#),
-        mod_json("again", r#"{"start_at": "s51:story_50"}"#),
-        mod_json("plain", "{}"),
+        mod_json("castle", serde_json::json!({"dev": {"start_at": "s51:story_50"}})),
+        mod_json("again", serde_json::json!({"dev": {"start_at": "s51:story_50"}})),
+        mod_json("plain", serde_json::json!({})),
     );
     assert_eq!(startat::chosen_scene(std::slice::from_ref(&plain)).unwrap(), None);
     assert_eq!(startat::chosen_scene(&[castle.clone(), again, plain]).unwrap().as_deref(), Some("s51:story_50"));
-    let town = mod_json("town", r#"{"start_at": "m05"}"#);
+    let town = mod_json("town", serde_json::json!({"dev": {"start_at": "m05"}}));
     let error = startat::chosen_scene(&[castle, town]).unwrap_err().to_string();
     assert!(error.contains("different scenes (m05, s51:story_50)"), "{error}");
 }

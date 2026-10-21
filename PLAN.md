@@ -111,16 +111,14 @@ written fresh. These are what it found to fix:
    cannot drift.
 8. **CPU use.** `tools/movie_sdk.py:76` runs `make -j8`; it should follow the affinity. (The GS
    workers this also named are gone.)
-9. **Debugging in the shipping binary:** the screenshot hook (`present.c`, `DC2TK_SCREENSHOT`),
-   scripted presses (`input.c`, `DC2TK_PRESS`), the sound dump (`audio.c`, `DC2TK_SOUND_DUMP`),
-   `cdvd.c`'s 1 MB index scanned on every read to log archive members, and the log line for every
-   file opened. Move them into the test build (as the replay wrapper is) or
-   behind one logging switch.
+9. **Done: debugging in the shipping binary.** `DC2TK_SCREENSHOT` and `DC2TK_PRESS` are gone (the
+   debug API's `screenshot` and `press` replace them); the sound dump is the debug build's
+   (`debug_audio`, `DC2TK_SOUND_DUMP`); `cdvd.c` logs opened files and archive members, and loads
+   the archive index for that, only after `port_cdvd_log_files(1)`, which the debug build calls.
 10. **Done:** `dma_chain.c` is deleted with the rest of the emulation.
-11. **`port/tests/run.py:59-80`** writes patched engine sources into a temporary folder under
-    `/tmp`; write them under `build/port/tests/` instead. `tools/port.py:129` gives every unit
-    `-I engine/port/src`, which only the four upstream asm units need. `-DPORT_SOUND` is always
-    on, so its conditionals switch nothing: remove them.
+11. **Done:** `port/tests/run.py` writes its patched sources and objects under `build/port/tests/`,
+    and `-DPORT_SOUND` and its conditionals are gone. Every unit keeps `-I engine/port/src`:
+    `mg_drawprim.cpp` and others include `vu0_lanes.hpp` from there.
 12. **The effect-heap substitutions** (`port.json` #132-136): with PS2 sizes the new formula gives
     166 quadwords against retail's 161; #135 adds an unexplained `+ 3` no test covers; #136
     changes nothing on x86-64. Make the formula give retail's count with PS2 sizes, test the
@@ -198,10 +196,10 @@ written fresh. These are what it found to fix:
 - **Shaders:** `port/shaders/*.vert` and `*.frag` are compiled by `python3 -I
   tools/port_shaders.py` into `port/src/shaders.h` (SPIR-V and Metal source), which is committed
   so a build needs neither tool. Run it after changing a shader.
-- **Test aids in the binary** (fix 9): `DC2TK_PRESS="cross@300,start@1500/150"` presses a button
-  at a field, or every period after it; `DC2TK_SCREENSHOT=file.bmp` with `DC2TK_SCREENSHOT_FIELD`
-  and `DC2TK_SCREENSHOT_EVERY` saves the shown frame; `DC2TK_SOUND_DUMP=file.raw` writes the
-  mixed sound.
+- **Test aids** (fix 9): the debug build writes the mixed sound to `DC2TK_SOUND_DUMP=file.raw`
+  (48 kHz stereo 16-bit); screenshots and presses go through the debug API. `debug.py launch`
+  starts the game muted and behind other windows (`--sound`, `--front` undo that), as the golden,
+  sweep and benchmark tools do.
 - **Crashes:** the binary re-executes itself at start (see Part 2), which LLDB follows badly.
   macOS writes a report for every crash to `~/Library/Logs/DiagnosticReports/darkchronicle-*.ips`
   (JSON after the first line), with the faulting thread's frames.
@@ -488,8 +486,10 @@ Each has a gate. A gate that needs PCSX2, a PS2, a display or a listener is the 
 5. **P0 Compile spike.** Done.
 6. **P1 Headless boot.** Done: the ISO boots to the language selector.
 7. **P2 Graphics.** Built natively, 50 frames a second in a window on macOS. Gate, the user's:
-   compared with PCSX2. Next: see water, lens flare, depth of field and texture animation on
-   screen; run on Linux; then Windows.
+   compared with PCSX2. Water, depth of field and texture animation have been seen working, and
+   lens flare works since the GS destination alpha test was added. It builds and plays on Linux
+   x86-64 (checked in a container with software Vulkan; golden baselines differ by a few levels
+   per channel, so Linux needs its own). Next: Windows, and Linux on real hardware.
 8. **P3 Input.** Built. Gate: New Game, Palm Brinks, the first dungeon floor, played by a person.
    Next: replay from `first-floor-selection-save` past the gate where it crashed, and melee hits.
 9. **P4 Sound.** Built. Gate: effects, music and voices, heard against retail.
@@ -497,3 +497,61 @@ Each has a gate. A gate that needs PCSX2, a PS2, a display or a listener is the 
     opening movie plays (passed by replay); a save from a PS2 loads.
 11. **P6 Engine mods natively.** Built. Gate: one mod with an engine change, a native called from
     a script, a table edit and a texture plays the same in PCSX2 and natively. Fixes 3, 6, 7.
+
+## Later: resolution, widescreen, 144 fps
+
+Wanted after the milestones, in this order: each is smaller than the next, and the last needs a
+change the second-to-last does not.
+
+### Resolution changing
+
+Mostly built: `--scale 1-4` renders at whole multiples of the PS2 resolution, `--msaa 1|2|4|8`
+adds multisampling, and the debug API's `scale` and `msaa` change both while running. Left to do:
+
+1. **A player-facing setting:** an options screen or a remembered config file, fullscreen or
+   borderless, and vsync. The window is a fixed 960x720 with the picture fitted 4:3 inside.
+2. **Any resolution:** non-integer scales, so 1080p and 1440p fit exactly.
+3. **The known 1x gaps:** render-to-texture cache textures stay 1x and shadow edges are not
+   antialiased; the bitmap fonts and 2D art go soft when upscaled, so they need a filter choice.
+4. **Checks at 2x and above** of heat haze, depth of field and water.
+
+### Widescreen
+
+The engine assumes a 512x480 screen in several separate places:
+
+1. **3D view:** widen the horizontal field of view (`mgSetRenderInfo` builds the screen matrix
+   from one projection value) and render into wider targets than the canonical 640x512.
+2. **Culling:** `prim_clip_check` and the screen-bound tests in object visibility would cut off
+   anything in the new side areas; they need the wider bounds.
+3. **2D:** menus, HUD, text and fades use absolute 512-wide coordinates. Centre most of it,
+   anchor the edge HUD pieces (health top left and so on) to the sides, and make full-screen fills
+   (`DrawMenuFillBox(mgScreenWidth...)`) cover the whole width.
+4. **Full-screen effects:** heat haze, blur and depth of field read the frame back by screen
+   position and must know the width.
+5. **Content limits:** movies stay 4:3 with side bars; some cutscenes were framed for 4:3 and may
+   show unfinished scenery or actors waiting off camera, so a few places may drop back to 4:3.
+
+Do it as one logical screen width changed through `port.json`, then audit every use of 512, 640
+and `mgScreenWidth`; the debug `capture` command finds 2D draws in the wrong place.
+
+### 144 fps
+
+Game logic is tied to the frame: towns and dungeons run at 25 fps (`mgFrameRate = 2`), and
+animation, physics, camera, effects, timers and scripts each advance one fixed step per frame.
+Only 28 engine sites scale by `mgGetNowFrameRate`, so running the logic faster would break timing,
+physics and events. Keep the logic at 25 or 50 Hz and draw interpolated frames between:
+
+1. **Record the whole frame and encode it at present** (also the largest remaining performance
+   lever), giving each draw a stable identity (visual and face group) so it can be matched from
+   one logic frame to the next.
+2. **Interpolate:** for the frames in between, redraw the latest recording with the camera, model
+   matrices and bone matrices blended between the last two logic frames; 2D redraws unchanged.
+3. **What cannot be blended easily:** anything the CPU projects to the screen before the port sees
+   it: particles and 3D sprites (`mgTransWorldPrim`), shadow volumes and water. These stay at the
+   logic rate unless they are recorded in world space.
+4. **Pacing and budget:** a steady 144 Hz needs good present timing, and each in-between frame
+   must cost well under 7 ms, which only step 1 makes possible (a logic frame costs 5 to 11 ms
+   on the M-series Mac today).
+
+A cheap first test: see whether some scenes run correctly with logic at 50 Hz (`mgFrameRate = 1`),
+as the title already does, to learn how much of the engine really scales with the frame rate.

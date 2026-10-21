@@ -26,12 +26,13 @@ pub fn run_mod_check(
     let mut tools = common.tools()?;
     let mod_dirs = mod_folders(mods_dir.path(), names)?;
     for mod_dir in &mod_dirs {
-        let name = mods::name(mod_dir);
-        for (key, word) in [("requires", "requires"), ("after", "is built after")] {
-            let named = mods::named(mod_dir, key)?;
-            if !named.is_empty() {
-                println!("{name}: {word} {}", named.join(", "));
-            }
+        let own = dc2tk_script::manifest::read(mod_dir)?;
+        if !own.dependencies.is_empty() {
+            let listed: Vec<String> = own.dependencies.iter().map(|(id, range)| format!("{id} {range}")).collect();
+            println!("{}: needs {}", own.id, listed.join(", "));
+        }
+        if !own.after.is_empty() {
+            println!("{}: is built after {}", own.id, own.after.join(", "));
         }
     }
     let (raw, raw_clashes) = discfiles::collect(&mod_dirs)?;

@@ -620,7 +620,7 @@ mod tests {
         let folder = std::env::temp_dir().join(format!("dc2tk-datatables-{}", std::process::id()));
         let mod_dir = folder.join("plain");
         fs::create_dir_all(&mod_dir).unwrap();
-        fs::write(mod_dir.join(mods::INDEX), "{}\n").unwrap();
+        crate::manifest::create(&mod_dir, Some("test.plain")).unwrap();
         let files = Files::from([("map/t01.stb".to_string(), vec![1, 2])]);
         let built = apply_data(&folder.join("no.iso"), std::slice::from_ref(&mod_dir), &files, &[]).unwrap();
         let letters = english_item_letters(&folder.join("no.iso"), &[mod_dir]).unwrap();

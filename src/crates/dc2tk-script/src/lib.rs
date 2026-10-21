@@ -59,6 +59,7 @@ pub mod datatables;
 pub mod discfiles;
 pub mod editor;
 pub(crate) mod itemtext;
+pub mod manifest;
 pub mod mapedit;
 pub mod mapscript;
 pub mod maptable;
@@ -67,6 +68,7 @@ pub mod mods;
 pub mod numbers;
 pub mod patches;
 pub mod replace;
+pub mod semver;
 pub mod slim;
 pub mod startat;
 

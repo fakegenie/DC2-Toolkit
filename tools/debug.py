@@ -8,7 +8,8 @@
     python3 -I tools/debug.py screenshot out.png         or windowshot out.png for the debug window
     python3 -I tools/debug.py screenshot out.png full=1  the picture at the internal resolution (--scale)
     python3 -I tools/debug.py stats frames=50 --summary
-    python3 -I tools/debug.py launch [--debug]           start the debug build and wait for its API
+    python3 -I tools/debug.py launch [--debug]           start the debug build muted, behind other windows, and wait
+    python3 -I tools/debug.py launch --sound --front     start it with sound, or in front with focus
     python3 -I tools/debug.py launch --scale 2 --msaa 4  render at twice the PS2 resolution with 4x MSAA
 
 DC2TK_DEBUG_PORT picks the port (default 7777).
@@ -44,7 +45,10 @@ def launch(extra):
     if not binary.exists():
         sys.exit("build it first: python3 -I tools/port.py --movies --debug")
     log = open(ROOT / "build" / "port" / "debug-run.log", "w")
-    process = subprocess.Popen([str(binary), *extra, str(ROOT / "dc2.iso")], cwd=ROOT, stdout=log, stderr=log,
+    flags = [word for word in extra if word not in ("--sound", "--front")]
+    flags += [] if "--sound" in extra else ["--mute"]
+    flags += [] if "--front" in extra else ["--background"]
+    process = subprocess.Popen([str(binary), *flags, str(ROOT / "dc2.iso")], cwd=ROOT, stdout=log, stderr=log,
                                env={**os.environ, "DC2TK_DEBUG_PORT": str(PORT)})
     for _ in range(300):
         time.sleep(0.1)

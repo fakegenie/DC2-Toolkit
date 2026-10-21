@@ -209,13 +209,15 @@ Note how the patch handles `saved_value` `100`–`103` and delegates `104` and `
 
 ## 3. Add `mod.json` and test in-game
 
-Create `mods/max-combo/mod.json` with `"start_at": "d01f01"` so **New Game** starts directly in the Underground Channel dungeon with Max:
+Create `mods/max-combo/mod.json` with `"dev": {"start_at": "d01f01"}` so **New Game** starts directly in the Underground Channel dungeon with Max:
 
 ```json
 {
-  "title": "Fast Wrench Combo",
+  "format": 2,
+  "id": "you.max-combo",
   "version": "1.0.0",
-  "start_at": "d01f01"
+  "name": "Fast Wrench Combo",
+  "dev": {"start_at": "d01f01"}
 }
 ```
 
@@ -223,5 +225,5 @@ Validate and build:
 
 ```sh
 dc2tk mod check extracted/scripts max-combo
-dc2tk build extracted/scripts dc2.iso -o test.iso --mod max-combo --play
+dc2tk build extracted/scripts dc2.iso -o test.iso --mod max-combo --dev --play
 ```

@@ -19,6 +19,7 @@ static int interrupts;
 static int callbacks;
 
 void port_present_frame(void) {}
+void audio_frame(void) {}
 
 void port_depth_download(int x, int y, int width, int height, unsigned *pixels) {
     (void)x;

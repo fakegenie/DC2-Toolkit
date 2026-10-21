@@ -1,9 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "port_graphics.h"
 #include "port_window.h"
-#ifdef PORT_SOUND
 #include "audio.h"
-#endif
 #include <stddef.h>
 #include <string.h>
 #include <time.h>
@@ -32,9 +30,7 @@ static void graphics_field(void) {
     *(volatile uint32_t *)(PORT_WINDOW + 0x10000000) += 312;
     port_kernel_vblank();
     if (vblank_callback) vblank_callback((int)(port_graphics.fields & 1));
-#ifdef PORT_SOUND
     audio_frame();
-#endif
     port_present_frame();
 }
 

@@ -2,6 +2,10 @@
 #include "port_stats.h"
 #include "shaders.h"
 #include <SDL3/SDL.h>
+#if defined(__APPLE__) && !defined(SDL_PLATFORM_IOS)
+#include <objc/message.h>
+#include <objc/runtime.h>
+#endif
 #include <math.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -24,7 +28,8 @@ enum { WINDOW_WIDTH = 960, WINDOW_HEIGHT = 720, TARGET_WIDTH = 640, TARGET_HEIGH
 
 enum {
     TEXTURED = 1, TEXA = 2, AEM = 4, FOG = 8, ALPHA_TEST = 16, FACTOR_FIX = 32,
-    SCALE_SOURCE = 64, FACTOR_COLOR = 128, DECAL = 256, VERTEX_ALPHA = 512, DEPTH_READ = 1024, SOLID = 2048, OVERDRAW = 4096
+    SCALE_SOURCE = 64, FACTOR_COLOR = 128, DECAL = 256, VERTEX_ALPHA = 512, DEPTH_READ = 1024, SOLID = 2048, OVERDRAW = 4096,
+    DEST_TEST = 8192, DEST_SET = 16384
 };
 
 typedef struct {
@@ -61,6 +66,7 @@ typedef struct {
     int texture;
     int resident;
     SDL_GPUTexture *color;
+    SDL_GPUTexture *destination;
     int sampler;
     SDL_Rect scissor;
     uint32_t offset;
@@ -146,6 +152,7 @@ static int quality_scale = 1;
 static int quality_samples = 1;
 static int wanted_scale = 1;
 static int wanted_samples = 1;
+static int background;
 static int restore_slot;
 
 RenderToggles render_toggles;
@@ -234,6 +241,7 @@ int render_init(void) {
     if (!device) render_error("device");
     window = SDL_CreateWindow("Dark Chronicle", WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_FLAGS);
     if (!window || !SDL_ClaimWindowForGPUDevice(device, window)) render_error("window");
+    if (background) render_send_back(window);
     SDL_GPUPresentMode modes[] = {SDL_GPU_PRESENTMODE_MAILBOX, SDL_GPU_PRESENTMODE_IMMEDIATE};
     for (int i = 0; i < 2; ++i) {
         if (!SDL_WindowSupportsGPUPresentMode(device, window, modes[i])) continue;
@@ -251,7 +259,7 @@ int render_init(void) {
     mesh_shader = create_shader(mesh_vert_spirv, sizeof mesh_vert_spirv, mesh_vert_msl, sizeof mesh_vert_msl,
                                 SDL_GPU_SHADERSTAGE_VERTEX, 0, 2);
     fragment_shader = create_shader(draw_frag_spirv, sizeof draw_frag_spirv, draw_frag_msl, sizeof draw_frag_msl,
-                                    SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 1);
+                                    SDL_GPU_SHADERSTAGE_FRAGMENT, 2, 1);
     for (int i = 0; i < 8; ++i) {
         SDL_GPUSamplerCreateInfo info = {0};
         info.min_filter = info.mag_filter = (i & 1) ? SDL_GPU_FILTER_LINEAR : SDL_GPU_FILTER_NEAREST;
@@ -667,9 +675,11 @@ static void flush(void) {
                                    command->blend_constant};
             SDL_SetGPUBlendConstants(pass, constant);
         }
-        if (!last || command->color != last->color || command->sampler != last->sampler) {
-            SDL_GPUTextureSamplerBinding sampled = {command->color, samplers[command->sampler]};
-            SDL_BindGPUFragmentSamplers(pass, 0, &sampled, 1);
+        if (!last || command->color != last->color || command->sampler != last->sampler ||
+            command->destination != last->destination) {
+            SDL_GPUTextureSamplerBinding sampled[2] = {{command->color, samplers[command->sampler]},
+                                                       {command->destination, samplers[0]}};
+            SDL_BindGPUFragmentSamplers(pass, 0, sampled, 2);
         }
         if (!last || memcmp(&command->fragment, &last->fragment, sizeof command->fragment))
             SDL_PushGPUFragmentUniformData(buffer, 0, &command->fragment, sizeof command->fragment);
@@ -740,6 +750,21 @@ static void rename_texture(int slot) {
     retire_texture(texture->color, width, height);
     texture->color = fresh;
     port_stats.texture_renames++;
+}
+
+static SDL_GPUTexture *destination_copy(void) {
+    flush();
+    Texture *target = &textures[bound];
+    int width = target->width * target->scale, height = target->height * target->scale;
+    SDL_GPUTexture *copy = spare_texture(width, height);
+    SDL_GPUCopyPass *pass = SDL_BeginGPUCopyPass(command_buffer());
+    SDL_GPUTextureLocation from = {target->color, 0, 0, 0, 0, 0};
+    SDL_GPUTextureLocation to = {copy, 0, 0, 0, 0, 0};
+    SDL_CopyGPUTextureToTexture(pass, &from, &to, (Uint32)width, (Uint32)height, 1, false);
+    SDL_EndGPUCopyPass(pass);
+    retire_texture(copy, width, height);
+    port_stats.texture_renames++;
+    return copy;
 }
 
 static void create_storage(Texture *texture) {
@@ -1016,6 +1041,16 @@ static int prepare(Command *command, const RenderState *state, uint32_t key_extr
         return 0;
     }
     uint32_t source, destination, op, flags = 0;
+    SDL_GPUTexture *alpha_copy = textures[blank].color;
+    if ((state->test >> 14) & 1) {
+        int pass_set = (state->test >> 15) & 1;
+        if (!pending_count && !textures[bound].drawn) {
+            if (!pass_set) return 0;
+        } else {
+            alpha_copy = destination_copy();
+            flags |= DEST_TEST | (pass_set ? DEST_SET : 0);
+        }
+    }
     blend_equation(state, &source, &destination, &op, &flags);
     uint32_t mask = 0;
     if ((state->color_mask & 0x000000ff) != 0x000000ff) mask |= SDL_GPU_COLORCOMPONENT_R;
@@ -1045,6 +1080,7 @@ static int prepare(Command *command, const RenderState *state, uint32_t key_extr
     command->texture = textured ? state->texture : blank;
     command->resident = 0;
     command->color = textures[command->texture].color;
+    command->destination = alpha_copy;
     if (!state->depth_read) {
         if (render_toggles.overdraw) {
             command->key = (command->key & ~0x7fffu) | SDL_GPU_BLENDFACTOR_ONE | SDL_GPU_BLENDFACTOR_ONE << 4 |
@@ -1171,6 +1207,7 @@ static void submit(const RenderState *state, int topology, const RenderVertex *v
     Command *last = pending_count ? &pending[pending_count - 1] : NULL;
     int merged = last && last->model < 0 && last->offset + (uint32_t)last->count * sizeof(RenderVertex) == command.offset &&
                  last->key == command.key && last->texture == command.texture && last->color == command.color &&
+                 last->destination == command.destination &&
                  last->sampler == command.sampler &&
                  last->blend_constant == command.blend_constant &&
                  !memcmp(&last->fragment, &command.fragment, sizeof last->fragment) &&
@@ -1300,6 +1337,24 @@ static int clamp_samples(int samples) {
     int power = 1;
     while (power * 2 <= samples && power * 2 <= SAMPLE_LIMIT) power *= 2;
     return power;
+}
+
+void render_set_background(int enabled) {
+    background = enabled;
+    if (!enabled) return;
+    SDL_SetHint(SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, "0");
+    SDL_SetHint(SDL_HINT_WINDOW_ACTIVATE_WHEN_RAISED, "0");
+}
+
+int render_background(void) { return background; }
+
+void render_send_back(SDL_Window *target) {
+#if defined(__APPLE__) && !defined(SDL_PLATFORM_IOS)
+    void *cocoa = SDL_GetPointerProperty(SDL_GetWindowProperties(target), SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, NULL);
+    if (cocoa) ((void (*)(void *, SEL, void *))objc_msgSend)(cocoa, sel_registerName("orderBack:"), NULL);
+#else
+    (void)target;
+#endif
 }
 
 void render_set_quality(int scale, int samples) {

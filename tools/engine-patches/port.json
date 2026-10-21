@@ -951,5 +951,10 @@
     "file": "ps2/src/event_func.cpp",
     "find": "void EdEventDraw() {\n    int hit_no;\n    int sprite_no;\n",
     "replace": "#include \"port_debug.h\"\n\nvoid EdEventDraw() {\n    int hit_no;\n    int sprite_no;\n\n    debug_overlay();\n"
+  },
+  {
+    "file": "ps2/src/menuchr.cpp",
+    "find": "    AttachForm();\n    AttachMessageForm();\n",
+    "replace": "    AttachForm();\n    MENUFORMPARTS_TYPE *monica_back = form->GetPartInfo(\"fcb1\");\n\n    if (monica_back != NULL && monica_back->y == 158.0f && monica_back->h == 100.0f) {\n        monica_back->y = 181.0f;\n        monica_back->h = 121.0f;\n    }\n\n    AttachMessageForm();\n"
   }
 ]

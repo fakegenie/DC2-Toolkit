@@ -1,7 +1,8 @@
 {
- "title": "The Spinning Cult",
+ "format": 2,
+ "id": "dc2tk.spinning-cult",
  "version": "1.0.0",
- "start_at": "m01",
+ "name": "The Spinning Cult",
  "replace": {
   "map:m01": {
    "file": "maps/m01/m01.gltf",
@@ -62,5 +63,8 @@
    "file": "model/gyros_item.gltf",
    "like": "model:takaraky"
   }
+ },
+ "dev": {
+  "start_at": "m01"
  }
 }

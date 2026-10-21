@@ -22,6 +22,9 @@
 #include <mach-o/loader.h>
 #include <mach-o/nlist.h>
 #include <mach-o/stab.h>
+typedef char ResidentPage;
+#else
+typedef unsigned char ResidentPage;
 #endif
 
 extern "C" {
@@ -257,7 +260,7 @@ static std::vector<Run> window_runs(void) {
     std::vector<Run> found;
     uintptr_t low = PORT_WINDOW + 0x10000000, high = PORT_WINDOW + 0x20000000;
     size_t page = (size_t)sysconf(_SC_PAGESIZE);
-    std::vector<char> resident((high - low) / page);
+    std::vector<ResidentPage> resident((high - low) / page);
     if (mincore((void *)low, high - low, resident.data())) return found;
     for (size_t i = 0; i < resident.size(); ++i) {
         if (!(resident[i] & 1)) continue;

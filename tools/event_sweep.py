@@ -42,7 +42,7 @@ def request(command, arguments=None, timeout=60):
 
 
 def launch(saves, log):
-    process = subprocess.Popen([str(BINARY), str(ROOT / "dc2.iso")], cwd=ROOT, stdout=log, stderr=log,
+    process = subprocess.Popen([str(BINARY), "--mute", "--background", str(ROOT / "dc2.iso")], cwd=ROOT, stdout=log, stderr=log,
                                env={**os.environ, "DC2TK_DEBUG_PORT": str(PORT), "DC2_SAVE_ROOT": saves})
     for _ in range(300):
         time.sleep(0.1)

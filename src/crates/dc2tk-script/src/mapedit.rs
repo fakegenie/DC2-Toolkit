@@ -673,7 +673,7 @@ mod tests {
         let folder = std::env::temp_dir().join(format!("dc2tk-mapedit-{}", std::process::id()));
         let mod_dir = folder.join("plain");
         fs::create_dir_all(&mod_dir).unwrap();
-        fs::write(mod_dir.join(crate::mods::INDEX), "{}\n").unwrap();
+        crate::manifest::create(&mod_dir, Some("test.plain")).unwrap();
         let files = Files::from([("map/t01.stb".to_string(), vec![1, 2])]);
         let no_program = |_: &Line, _: &Value| -> Result<i64> { unreachable!() };
         let built = apply_maps(&folder.join("no.iso"), &[mod_dir], &files, &no_program).unwrap();

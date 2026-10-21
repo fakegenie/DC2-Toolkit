@@ -143,13 +143,15 @@ void start_monica_gear_battle(void)
 
 ## 3. Add `mod.json` and test in-game
 
-Create `mods/castle/mod.json` with `"start_at": "s51:story_50"` to jump directly into `start_monica_gear_battle` when selecting **New Game**:
+Create `mods/castle/mod.json` with `"dev": {"start_at": "s51:story_50"}` to jump directly into `start_monica_gear_battle` when selecting **New Game**:
 
 ```json
 {
-  "title": "Castle Battle",
+  "format": 2,
+  "id": "you.castle",
   "version": "1.0.0",
-  "start_at": "s51:story_50"
+  "name": "Castle Battle",
+  "dev": {"start_at": "s51:story_50"}
 }
 ```
 
@@ -157,5 +159,5 @@ Validate and build:
 
 ```sh
 dc2tk mod check extracted/scripts castle
-dc2tk build extracted/scripts dc2.iso -o test.iso --mod castle --play
+dc2tk build extracted/scripts dc2.iso -o test.iso --mod castle --dev --play
 ```

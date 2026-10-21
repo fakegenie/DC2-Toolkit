@@ -20,7 +20,6 @@ const FLAGS: &[&str] = &[
     "-DPORT",
     "-DPAL",
     "-DPORT_GRAPHICS",
-    "-DPORT_SOUND",
     "-fms-extensions",
     "-fno-strict-aliasing",
     "-fwrapv",

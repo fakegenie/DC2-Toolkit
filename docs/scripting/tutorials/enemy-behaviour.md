@@ -97,13 +97,15 @@ void on_init(void)
 
 ## 3. Add `mod.json` and test in-game
 
-Create `mods/stronger-golem/mod.json`. To test your Golem immediately on **New Game**, pair this mod with the `s51` Golem battle mod from [Add a new enemy to a fight](new-enemy.md) using `"start_at": "s51:story_50"`:
+Create `mods/stronger-golem/mod.json`. To test your Golem immediately on **New Game**, pair this mod with the `s51` Golem battle mod from [Add a new enemy to a fight](new-enemy.md) using `"dev": {"start_at": "s51:story_50"}`:
 
 ```json
 {
-  "title": "Stronger Golem",
+  "format": 2,
+  "id": "you.stronger-golem",
   "version": "1.0.0",
-  "start_at": "s51:story_50"
+  "name": "Stronger Golem",
+  "dev": {"start_at": "s51:story_50"}
 }
 ```
 
@@ -111,7 +113,7 @@ Validate and build:
 
 ```sh
 dc2tk mod check extracted/scripts stronger-golem
-dc2tk build extracted/scripts dc2.iso -o test.iso --mod castle --mod stronger-golem --play
+dc2tk build extracted/scripts dc2.iso -o test.iso --mod castle --mod stronger-golem --dev --play
 ```
 
 > **Note: Modifying base monster stats (HP, attack, defense, ABS, Gilda, and drops)**

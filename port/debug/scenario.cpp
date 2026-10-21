@@ -193,11 +193,18 @@ static int in_playable_loop(void) {
     return loop == LOOP_EDIT || loop == LOOP_DUNGEON;
 }
 
+static void arrive_from_town(int map) {
+    CScene *scene = GetMainScene();
+    scene->now_map_no = map;
+    scene->old_map_no = map;
+}
+
 static int warp(int loop, INIT_LOOP_ARG arg, DebugReply *reply) {
     int now = GetNowLoopNo();
     if (now != LOOP_TITLE && !in_playable_loop())
         return debug_fail(reply, "cannot leave the %s loop; only title, town and dungeon can be left",
                           now >= 0 && now < LOOP_MODE_NUM ? loop_names[now] : "unknown");
+    if (loop == LOOP_EDIT) arrive_from_town(arg.map_no);
     NextLoop(loop, arg);
     if (now == LOOP_TITLE) {
         DebugFlag = 1;

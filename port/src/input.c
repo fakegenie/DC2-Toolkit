@@ -43,37 +43,8 @@ void port_input_report(const struct port_input_state *state, unsigned char data[
     if (!(state->buttons & PORT_INPUT_R2)) data[19] = (unsigned char)(right * 255 / 32767);
 }
 
-static uint16_t scripted_buttons(void) {
-    static const struct { const char *name; uint16_t button; } names[] = {
-        {"cross", PORT_INPUT_CROSS}, {"circle", PORT_INPUT_CIRCLE}, {"square", PORT_INPUT_SQUARE},
-        {"triangle", PORT_INPUT_TRIANGLE}, {"start", PORT_INPUT_START}, {"select", PORT_INPUT_SELECT},
-        {"up", PORT_INPUT_UP}, {"down", PORT_INPUT_DOWN}, {"left", PORT_INPUT_LEFT}, {"right", PORT_INPUT_RIGHT},
-        {"l1", PORT_INPUT_L1}, {"r1", PORT_INPUT_R1}, {"l2", PORT_INPUT_L2}, {"r2", PORT_INPUT_R2}};
-    const char *script = getenv("DC2TK_PRESS");
-    if (!script) return 0;
-    uint64_t field = port_graphics.fields;
-    uint16_t buttons = 0;
-    for (const char *cursor = script; *cursor;) {
-        const char *at = strchr(cursor, '@');
-        if (!at) break;
-        char *end;
-        unsigned long start = strtoul(at + 1, &end, 10);
-        unsigned long period = *end == '/' ? strtoul(end + 1, NULL, 10) : 0;
-        int active = field >= start && (period ? (field - start) % period < 6 : field < start + 6);
-        for (size_t i = 0; i < sizeof names / sizeof names[0]; ++i)
-            if (strlen(names[i].name) == (size_t)(at - cursor) && !strncmp(cursor, names[i].name, (size_t)(at - cursor)) &&
-                active)
-                buttons |= names[i].button;
-        const char *comma = strchr(at, ',');
-        if (!comma) break;
-        cursor = comma + 1;
-    }
-    return buttons;
-}
-
 void port_input_read(unsigned char data[32]) {
     struct port_input_state state = input;
-    state.buttons |= scripted_buttons();
     debug_input(&state);
     port_input_report(&state, data);
 }

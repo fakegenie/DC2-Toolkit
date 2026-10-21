@@ -189,6 +189,16 @@ def adds_file(data, value):
     return None
 
 
+def default_id(folder):
+    name = ""
+    for c in folder.lower():
+        if c.isascii() and c.isalnum():
+            name += c
+        elif name and not name.endswith("-"):
+            name += "-"
+    return "local." + (name.rstrip("-") or "mod")
+
+
 def read_mod_json(mod_dir):
     path = os.path.join(mod_dir, "mod.json")
     data = OrderedDict()
@@ -199,6 +209,9 @@ def read_mod_json(mod_dir):
             data = json.loads(text, object_pairs_hook=OrderedDict)
         if not isinstance(data, dict):
             raise ValueError("%s is not a JSON object" % path)
+    if not data:
+        folder = os.path.basename(os.path.normpath(mod_dir))
+        data = OrderedDict([("format", 2), ("id", default_id(folder)), ("version", "0.1.0")])
     return path, data
 
 

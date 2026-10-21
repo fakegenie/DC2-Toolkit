@@ -1,9 +1,9 @@
 # Creating Mods
 
-A mod is a folder inside `mods/` (for example, `mods/castle/`). Storing changes in `mods/` keeps `extracted/` unmodified so you can combine multiple mods at build time:
+A mod is a folder inside `mods/` (for example, `mods/castle/`) with a `mod.json` that gives it an **id** such as `andrew.castle`. Storing changes in `mods/` keeps `extracted/` unmodified so you can combine multiple mods at build time, choosing each by its id (or its folder's name):
 
 ```sh
-dc2tk build extracted/scripts dc2.iso -o modded.iso --mod castle --mod another-mod
+dc2tk build extracted/scripts dc2.iso -o modded.iso --mod andrew.castle --mod someone.another-mod
 ```
 
 See two complete example mods in `docs/scripting/examples/` (copy one into `mods/` to build it):
@@ -17,7 +17,8 @@ A mod folder contains `mod.json` alongside any `.c` script patches and asset fil
 
 ```text
 mods/my-mod/
-├── mod.json            # Declares replaced and added assets, data tables, and settings
+├── mod.json            # The mod's id and version, and the assets and data tables it replaces and adds
+├── mod.lock            # Written by dc2tk (whole files the mod copied); never edit it
 ├── s51.c               # Script patch (optional)
 ├── data/
 │   └── items.json      # Edited item stats (optional)
@@ -29,10 +30,13 @@ Example `mod.json`:
 
 ```json
 {
-  "title": "My Mod",
+  "format": 2,
+  "id": "andrew.my-mod",
   "version": "1.0.0",
-  "requires": ["other-mod"],
-  "start_at": "s51:story_50",
+  "name": "My Mod",
+  "description": "Tougher soldiers in the castle.",
+  "authors": ["Andrew"],
+  "dependencies": {"someone.other-mod": "^1.2"},
   "replace": {
     "data:items": "data/items.json",
     "data:monsters": "data/monsters.json",
@@ -47,17 +51,27 @@ Example `mod.json`:
     "sound:SE_MY_BEEP": {"bank": "SP_042", "file": "sounds/beep.wav"},
     "music:BG_201": {"file": "music/theme.mid", "like": "BG_193"},
     "map:fishroom": {"file": "maps/fishroom/fishroom.gltf", "like": "m07", "title": "Fish Room", "script": "fishroom.c"}
-  }
+  },
+  "dev": {"start_at": "s51:story_50"}
 }
 ```
 
+`dc2tk mod new` writes a `mod.json` with `"format"`, `"id"` and `"version"` for you (`--id andrew.my-mod`, or `local.<folder>` when you leave it out). Every key is checked: a key dc2tk does not know, or a misspelt one, is an error rather than being ignored. The schema is `definitions/mod.schema.json`: add `"$schema": "../../definitions/mod.schema.json"` to a `mod.json` in `mods/` and an editor that reads JSON schemas completes and checks it as you type.
+
 | Key | Meaning |
 | --- | --- |
-| `"title"`, `"version"` | Shown by `dc2tk mod list`. |
-| `"requires"`, `"after"` | Mods this one builds on (see [Mods that build on mods](#mods-that-build-on-mods)). |
-| `"start_at"` | Where **New Game** starts in a test build (see [Trying a change quickly](#trying-a-change-quickly)). |
+| `"format"` | Always `2`. A mod without it is an older mod: convert it with `dc2tk mod upgrade <folder> --id author.name`. |
+| `"id"` | The mod's name everywhere: `author.name`, lowercase letters, digits and `-`. It never changes, even if the folder is renamed. |
+| `"version"` | `MAJOR.MINOR.PATCH`, as `1.0.0`. |
+| `"name"`, `"description"`, `"authors"`, `"license"`, `"homepage"` | For people; `dc2tk mod list` shows the name and version. |
+| `"game"` | The disc the mod is for; `"dc2-pal"`, the default, is the only one today. |
+| `"tool"` | The dc2tk versions the mod needs, as a range (`">=0.1"`). |
+| `"targets"` | Where the mod runs: `["iso", "native"]` (the default) promises it works the same on a PS2 or PCSX2 image and on the native port. `["native"]` marks a mod that uses port-only features; it can't go into an image. |
+| `"dependencies"`, `"after"`, `"conflicts"` | Mods this one builds on, is applied after, or can't be built with (see [Mods that build on mods](#mods-that-build-on-mods)). |
 | `"replace"` | Game assets and data tables the mod changes, by id. A line is a file path, or an object with `"file"` and options. |
 | `"add"` | New assets: sound effects, music files, maps, and game files. |
+| `"additions"` | Programs, includes and wrappers added to scripts the mod does not copy. |
+| `"dev"` | Settings for making the mod, never for players: `"start_at"`, where **New Game** starts in a `--dev` build (see [Trying a change quickly](#trying-a-change-quickly)). |
 
 Options a line can take, besides `"file"`:
 
@@ -153,7 +167,7 @@ Do not hardcode save flag numbers or event program IDs. Declare them with these 
 | `NEW_PROGRAM(NAME)` | `9000`–`9999` | Allocate an unused map event program number |
 | `NEW_MONSTER_VAR(NAME)` | `8`–`135` | Allocate an unused floor-wide monster variable |
 
-`dc2tk build` stores assigned numbers in `mods/numbers.json` so IDs stay stable and do not collide across mods.
+`dc2tk build` stores assigned numbers in `mods/numbers.json`, keyed by each mod's id, so they stay stable from build to build and never collide across mods. A save made with a set of mods reads the same flags after you add another mod.
 
 ## Text in each language
 
@@ -171,8 +185,11 @@ Each PAL map script has five language variants (`_1.c` English, `_2.c` French, `
 
 | `mod.json` field | Behavior |
 | --- | --- |
-| `"requires": ["base-mod"]` | Automatically includes `base-mod`, applies `base-mod` first, and lets patches `#include "base-mod/header.h"`. |
-| `"after": ["other-mod"]` | Applies your mod after `other-mod` when both are built together, without requiring it. |
+| `"dependencies": {"andrew.base": "^1.0"}` | Automatically includes `andrew.base` (refusing a version outside the range), applies it first, and lets patches `#include "andrew.base/header.h"`. |
+| `"after": ["someone.other"]` | Applies your mod after `someone.other` when both are built together, without needing it. |
+| `"conflicts": {"someone.fish-overhaul": "*"}` | Refuses to build together with those versions of `someone.fish-overhaul`. |
+
+Version ranges are `*` (any), `^1.2` (1.2.0 up to, not including, 2.0.0), `~1.2.3` (1.2.3 up to 1.3.0), `=1.2.3`, or comparisons joined by commas (`>=1.0, <2.0`).
 
 ## Whole files
 
@@ -190,7 +207,7 @@ To replace or add a raw disc file (such as a `.chr` or `.img` archive built from
 
 ## Trying a change quickly
 
-Set `"start_at"` in `mod.json` (or pass `--start-at` to `dc2tk build`) to make **New Game** warp directly to your map or event:
+Set `"dev": {"start_at": ...}` in `mod.json` and build with `--dev` (or pass `--start-at` to `dc2tk build`) to make **New Game** warp directly to your map or event. Without `--dev`, a build is a normal New Game, so a player's build never warps:
 
 | Value | Result on New Game |
 | --- | --- |
@@ -199,7 +216,7 @@ Set `"start_at"` in `mod.json` (or pass `--start-at` to `dc2tk build`) to make *
 | `"s51:MY_PROGRAM"` | Run `NEW_PROGRAM(MY_PROGRAM)` on map `s51` |
 | `"s06/s06b:500"` | Run program `500` of map `s06`'s script `s06b` |
 
-`dc2tk build` prints how the new game gets there, and warns when the game never enters the map that way (so the warp may not work). `dc2tk map extracted/scripts s51` lists a map's programs. Pass `--no-start-at` to build a mod for a normal New Game.
+`dc2tk build` prints how the new game gets there, and warns when the game never enters the map that way (so the warp may not work). `dc2tk map extracted/scripts s51` lists a map's programs. Leave out `--dev` to build a mod for a normal New Game.
 
 ## Hot reloading in the native port
 

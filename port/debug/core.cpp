@@ -1,5 +1,8 @@
 #include <SDL3/SDL.h>
 #include "debug.h"
+extern "C" {
+#include "cdvd.h"
+}
 #include "mainloop.hpp"
 #include "port_debug.h"
 #include "port_graphics.h"
@@ -728,8 +731,19 @@ extern const DebugCommand debug_core_commands[] = {
 
 extern "C" int debug_build(void) { return 1; }
 
+static FILE *sound_dump;
+
+extern "C" void debug_audio(const short *samples, int frames) {
+    if (!sound_dump) return;
+    fwrite(samples, sizeof(short) * 2, (size_t)frames, sound_dump);
+    fflush(sound_dump);
+}
+
 extern "C" void debug_start(void) {
     debug_log_start();
+    port_cdvd_log_files(1);
+    const char *dump_path = getenv("DC2TK_SOUND_DUMP");
+    if (dump_path) sound_dump = fopen(dump_path, "wb");
     const char *port_text = getenv("DC2TK_DEBUG_PORT");
     debug_server_start(port_text ? atoi(port_text) : 7777);
     debug_window_start();

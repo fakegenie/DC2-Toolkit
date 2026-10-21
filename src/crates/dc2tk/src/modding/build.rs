@@ -16,8 +16,11 @@ use dc2tk_script::{
     build, datatables, disc, index, mapscript, maptable, memory, mods, patches, replace, startat, tree,
 };
 
-use super::{default_constants, joined, launch, mod_folders, new_music_lines, reached_lines, resolved, shown};
+use super::{
+    default_constants, joined, launch, mod_folders, new_music_lines, reached_lines, require_target, resolved, shown,
+};
 use crate::options::{Common, ModsDir, Tools};
+use dc2tk_script::manifest::Target;
 
 #[derive(Args)]
 pub struct BuildArgs {
@@ -38,15 +41,16 @@ pub struct BuildArgs {
     /// m05.
     #[arg(long, value_name = "MAP[/SCRIPT][:PROGRAM]")]
     start_at: Option<String>,
-    /// Layer this mod over the tree; repeat for several, which may not change the same file. The
-    /// mods each requires are layered in too, and "requires" and "after" set the order.
+    /// Layer this mod over the tree, by id (or folder); repeat for several, which may not change the
+    /// same file. The mods each depends on are layered in too, and "dependencies" and "after" set
+    /// the order.
     #[arg(long = "mod", value_name = "NAME")]
     mod_names: Vec<String>,
     #[command(flatten)]
     mods: ModsDir,
-    /// Ignore a chosen mod's start_at.
+    /// Use what the chosen mods' "dev" section asks for: a new game starts at its start_at.
     #[arg(long)]
-    no_start_at: bool,
+    dev: bool,
     /// Boot the image in PCSX2 when it is built.
     #[arg(long)]
     play: bool,
@@ -103,6 +107,12 @@ pub fn run_build(args: &BuildArgs) -> Result<ExitCode> {
     }
     let mut tools = args.common.tools()?;
     let mod_dirs = mod_folders(args.mods.path(), &args.mod_names)?;
+    if args.native.is_some() {
+        require_target(&mod_dirs, Target::Native)?;
+    }
+    if args.output.is_some() || args.native.is_none() {
+        require_target(&mod_dirs, Target::Iso)?;
+    }
     if let Some(output) = &args.native {
         for directory in &mod_dirs {
             crate::native::validate_output(output, &args.disc, args.output.as_deref(), directory)?;
@@ -214,7 +224,7 @@ pub fn built_game_files(
         start_at: None,
         mod_names: mod_names.to_vec(),
         mods: mods.clone(),
-        no_start_at: true,
+        dev: false,
         play: false,
         pcsx2: None,
         full: false,
@@ -225,6 +235,7 @@ pub fn built_game_files(
     };
     let mut tools = args.common.tools()?;
     let mod_dirs = mod_folders(args.mods.path(), &args.mod_names)?;
+    require_target(&mod_dirs, Target::Native)?;
     let prepared = crate::engine::prepare_mods(&args.disc, &mod_dirs)?;
     if let Some(prepared) = &prepared {
         crate::engine_natives::regenerate(&prepared.copy, &mut tools)?;
@@ -306,10 +317,10 @@ fn print_mods(args: &BuildArgs, planned: &Planned) -> Result<()> {
 /// the new game's scripts patched to go there.
 fn start_at(args: &BuildArgs, planned: &Planned) -> Result<Option<startat::StartAt>> {
     let mut scene = args.start_at.clone();
-    if scene.is_none() && !args.no_start_at {
+    if scene.is_none() && args.dev {
         scene = startat::chosen_scene(&planned.mod_dirs)?;
         if let Some(scene) = &scene {
-            println!("start at {scene}, from the chosen mod (--no-start-at for a normal New Game)");
+            println!("start at {scene}, from the chosen mod's \"dev\" (leave out --dev for a normal New Game)");
         }
     }
     let Some(scene) = scene.filter(|scene| !scene.is_empty()) else {

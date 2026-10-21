@@ -105,13 +105,15 @@ Because `get_floor_timer()` is shared across all monsters on the floor, only the
 
 ## 4. Add `mod.json` and test in-game
 
-Create `mods/captions/mod.json` with `"start_at": "s51:story_50"`:
+Create `mods/captions/mod.json` with `"dev": {"start_at": "s51:story_50"}`:
 
 ```json
 {
-  "title": "Battle Captions",
+  "format": 2,
+  "id": "you.captions",
   "version": "1.0.0",
-  "start_at": "s51:story_50"
+  "name": "Battle Captions",
+  "dev": {"start_at": "s51:story_50"}
 }
 ```
 
@@ -119,5 +121,5 @@ Validate and build:
 
 ```sh
 dc2tk mod check extracted/scripts captions
-dc2tk build extracted/scripts dc2.iso -o test.iso --mod captions --play
+dc2tk build extracted/scripts dc2.iso -o test.iso --mod captions --dev --play
 ```

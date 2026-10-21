@@ -219,6 +219,31 @@ fn lock_of(value: &serde_json::Value) -> std::result::Result<Lock, String> {
     Ok(lock)
 }
 
+pub fn rename_module(path: &Path, from: &str, to: &str) -> Result<usize> {
+    if !path.is_file() {
+        return Ok(0);
+    }
+    let mut lock = read_lock(Some(path))?;
+    let prefix = format!("{from}/");
+    let mut renamed = 0;
+    for held in lock.values_mut() {
+        *held = std::mem::take(held)
+            .into_iter()
+            .map(|(key, number)| match key.strip_prefix(&prefix) {
+                Some(name) => {
+                    renamed += 1;
+                    (format!("{to}/{name}"), number)
+                }
+                None => (key, number),
+            })
+            .collect();
+    }
+    if renamed > 0 {
+        write_lock(path, &lock)?;
+    }
+    Ok(renamed)
+}
+
 pub fn write_lock(path: &Path, lock: &Lock) -> Result<()> {
     let note = "Numbers build gave mods' NEW_FLAG, NEW_COUNTER, NEW_PROGRAM and NEW_MONSTER_VAR names, kept so a name keeps its number and \
                 saves stay valid. Delete a line to free its number.";

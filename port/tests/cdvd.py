@@ -132,6 +132,7 @@ def main():
         archive_iso = folder / 'archive.iso'
         archive_iso.write_bytes(image(archive=True))
         assert cd.port_cdvd_init(bytes(archive_iso)) == 1
+        cd.port_cdvd_log_files(1)
         descriptor = os.dup(2)
         archive_log = folder / 'archive.log'
         try:

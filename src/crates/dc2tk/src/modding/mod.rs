@@ -15,7 +15,9 @@ use clap::Subcommand;
 use indexmap::{IndexMap, IndexSet};
 
 use dc2tk_script::patches::TargetKind;
-use dc2tk_script::{capture, datatables, definitions, discfiles, editor, index, mods, paths, replace, sdk, slim};
+use dc2tk_script::{
+    capture, datatables, definitions, discfiles, editor, index, manifest, mods, numbers, paths, replace, sdk, slim,
+};
 
 use crate::options::{Common, ModsDir};
 use crate::{asset_tree, files};
@@ -31,6 +33,9 @@ pub enum ModCommand {
         source: PathBuf,
         /// The mod's name, a folder in the mods folder.
         name: String,
+        /// The mod's id, author.name, for a new mod; local.<folder> when left out.
+        #[arg(long)]
+        id: Option<String>,
         /// Tree files to copy into the mod, relative to the tree.
         #[arg(required = true)]
         files: Vec<String>,
@@ -45,6 +50,9 @@ pub enum ModCommand {
         source: PathBuf,
         /// The mod's name, a folder in the mods folder.
         name: String,
+        /// The mod's id, author.name, for a new mod; local.<folder> when left out.
+        #[arg(long)]
+        id: Option<String>,
         #[command(flatten)]
         mods: ModsDir,
         #[command(flatten)]
@@ -64,6 +72,17 @@ pub enum ModCommand {
         common: Common,
     },
     /// List the mods, their files, and mods that change the same file.
+    /// Turn an older mod (a mod.json without "format") into a format 2 mod: give it an id, move
+    /// its keys to their new places, and key its numbers in the mods folder by the id.
+    Upgrade {
+        /// The mod's folder in the mods folder.
+        name: String,
+        /// The id to give it, author.name, as andrew.castle-golems; local.<folder> when left out.
+        #[arg(long)]
+        id: Option<String>,
+        #[command(flatten)]
+        mods: ModsDir,
+    },
     List {
         /// The decompiled source tree.
         source: PathBuf,
@@ -201,8 +220,11 @@ pub enum ModCommand {
 
 pub fn run_mod(command: &ModCommand) -> Result<ExitCode> {
     match command {
-        ModCommand::New { source, name, files, mods, common } => run_mod_new(source, name, files, mods, common),
-        ModCommand::Save { source, name, mods, common } => run_mod_save(source, name, mods, common),
+        ModCommand::New { source, name, id, files, mods, common } => {
+            run_mod_new(source, name, id.as_deref(), files, mods, common)
+        }
+        ModCommand::Save { source, name, id, mods, common } => run_mod_save(source, name, id.as_deref(), mods, common),
+        ModCommand::Upgrade { name, id, mods } => run_mod_upgrade(name, id.as_deref(), mods),
         ModCommand::Slim { source, name, mods, common } => run_mod_slim(source, name, mods, common),
         ModCommand::List { source, mods } => {
             println!("{}", mods::listing(mods.path(), source, &default_constants(source)?)?);
@@ -231,22 +253,57 @@ pub fn run_mod(command: &ModCommand) -> Result<ExitCode> {
     }
 }
 
-fn run_mod_new(source: &Path, name: &str, paths: &[String], mods_dir: &ModsDir, common: &Common) -> Result<ExitCode> {
+fn run_mod_new(
+    source: &Path,
+    name: &str,
+    id: Option<&str>,
+    paths: &[String],
+    mods_dir: &ModsDir,
+    common: &Common,
+) -> Result<ExitCode> {
     let mod_dir = mods_dir.folder(name)?;
-    let copied = mods::new(source, &mod_dir, paths)?;
+    let created = !manifest::has_manifest(&mod_dir);
+    let copied = mods::new(source, &mod_dir, paths, id)?;
+    if created {
+        println!("made {} with id {}", shown(&mod_dir.join(manifest::MANIFEST)), mods::name(&mod_dir));
+    }
     println!("{} files copied into {}; edit them there", copied.len(), shown(&mod_dir.join(mods::FILES)));
     mods::write_editor_flags(&mod_dir, source, &common.sdk_dir(), &common.definitions()?.sets)?;
     Ok(ExitCode::SUCCESS)
 }
 
-fn run_mod_save(source: &Path, name: &str, mods_dir: &ModsDir, common: &Common) -> Result<ExitCode> {
+fn run_mod_save(source: &Path, name: &str, id: Option<&str>, mods_dir: &ModsDir, common: &Common) -> Result<ExitCode> {
     let mod_dir = mods_dir.folder(name)?;
-    let (saved, removed) = mods::save(source, &mod_dir)?;
+    let (saved, removed) = mods::save(source, &mod_dir, id)?;
     println!("{} files saved to {}", saved.len(), shown(&mod_dir));
     for path in removed {
         println!("note: {path} was removed from the tree; a mod cannot remove files");
     }
     mods::write_editor_flags(&mod_dir, source, &common.sdk_dir(), &common.definitions()?.sets)?;
+    Ok(ExitCode::SUCCESS)
+}
+
+fn run_mod_upgrade(name: &str, id: Option<&str>, mods_dir: &ModsDir) -> Result<ExitCode> {
+    let mod_dir = mods_dir.folder(name)?;
+    if !mod_dir.is_dir() {
+        bail!("no mod at {}", shown(&mod_dir));
+    }
+    let folder = dc2tk_script::paths::file_name(&mod_dir);
+    let id = id.map_or_else(|| manifest::default_id(&folder), str::to_string);
+    let mods_path = mods_dir.path().to_path_buf();
+    let id_of = |other: &str| match manifest::read(&mods_path.join(other)) {
+        Ok(found) => found.id,
+        Err(_) => manifest::default_id(other),
+    };
+    let upgraded = manifest::upgrade(&mod_dir, &id, &id_of)?;
+    println!("{} is format {} now, with id {}", shown(&mod_dir), manifest::FORMAT, upgraded.manifest.id);
+    for note in &upgraded.notes {
+        println!("note: {note}");
+    }
+    let renamed = numbers::rename_module(&mods_dir.path().join(numbers::LOCK), &folder, &upgraded.manifest.id)?;
+    if renamed > 0 {
+        println!("{renamed} numbers in {} now belong to {}", numbers::LOCK, upgraded.manifest.id);
+    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -437,18 +494,38 @@ fn default_constants(tree_dir: &Path) -> Result<IndexMap<String, i64>> {
     Ok(index::constants(index::tree_headers(tree_dir, &defs, &files::root().join("sdk"))?.values()))
 }
 
-/// The chosen mods with the mods they require, in the order they are applied ("requires" and
+/// The chosen mods with the mods they depend on, in the order they are applied ("dependencies" and
 /// "after" in their mod.json); says which were added and the order when it is not the one given.
 fn mod_folders(mods_dir: &Path, names: &[String]) -> Result<Vec<PathBuf>> {
     let found = mods::chosen(mods_dir, names)?;
     for (added, by) in &found.added {
-        println!("mod {by} requires {added}, so it is built in too");
+        println!("mod {by} needs {added}, so it is built in too");
     }
     let order: Vec<String> = found.dirs.iter().map(|dir| mods::name(dir)).collect();
-    if order != names {
+    let given: Vec<String> =
+        names.iter().map(|name| mods::folder(mods_dir, name).map(|dir| mods::name(&dir))).collect::<Result<_, _>>()?;
+    if order != given {
         println!("mods applied in this order: {}", order.join(", "));
     }
     Ok(found.dirs)
+}
+
+/// Refuses the chosen mods that do not run on target, naming them.
+fn require_target(mod_dirs: &[PathBuf], target: dc2tk_script::manifest::Target) -> Result<()> {
+    let mut refused = Vec::new();
+    for mod_dir in mod_dirs {
+        let own = dc2tk_script::manifest::read(mod_dir)?;
+        if !own.runs_on(target) {
+            refused.push(own.id);
+        }
+    }
+    if !refused.is_empty() {
+        bail!(
+            "{} cannot be built for the {target} target: their mod.json \"targets\" leaves it out",
+            refused.join(", ")
+        );
+    }
+    Ok(())
 }
 
 fn shown(path: &Path) -> String {

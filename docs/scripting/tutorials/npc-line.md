@@ -84,13 +84,15 @@ If an original `show_message` call passes an integer ID instead of a string lite
 
 ## 3. Add `mod.json` and test in-game
 
-Create `mods/gordon-line/mod.json` with `"start_at": "m01"` so **New Game** starts directly in Palm Brinks:
+Create `mods/gordon-line/mod.json` with `"dev": {"start_at": "m01"}` so **New Game** starts directly in Palm Brinks:
 
 ```json
 {
-  "title": "Gordon Line",
+  "format": 2,
+  "id": "you.gordon-line",
   "version": "1.0.0",
-  "start_at": "m01"
+  "name": "Gordon Line",
+  "dev": {"start_at": "m01"}
 }
 ```
 
@@ -100,5 +102,5 @@ Validate and build the mod:
 
 ```sh
 dc2tk mod check extracted/scripts gordon-line
-dc2tk build extracted/scripts dc2.iso -o test.iso --mod gordon-line --play
+dc2tk build extracted/scripts dc2.iso -o test.iso --mod gordon-line --dev --play
 ```

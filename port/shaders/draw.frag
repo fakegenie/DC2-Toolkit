@@ -6,6 +6,7 @@ layout(location = 2) in float frag_fog;
 layout(location = 3) flat in vec4 frag_limits;
 
 layout(set = 2, binding = 0) uniform sampler2D source;
+layout(set = 2, binding = 1) uniform sampler2D destination;
 
 layout(set = 3, binding = 0) uniform State {
     uint flags;
@@ -30,6 +31,8 @@ const uint VERTEX_ALPHA = 512u;
 const uint DEPTH_READ = 1024u;
 const uint SOLID = 2048u;
 const uint OVERDRAW = 4096u;
+const uint DEST_TEST = 8192u;
+const uint DEST_SET = 16384u;
 
 const float MODULATE = 255.0 / 128.0;
 
@@ -57,6 +60,10 @@ void main() {
     if ((flags & SOLID) != 0u) {
         result = vec4(1.0, 0.0, 1.0, 1.0);
         return;
+    }
+    if ((flags & DEST_TEST) != 0u) {
+        bool set = texelFetch(destination, ivec2(gl_FragCoord.xy), 0).a > 254.0 / 255.0;
+        if (set != ((flags & DEST_SET) != 0u)) discard;
     }
     vec4 color = vec4(frag_color.rgb, frag_color.a * MODULATE);
     if ((flags & TEXTURED) != 0u) {

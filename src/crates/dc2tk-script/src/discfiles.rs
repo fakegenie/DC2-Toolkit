@@ -188,7 +188,7 @@ pub fn mod_files(mod_dir: &Path) -> Result<IndexMap<String, PathBuf>> {
         if let Some(existing) = found.get(&target).filter(|existing| **existing != source) {
             return Err(Error::invalid(format!(
                 "{}: {} is given twice, as {} and {}",
-                paths::file_name(mod_dir),
+                crate::mods::name(mod_dir),
                 target,
                 paths::file_name(existing),
                 paths::file_name(&source)
@@ -236,7 +236,7 @@ pub fn game_files(mod_dir: &Path) -> Result<IndexMap<String, PathBuf>> {
         if found.keys().any(|known| lower(known) == lower(&path)) {
             return Err(Error::invalid(format!(
                 "{}: {path} is given twice, in {DISC}/ and as file:{path}",
-                paths::file_name(mod_dir)
+                crate::mods::name(mod_dir)
             )));
         }
         found.insert(path, file);
@@ -301,9 +301,9 @@ pub fn collect(mod_dirs: &[PathBuf]) -> Result<(Wanted, Clashes)> {
     for mod_dir in mod_dirs {
         for (path, file) in game_files(mod_dir)? {
             if let Some((owner, _)) = found.get(&path) {
-                clashes.entry(path).or_insert_with(|| vec![owner.clone()]).push(paths::file_name(mod_dir));
+                clashes.entry(path).or_insert_with(|| vec![owner.clone()]).push(crate::mods::name(mod_dir));
             } else {
-                found.insert(path, (paths::file_name(mod_dir), file));
+                found.insert(path, (crate::mods::name(mod_dir), file));
             }
         }
     }

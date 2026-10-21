@@ -1,12 +1,12 @@
 """Build and run the native boundary checks: python3 -I port/tests/run.py."""
 
 import argparse
+import importlib.util
 import json
 import pathlib
 import shutil
 import subprocess
 import sys
-import tempfile
 
 DARWIN = sys.platform == "darwin"
 NO_PIE = [] if DARWIN else ["-fno-pie", "-no-pie"]
@@ -33,7 +33,7 @@ def main():
         ("kernel", [*c_flags, *NO_PIE, "port/tests/kernel.c", "port/src/fiber.c"]),
         ("memory", [*c_flags, *NO_PIE, *SEGMENTS, "-pthread", "port/tests/memory.c", "port/src/memory.c", "port/src/hooks.c"]),
         ("runtime", [*c_flags, "port/tests/runtime.c"]),
-        ("sound", [*c_flags, "port/tests/sound.c", "port/src/audio.c", "port/src/midi.c", "port/src/spu2.c", "-lm"]),
+        ("sound", [*c_flags, "port/tests/sound.c", "port/src/audio.c", "port/src/midi.c", "port/src/spu2.c", "-lm", "port/src/hooks.c"]),
         ("midi", [*c_flags, "port/tests/midi.c", "port/src/midi.c", "-lm"]),
         ("memory_card", [*c_flags, "port/tests/memory_card.c", "port/src/memory_card.c"]),
         ("executable", [*c_flags, "port/tests/executable.c", "port/src/executable.c"]),
@@ -44,89 +44,91 @@ def main():
                   "port/src/frame.cpp", "port/src/collision.cpp",
                   "engine/tools/kazarov/src/cpp/sce/libvu0.cpp", DEAD_STRIP]),
     ]
-    with tempfile.TemporaryDirectory(prefix="dc2-port-tests-") as temporary:
-        movie_object = str(pathlib.Path(temporary) / "movie_decode.o")
-        subprocess.run([*c_flags, "-Wno-unused-parameter", "-c", "port/src/movie_decode.c", "-o", movie_object], cwd=root, check=True)
-        cases.append(("movie", [*cpp_flags, "port/tests/movie.cpp", "port/src/movie.cpp", movie_object]))
-        headers = pathlib.Path(temporary) / "include"
-        shutil.copytree(root / "engine/ps2/include", headers)
-        patches = json.loads((root / "tools/engine-patches/port.json").read_text())
+    temporary = root / "build" / "port" / "tests"
+    shutil.rmtree(temporary, ignore_errors=True)
+    temporary.mkdir(parents=True)
+    movie_object = str(pathlib.Path(temporary) / "movie_decode.o")
+    subprocess.run([*c_flags, "-Wno-unused-parameter", "-c", "port/src/movie_decode.c", "-o", movie_object], cwd=root, check=True)
+    cases.append(("movie", [*cpp_flags, "port/tests/movie.cpp", "port/src/movie.cpp", movie_object]))
+    headers = pathlib.Path(temporary) / "include"
+    shutil.copytree(root / "engine/ps2/include", headers)
+    patches = json.loads((root / "tools/engine-patches/port.json").read_text())
+    for patch in patches:
+        if not patch["file"].startswith("ps2/include/"):
+            continue
+        path = headers / patch["file"].removeprefix("ps2/include/")
+        header = path.read_text()
+        count = patch.get("count", 1)
+        assert count > 0 and header.count(patch["find"]) == count
+        path.write_text(header.replace(patch["find"], patch["replace"], count))
+    cases.append(("records", [cpp_flags[0], "-I" + str(headers), *cpp_flags[1:], *NO_PIE, "port/tests/records.cpp"]))
+    sources = {}
+    for name in ["mg_drawprim.cpp", "mg_texture.cpp", "mg_memory.cpp", "mg_tanime.cpp", "mg_math.cpp", "automap.cpp", "runscript.cpp", "runscript_opcodes.cpp", "effscript.cpp"]:
+        relative = "ps2/src/" + name
+        source = (root / "engine" / relative).read_text()
         for patch in patches:
-            if not patch["file"].startswith("ps2/include/"):
-                continue
-            path = headers / patch["file"].removeprefix("ps2/include/")
-            header = path.read_text()
-            count = patch.get("count", 1)
-            assert count > 0 and header.count(patch["find"]) == count
-            path.write_text(header.replace(patch["find"], patch["replace"], count))
-        cases.append(("records", [cpp_flags[0], "-I" + str(headers), *cpp_flags[1:], *NO_PIE, "port/tests/records.cpp"]))
-        sources = {}
-        for name in ["mg_drawprim.cpp", "mg_texture.cpp", "mg_memory.cpp", "mg_tanime.cpp", "mg_math.cpp", "automap.cpp", "runscript.cpp", "runscript_opcodes.cpp", "effscript.cpp"]:
-            relative = "ps2/src/" + name
-            source = (root / "engine" / relative).read_text()
-            for patch in patches:
-                if patch["file"] == relative:
-                    count = patch.get("count", 1)
-                    assert count > 0 and source.count(patch["find"]) == count
-                    source = source.replace(patch["find"], patch["replace"], count)
-            path = pathlib.Path(temporary) / name
-            path.write_text(source)
-            sources[name] = str(path)
-        cases.append(("drawprim", [cpp_flags[0], "-I" + str(headers), *cpp_flags[1:], "-ffunction-sections", "-fdata-sections", "port/tests/drawprim.cpp", sources["mg_drawprim.cpp"], sources["mg_texture.cpp"], sources["mg_memory.cpp"], DEAD_STRIP]))
-        cases.append(("texture_anime", [cpp_flags[0], "-I" + str(headers), *cpp_flags[1:], "-ffunction-sections", "-fdata-sections", "port/tests/texture_anime.cpp", sources["mg_tanime.cpp"], sources["mg_memory.cpp"], DEAD_STRIP]))
-        cases.append(("automap", [cpp_flags[0], "-I" + str(headers), *cpp_flags[1:], "-ffunction-sections", "-fdata-sections", "port/tests/automap.cpp", sources["automap.cpp"], DEAD_STRIP]))
-        cases.append(("monster_script", [cpp_flags[0], "-I" + str(headers), *cpp_flags[1:], "-ffunction-sections", "-fdata-sections", "port/tests/monster_script.cpp", sources["runscript.cpp"], sources["runscript_opcodes.cpp"], sources["mg_memory.cpp"], DEAD_STRIP]))
-        cases.append(("effect_heap", [cpp_flags[0], "-I" + str(headers), *cpp_flags[1:], *NO_PIE, "-ffunction-sections", "-fdata-sections", "port/tests/effect_heap.cpp", sources["effscript.cpp"], sources["runscript.cpp"], sources["mg_memory.cpp"], DEAD_STRIP]))
-        collision_objects = []
-        for name in ["mg_math.cpp", "collision_asm.cpp", "gameutil_asm.cpp"]:
-            target = pathlib.Path(temporary) / ("collision_" + name + ".o")
-            subprocess.run([cpp_flags[0], "-I" + str(headers), *cpp_flags[1:],
-                            "-Iengine/port/include", "-Iengine/port/src", "-ffunction-sections", "-fdata-sections",
-                            "-c", "engine/port/src/" + name, "-o", str(target)], cwd=root, check=True)
-            subprocess.run([OBJCOPY, "--weaken", str(target)], cwd=root, check=True)
-            collision_objects.append(str(target))
-        cases.append(("collision", [cpp_flags[0], "-I" + str(headers), *cpp_flags[1:],
-                                    "-ffunction-sections", "-fdata-sections", "port/tests/collision.cpp",
-                                    "port/src/collision.cpp", sources["mg_math.cpp"], *collision_objects,
-                                    "engine/tools/kazarov/src/cpp/sce/libvu0.cpp", DEAD_STRIP]))
-        failed = []
-        for name, command in cases:
-            binary = pathlib.Path(temporary) / name
-            try:
-                subprocess.run([*command, "-o", str(binary)], cwd=root, check=True)
-                subprocess.run([str(binary)], cwd=root, check=True, timeout=15)
-                print(f"{name}: passed", flush=True)
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
-                print(f"{name}: FAILED ({error})", flush=True)
-                failed.append(name)
-        math_outputs = []
-        for level in ["-O0", "-O2"]:
-            target = pathlib.Path(temporary) / ("math_bits" + level)
-            subprocess.run([*cpp_flags, *(["-fmath-errno"] if DARWIN else []), level, "-ffunction-sections", "-fdata-sections",
-                            "port/tests/math_bits.cpp", "port/src/frame.cpp", "port/src/collision.cpp",
-                            "engine/tools/kazarov/src/cpp/sce/libvu0.cpp", DEAD_STRIP, "-o", str(target)], cwd=root, check=True)
-            result = subprocess.check_output([str(target)], cwd=root, text=True, timeout=15)
-            math_outputs.append(result.split()[0])
-        if math_outputs[0] != math_outputs[1]:
-            raise RuntimeError("optimized matrix, clipping and collision results differ from the O0 build")
-        print("math_bits: O0/O2 outputs match", flush=True)
-        movie_test = pathlib.Path(temporary) / "movie_decode"
-        movie_sdk = root / "build/port/movie-sdk"
-        movie_flags = []
-        movie_libraries = []
-        if options.iso:
-            if not (movie_sdk / "include/libavcodec/avcodec.h").exists():
-                parser.error("--iso needs the local movie SDK: python3 -I tools/movie_sdk.py")
-            movie_flags = ["-DPORT_MOVIES", f"-I{movie_sdk / 'include'}"]
-            movie_libraries = [f"-L{movie_sdk / 'lib'}", f"-Wl,-rpath,{movie_sdk / 'lib'}", "-lavcodec", "-lavutil"]
-        subprocess.run([*c_flags, "-Wno-unused-parameter", *movie_flags,
-                        "port/tests/movie_decode.c", "port/src/movie_decode.c", "port/src/cdvd.c", "port/src/overrides.c", "port/src/hooks.c",
-                        *(["-Dclock_gettime=__wrap_clock_gettime"] if DARWIN else ["-Wl,--wrap=clock_gettime"]), *movie_libraries, "-o", str(movie_test)], cwd=root, check=True)
-        subprocess.run([str(movie_test)], cwd=root, check=True, timeout=15)
-        if options.iso:
-            for name in ["L5LOGO.PSS", "TUTO/VTUTO6.PSS"]:
-                subprocess.run([str(movie_test), str(options.iso.resolve()), name], cwd=root, check=True, timeout=60)
-        print("movie_decode: passed", flush=True)
+            if patch["file"] == relative:
+                count = patch.get("count", 1)
+                assert count > 0 and source.count(patch["find"]) == count
+                source = source.replace(patch["find"], patch["replace"], count)
+        path = pathlib.Path(temporary) / name
+        path.write_text(source)
+        sources[name] = str(path)
+    cases.append(("drawprim", [cpp_flags[0], "-I" + str(headers), *cpp_flags[1:], "-ffunction-sections", "-fdata-sections", "port/tests/drawprim.cpp", sources["mg_drawprim.cpp"], sources["mg_texture.cpp"], sources["mg_memory.cpp"], DEAD_STRIP]))
+    cases.append(("texture_anime", [cpp_flags[0], "-I" + str(headers), *cpp_flags[1:], "-ffunction-sections", "-fdata-sections", "port/tests/texture_anime.cpp", sources["mg_tanime.cpp"], sources["mg_memory.cpp"], DEAD_STRIP]))
+    cases.append(("automap", [cpp_flags[0], "-I" + str(headers), *cpp_flags[1:], "-ffunction-sections", "-fdata-sections", "port/tests/automap.cpp", sources["automap.cpp"], DEAD_STRIP]))
+    cases.append(("monster_script", [cpp_flags[0], "-I" + str(headers), *cpp_flags[1:], "-ffunction-sections", "-fdata-sections", "port/tests/monster_script.cpp", sources["runscript.cpp"], sources["runscript_opcodes.cpp"], sources["mg_memory.cpp"], DEAD_STRIP]))
+    cases.append(("effect_heap", [cpp_flags[0], "-I" + str(headers), *cpp_flags[1:], *NO_PIE, "-ffunction-sections", "-fdata-sections", "port/tests/effect_heap.cpp", sources["effscript.cpp"], sources["runscript.cpp"], sources["mg_memory.cpp"], DEAD_STRIP]))
+    collision_objects = []
+    for name in ["mg_math.cpp", "collision_asm.cpp", "gameutil_asm.cpp"]:
+        target = pathlib.Path(temporary) / ("collision_" + name + ".o")
+        subprocess.run([cpp_flags[0], "-I" + str(headers), *cpp_flags[1:],
+                        "-Iengine/port/include", "-Iengine/port/src", "-ffunction-sections", "-fdata-sections",
+                        "-c", "engine/port/src/" + name, "-o", str(target)], cwd=root, check=True)
+        subprocess.run([OBJCOPY, "--weaken", str(target)], cwd=root, check=True)
+        collision_objects.append(str(target))
+    cases.append(("collision", [cpp_flags[0], "-I" + str(headers), *cpp_flags[1:],
+                                "-ffunction-sections", "-fdata-sections", "port/tests/collision.cpp",
+                                "port/src/collision.cpp", sources["mg_math.cpp"], *collision_objects,
+                                "engine/tools/kazarov/src/cpp/sce/libvu0.cpp", DEAD_STRIP]))
+    failed = []
+    for name, command in cases:
+        binary = pathlib.Path(temporary) / name
+        try:
+            subprocess.run([*command, "-o", str(binary)], cwd=root, check=True)
+            subprocess.run([str(binary)], cwd=root, check=True, timeout=15)
+            print(f"{name}: passed", flush=True)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            print(f"{name}: FAILED ({error})", flush=True)
+            failed.append(name)
+    math_outputs = []
+    for level in ["-O0", "-O2"]:
+        target = pathlib.Path(temporary) / ("math_bits" + level)
+        subprocess.run([*cpp_flags, *(["-fmath-errno"] if DARWIN else []), level, "-ffunction-sections", "-fdata-sections",
+                        "port/tests/math_bits.cpp", "port/src/frame.cpp", "port/src/collision.cpp",
+                        "engine/tools/kazarov/src/cpp/sce/libvu0.cpp", DEAD_STRIP, "-o", str(target)], cwd=root, check=True)
+        result = subprocess.check_output([str(target)], cwd=root, text=True, timeout=15)
+        math_outputs.append(result.split()[0])
+    if math_outputs[0] != math_outputs[1]:
+        raise RuntimeError("optimized matrix, clipping and collision results differ from the O0 build")
+    print("math_bits: O0/O2 outputs match", flush=True)
+    movie_test = pathlib.Path(temporary) / "movie_decode"
+    movie_flags = []
+    movie_libraries = []
+    if options.iso:
+        spec = importlib.util.spec_from_file_location("port_build", root / "tools/port.py")
+        port = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(port)
+        movie_cflags, movie_libraries = port.movie_flags(root / "build/port/movie-sdk")
+        movie_flags = ["-DPORT_MOVIES", *movie_cflags]
+    subprocess.run([*c_flags, "-Wno-unused-parameter", *movie_flags,
+                    "port/tests/movie_decode.c", "port/src/movie_decode.c", "port/src/cdvd.c", "port/src/overrides.c", "port/src/hooks.c",
+                    *movie_libraries, "-o", str(movie_test)], cwd=root, check=True)
+    subprocess.run([str(movie_test)], cwd=root, check=True, timeout=15)
+    if options.iso:
+        for name in ["L5LOGO.PSS", "TUTO/VTUTO6.PSS"]:
+            subprocess.run([str(movie_test), str(options.iso.resolve()), name], cwd=root, check=True, timeout=60)
+    print("movie_decode: passed", flush=True)
     subprocess.run([sys.executable, "-I", "port/tests/cdvd.py"], cwd=root, check=True, timeout=30)
     if failed:
         sys.exit("failed: " + ", ".join(failed))

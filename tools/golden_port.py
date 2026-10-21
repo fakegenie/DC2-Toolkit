@@ -76,7 +76,7 @@ def launch(options):
     if "replay" in options:
         environment["DC2TK_REPLAY_INPUT"] = str(ROOT / options["replay"])
     log = open(ROOT / "build" / "port" / "golden-run.log", "w")
-    process = subprocess.Popen([str(binary), str(ROOT / "dc2.iso")], cwd=ROOT, stdout=log, stderr=log, env=environment)
+    process = subprocess.Popen([str(binary), "--mute", "--background", str(ROOT / "dc2.iso")], cwd=ROOT, stdout=log, stderr=log, env=environment)
     for _ in range(300):
         time.sleep(0.1)
         if process.poll() is not None:

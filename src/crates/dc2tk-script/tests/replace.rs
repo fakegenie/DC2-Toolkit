@@ -109,7 +109,13 @@ fn write(path: &Path, data: &[u8]) {
 }
 
 fn mod_json(mod_dir: &Path, body: &Value) {
-    write(&mod_dir.join("mod.json"), serde_json::to_string_pretty(body).unwrap().as_bytes());
+    let mut body = body.clone();
+    if let Some(fields) = body.as_object_mut() {
+        fields.entry("format").or_insert(2.into());
+        fields.entry("id").or_insert(build_common::test_id(&dc2tk_script::paths::file_name(mod_dir)).into());
+        fields.entry("version").or_insert("1.0.0".into());
+    }
+    write(&mod_dir.join("mod.json"), serde_json::to_string_pretty(&body).unwrap().as_bytes());
 }
 
 fn png(colour: [u8; 3]) -> Vec<u8> {
@@ -360,13 +366,16 @@ fn two_mods_changing_one_asset_or_place_are_refused() {
         write(&disc.mods.join(name).join("x.png"), &png([1, 1, 1]));
         mod_json(&disc.mods.join(name), &json!({"replace": {"texture:wall": "x.png"}}));
     }
-    fails(built(&disc, &["a", "b"]), "texture:wall is replaced by more than one chosen mod: a, b");
-    assert_eq!(replace::key_clashes(&[disc.mods.join("a"), disc.mods.join("b")]).unwrap()["texture:wall"], ["a", "b"]);
+    fails(built(&disc, &["a", "b"]), "texture:wall is replaced by more than one chosen mod: test.a, test.b");
+    assert_eq!(
+        replace::key_clashes(&[disc.mods.join("a"), disc.mods.join("b")]).unwrap()["texture:wall"],
+        ["test.a", "test.b"]
+    );
 
     // a whole game file in one mod and a picture inside it in another
     write(&disc.mods.join("b").join("raw.img"), b"raw");
     mod_json(&disc.mods.join("b"), &json!({"replace": {"file:map/b/b02.ipk.d/x.img": "raw.img"}}));
-    fails(built(&disc, &["a", "b"]), "map/b/b02.ipk.d/x.img (mod b) and texture:wall (mod a) both change");
+    fails(built(&disc, &["a", "b"]), "map/b/b02.ipk.d/x.img (mod test.b) and texture:wall (mod test.a) both change");
 
     // a model in one mod and a picture of its pack in another go together
     let (gltf, bin, bin_name) = exported_gltf();
@@ -512,7 +521,7 @@ fn lines_are_checked_as_mod_json_is_read() {
     case(json!({"add": {"sound:SE_NEW": "a.wav"}}), "say which bank");
     case(json!({"add": {"sound:not a name": {"file": "a.wav", "bank": "SP_004"}}}), "named as a C constant");
     case(json!({"add": {"texture:x": "a.png"}}), "add makes sound entries");
-    case(json!({"replace": ["texture:x"]}), "maps asset ids to files");
+    case(json!({"replace": ["texture:x"]}), "invalid type: sequence, expected a map");
     mod_json(
         &mod_dir,
         &json!({"replace": {"sound:SE_X": {"file": "a.wav", "volume": 90}, "file:\\snd2\\x.snd": "a.wav"},
@@ -730,7 +739,10 @@ fn named_wavs_give_the_mods_patches_constants() {
     let mut consts = indexmap::IndexMap::new();
     consts.insert("SE_SP_004_DOOR".to_string(), 1);
     let given = replace::sound_constants(&mods, &consts, &BTreeMap::new()).unwrap();
-    assert_eq!(given["beeps"].keys().collect::<Vec<_>>(), ["SE_SP_004_BEEP", "SE_SP_004_BIG_BEEP", "SE_SP_001_CHIME"]);
+    assert_eq!(
+        given["test.beeps"].keys().collect::<Vec<_>>(),
+        ["SE_SP_004_BEEP", "SE_SP_004_BIG_BEEP", "SE_SP_001_CHIME"]
+    );
     consts.insert("SE_SP_004_BEEP".to_string(), 2);
     fails(replace::sound_constants(&mods, &consts, &BTreeMap::new()), "headers give 2");
 }

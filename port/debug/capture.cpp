@@ -19,7 +19,7 @@ struct Draw {
 
 struct Described {
     char blend[64];
-    char alpha_test[48];
+    char alpha_test[64];
     char depth[48];
     char texa[48];
 };
@@ -83,6 +83,11 @@ static void describe(const RenderState &state, Described *text) {
     else
         snprintf(text->alpha_test, sizeof text->alpha_test, "%s ref %u fail %s", alpha_tests[(state.test >> 1) & 7],
                  (unsigned)((state.test >> 4) & 255), alpha_fails[(state.test >> 12) & 3]);
+    if ((state.test >> 14) & 1) {
+        size_t used = strlen(text->alpha_test);
+        snprintf(text->alpha_test + used, sizeof text->alpha_test - used, ", destination alpha %d",
+                 (int)((state.test >> 15) & 1));
+    }
     if (!((state.test >> 16) & 1)) snprintf(text->depth, sizeof text->depth, "off, write %d", state.depth_write);
     else snprintf(text->depth, sizeof text->depth, "%s, write %d", depth_tests[(state.test >> 17) & 3], state.depth_write);
     snprintf(text->texa, sizeof text->texa, "%d aem %d ta0 %u ta1 %u", state.texa, (int)((state.texa_register >> 15) & 1),

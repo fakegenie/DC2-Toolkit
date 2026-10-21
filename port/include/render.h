@@ -159,6 +159,9 @@ struct SDL_Window;
 struct SDL_GPUTexture;
 struct SDL_GPUDevice *render_device(void);
 struct SDL_Window *render_window(void);
+void render_set_background(int enabled);
+int render_background(void);
+void render_send_back(struct SDL_Window *target);
 struct SDL_GPUTexture *render_gpu_texture(int texture);
 
 #ifdef __cplusplus
