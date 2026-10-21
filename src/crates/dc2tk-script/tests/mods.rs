@@ -204,8 +204,11 @@ fn a_header_change_makes_build_compile_everything_and_say_why() {
     let found = changes(&extra, &root, &iso_path, &IndexMap::new(), false);
     assert_eq!(found.compiled, 2);
     assert!(found.all_because.as_deref().unwrap().contains("headers differ"));
+    assert!(found.all_because.as_deref().unwrap().contains("now records these headers"));
+    let found = changes(&extra, &root, &iso_path, &IndexMap::new(), false);
+    assert!(found.compiled == 0 && found.all_because.is_none(), "the tree took the new headers");
     write(&root, "include/disc.h", "#define X 2\n");
-    let found = changes(&Tools::new(), &root, &iso_path, &IndexMap::new(), false);
+    let found = changes(&extra, &root, &iso_path, &IndexMap::new(), false);
     assert_eq!(found.compiled, 2);
     assert!(found.all_because.as_deref().unwrap().contains("include/disc.h"));
 }

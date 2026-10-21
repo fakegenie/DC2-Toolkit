@@ -57,7 +57,27 @@ static int command_reload(const DebugArgs *args, DebugReply *reply) {
     int rerun = debug_arg_int(args, "rerun", rerun_event) && scene && scene->event_run;
     if (event < 0 && rerun) event = scene->event_no;
     char line[128];
-    if (scene && loop == LOOP_EDIT) {
+    const char *map_text = debug_arg(args, "map", NULL);
+    if (map_text) {
+        int map = debug_map_number(map_text);
+        if (map == -2) return debug_fail(reply, "the game is still starting");
+        if (map < 0) return debug_fail(reply, "map=<number or name> names no map");
+        CCharacter2 *chara = scene && loop == LOOP_EDIT ? player(scene) : NULL;
+        if (chara) chara->GetRotation(restore_rotation);
+        else memset(restore_rotation, 0, sizeof restore_rotation);
+        restore_rotation[1] = (float)debug_arg_number(args, "yaw", restore_rotation[1]);
+        restore_position[0] = (float)debug_arg_number(args, "x", 0.0);
+        restore_position[1] = (float)debug_arg_number(args, "y", 0.0);
+        restore_position[2] = (float)debug_arg_number(args, "z", 0.0);
+        restore_position[3] = 1.0f;
+        restore_map = map;
+        restore_step = debug_arg(args, "x", NULL) ? RESTORE_LEAVING : RESTORE_NONE;
+        restore_frames = 0;
+        settled_frames = 0;
+        snprintf(line, sizeof line, "town?map=%d&event=-1", map);
+        warp(line);
+        if (strstr(reload_result, "\"error\"")) restore_step = RESTORE_NONE;
+    } else if (scene && loop == LOOP_EDIT) {
         CCharacter2 *chara = player(scene);
         if (chara && event < 0) {
             chara->GetPosition(restore_position);
@@ -70,7 +90,7 @@ static int command_reload(const DebugArgs *args, DebugReply *reply) {
         snprintf(line, sizeof line, "town?map=%d&event=%ld", here_map(scene), event);
         warp(line);
     }
-    if (scene && loop == LOOP_DUNGEON) {
+    if (!map_text && scene && loop == LOOP_DUNGEON) {
         CSaveDataDungeon *dungeon = &GetSaveData()->save_dungeon;
         snprintf(line, sizeof line, "dungeon?dungeon=%d&floor=%d&event=%ld", dungeon->stage_id,
                  dungeon->floor_id[dungeon->stage_id], event);
@@ -105,7 +125,8 @@ static int command_overrides(const DebugArgs *args, DebugReply *reply) {
 extern const DebugCommand debug_reload_commands[] = {
     {"reload", command_reload, 0,
      "rescan the override folder and re-enter the current map at the player's position; event=N or rerun=1 "
-     "re-runs an event instead; from=watch marks it automatic"},
+     "re-runs an event instead; map=<number|name> [x= y= z= yaw=] enters that town map instead, the player at "
+     "x, y, z (game axes) turned yaw radians; from=watch marks it automatic"},
     {"overrides", command_overrides, 1,
      "the override folder, how many files it holds and the player's position; from=watch marks dc2tk mod watch "
      "as running"},
@@ -115,10 +136,11 @@ extern const DebugCommand debug_reload_commands[] = {
 void debug_reload_frame(void) {
     if (restore_step == RESTORE_NONE) return;
     CScene *scene = GetMainScene();
-    if (++restore_frames > RESTORE_FRAME_LIMIT || GetNowLoopNo() != LOOP_EDIT) {
+    if (++restore_frames > RESTORE_FRAME_LIMIT) {
         restore_step = RESTORE_NONE;
         return;
     }
+    if (GetNowLoopNo() != LOOP_EDIT) return;
     if (restore_step == RESTORE_LEAVING) {
         if (!scene->exit_flag) restore_step = RESTORE_ENTERING;
         return;

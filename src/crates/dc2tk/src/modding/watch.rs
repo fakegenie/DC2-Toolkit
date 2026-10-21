@@ -40,6 +40,10 @@ pub struct WatchArgs {
     /// Build once, ask the game to reload, and stop.
     #[arg(long)]
     once: bool,
+    /// More of the game's reload request, as map=m01&x=10&y=0&z=-20&yaw=0: enter that map with the
+    /// player there instead of where they stand.
+    #[arg(long, value_name = "ARGS")]
+    reload: Option<String>,
     #[command(flatten)]
     mods: ModsDir,
     #[command(flatten)]
@@ -53,9 +57,13 @@ pub fn run_watch(args: &WatchArgs) -> Result<ExitCode> {
     let port = debug_port(args.port);
     let watched = mod_folders(args.mods.path(), &args.names)?;
     let mut stamps = stamps(&watched)?;
+    let request = match &args.reload {
+        Some(more) => format!("reload?from=watch&{more}"),
+        None => "reload?from=watch".to_string(),
+    };
     loop {
         match rebuild(args, &folder) {
-            Ok(()) => println!("{}", ask(port, "reload?from=watch")),
+            Ok(()) => println!("{}", ask(port, &request)),
             Err(error) => println!("not rebuilt: {error:#}"),
         }
         if args.once {

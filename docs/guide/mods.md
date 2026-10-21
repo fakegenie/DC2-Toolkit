@@ -383,12 +383,15 @@ files the mod changes into `build/port/overrides/` (by their path on the disc, f
 files that changed, removes the ones the mod no longer changes, and tells the game to reload
 through its API (`http://127.0.0.1:7777/reload`, or `$DC2TK_DEBUG_PORT`). Pass `--once` to build
 and reload once, and `--overrides DIR` (or set `DC2TK_OVERRIDES` for both) to use another folder.
+`--reload "map=m01&x=100&y=0&z=-200&yaw=1.57"` adds to the game's reload request: it enters that
+town map with the player at that spot (game axes; yaw in radians) instead of where they stand.
+The Blender add-on's **Play in Game** runs `mod watch --once` this way (see [Maps](maps.md)).
 
 The port reads a file from the override folder instead of the disc whenever one is there, at any
 size. On a reload it rescans the folder and re-enters the current town map with the player where
 they stood, so scripts, maps, models and textures load again; in a dungeon it re-enters the
 floor. `reload?event=N` (or `rerun=1`, which re-runs the event in progress) starts an event
-instead. The debug window's **Reload** button does the same; **auto** lights up while
+instead, and `reload?map=NAME&x=&y=&z=&yaw=` enters a town map at a spot, from the title too. The debug window's **Reload** button does the same; **auto** lights up while
 `mod watch` is running.
 
 Engine files and executable table edits are not reloaded: rebuild the port for those. The

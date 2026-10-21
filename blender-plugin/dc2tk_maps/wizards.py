@@ -72,6 +72,7 @@ _target_items = []
 
 
 def target_maps(self, context):
+    context = context or bpy.context
     items = [(entry.code, entry.name, "") for entry in context.window_manager.dc2tk_maps.maps]
     mod_dir = prefs.absolute(prefs.get(context).mod_dir)
     if mod_dir:

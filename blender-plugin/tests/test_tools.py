@@ -12,7 +12,7 @@ import bpy
 from mathutils import Matrix, Vector
 
 from dc2tk_maps import (
-    animate, budgets, c2data, collision, export_mod, gizmos, library, lighting, look, outliner, overlay, prefs,
+    animate, budgets, c2data, collision, export_mod, gizmos, library, lighting, look, outliner, overlay, play, prefs,
     schema, scripts, testing, tools, validate, views, wizards,
 )
 
@@ -271,6 +271,10 @@ def check_test_loop(context, check, work):
 
 
 def check_door_wizard(context, check, root):
+    listed = context.window_manager.dc2tk_maps.maps
+    if not any(entry.code == "t02" for entry in listed):
+        entry = listed.add()
+        entry.code, entry.name = "t02", "t02"
     mod_dir = prefs.absolute(prefs.get(context).mod_dir)
     activate(context, root)
     context.scene.cursor.location = (0.0, 0.0, 0.0)
@@ -447,6 +451,26 @@ def check_new_map(context, check, root):
     check(refused, "a bad name is refused")
 
 
+def check_play(context, check, root, work):
+    context.scene.cursor.matrix = Matrix.Translation((12.0, -34.0, 5.0))
+    request = play.enter_request(context, root, "CURSOR")
+    check(request == "reload?map=t01&x=12.00&y=5.00&z=34.00&yaw=0.0000", "play at the cursor: %s" % request)
+    check(play.enter_request(context, root, "PLAYER") == "reload?map=t01", "play where the player is")
+    settings = prefs.get(context)
+    mod_dir = os.path.join(work, "mods", "testmod")
+    command = play.watch_command(settings, "src", "dc2.iso", mod_dir, request) if prefs.dc2tk_command(settings) else None
+    if command is not None:
+        check(command[-2:] == ["--reload", "map=t01&x=12.00&y=5.00&z=34.00&yaw=0.0000"] and "--once" in command
+              and "local.testmod" in command, "the watch command: %s" % command)
+    check(play.overrides_dir(settings).endswith(os.path.join("build", "port", "overrides")) or bool(settings.overrides_dir),
+          "the override folder beside the port: %s" % play.overrides_dir(settings))
+    check(not play.running(settings) or True, "asking a game that is not running does not fail")
+    old_iso = settings.iso_path
+    settings.iso_path = work
+    check("ISO" in (play.problems(settings, mod_dir) or ""), "an extracted folder is refused for the port")
+    settings.iso_path = old_iso
+
+
 def run(context, root, work, check):
     check_multi_edit(context, check)
     check_outliner(context, check, root)
@@ -462,10 +486,11 @@ def run(context, root, work, check):
     check_reference_and_layout(context, check, root)
     check_walkable(context, check)
     check_test_loop(context, check, work)
+    check_play(context, check, root, work)
     check_door_wizard(context, check, root)
     check_library(context, check, root)
     check_collision_tools(context, check, root)
     check_new_map(context, check, root)
     print("PASS: map editing tools (%s)" % ", ".join(
         ["multi-edit", "outliner", "ground", "coordinates", "instances", "lighting", "animation", "scripts", "budgets",
-         "handles", "cells", "walkable", "test loop", "door", "library", "collision", "new map"]))
+         "handles", "cells", "walkable", "test loop", "play", "door", "library", "collision", "new map"]))

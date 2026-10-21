@@ -79,17 +79,18 @@ def select_export_objects(context, objects, state):
         if layer.exclude:
             layer.exclude = False
         layer.hide_viewport = False
+    in_layer = set(context.view_layer.objects)
     for obj in objects:
-        hidden = obj.hide_get() if obj.name in context.view_layer.objects else False
+        hidden = obj.hide_get() if obj in in_layer else False
         state["objects"].append((obj.name, hidden, obj.hide_viewport, obj.hide_select))
         obj.hide_viewport = False
         obj.hide_select = False
-        if obj.name in context.view_layer.objects:
+        if obj in in_layer:
             obj.hide_set(False)
     for obj in context.selected_objects:
         obj.select_set(False)
     for obj in objects:
-        if obj.name in context.view_layer.objects:
+        if obj in in_layer:
             obj.select_set(True)
 
 
@@ -97,17 +98,18 @@ def restore_export_state(context, state):
     look.restore_materials(state["materials"])
     for obj in context.selected_objects:
         obj.select_set(False)
+    in_layer = set(context.view_layer.objects)
     for name, hidden, hide_viewport, hide_select in state["objects"]:
         obj = bpy.data.objects.get(name)
         if obj is None:
             continue
         obj.hide_viewport = hide_viewport
         obj.hide_select = hide_select
-        if obj.name in context.view_layer.objects:
+        if obj in in_layer:
             obj.hide_set(hidden)
     for name in state["selected"]:
         obj = bpy.data.objects.get(name)
-        if obj is not None and obj.name in context.view_layer.objects and obj.visible_get():
+        if obj is not None and obj in in_layer and obj.visible_get():
             obj.select_set(True)
     if state["active"] and state["active"] in context.view_layer.objects:
         context.view_layer.objects.active = context.view_layer.objects[state["active"]]

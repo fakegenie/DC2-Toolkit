@@ -856,6 +856,7 @@ extern "C" void debug_frame_exit(void) {
     debug_replay_frame();
     debug_savestate_frame();
     debug_reload_frame();
+    debug_scenario_frame();
     debug_run_queued();
     release_frame_waiters();
     if (debug_steps > 0) debug_steps--;

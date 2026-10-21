@@ -188,6 +188,12 @@ static int ready(void) {
     return map_total > 0;
 }
 
+int debug_map_number(const char *text) {
+    if (!ready()) return -2;
+    int map = parse_map(text);
+    return map >= 0 && GetMapType(map) >= 0 ? map : -1;
+}
+
 static int in_playable_loop(void) {
     int loop = GetNowLoopNo();
     return loop == LOOP_EDIT || loop == LOOP_DUNGEON;
@@ -199,18 +205,44 @@ static void arrive_from_town(int map) {
     scene->old_map_no = map;
 }
 
+enum { TITLE_RETRY_FRAMES = 30, TITLE_WARP_FRAMES = 900 };
+
+static int title_frames = -1;
+static int title_loop;
+static INIT_LOOP_ARG title_arg;
+
+static void leave_title(void) {
+    if (title_loop == LOOP_EDIT) arrive_from_town(title_arg.map_no);
+    NextLoop(title_loop, title_arg);
+    DebugFlag = 1;
+    debug_run("press?buttons=start,select&frames=1");
+}
+
 static int warp(int loop, INIT_LOOP_ARG arg, DebugReply *reply) {
     int now = GetNowLoopNo();
     if (now != LOOP_TITLE && !in_playable_loop())
         return debug_fail(reply, "cannot leave the %s loop; only title, town and dungeon can be left",
                           now >= 0 && now < LOOP_MODE_NUM ? loop_names[now] : "unknown");
+    if (now == LOOP_TITLE) {
+        title_loop = loop;
+        title_arg = arg;
+        title_frames = 0;
+        leave_title();
+        return 0;
+    }
     if (loop == LOOP_EDIT) arrive_from_town(arg.map_no);
     NextLoop(loop, arg);
-    if (now == LOOP_TITLE) {
-        DebugFlag = 1;
-        debug_run("press?buttons=start,select&frames=1");
-    } else GetMainScene()->exit_flag = 1;
+    GetMainScene()->exit_flag = 1;
     return 0;
+}
+
+void debug_scenario_frame(void) {
+    if (title_frames < 0) return;
+    if (GetNowLoopNo() != LOOP_TITLE || ++title_frames > TITLE_WARP_FRAMES) {
+        title_frames = -1;
+        return;
+    }
+    if (title_frames % TITLE_RETRY_FRAMES == 0) leave_title();
 }
 
 static int enter(int loop, INIT_LOOP_ARG arg, DebugReply *reply) {

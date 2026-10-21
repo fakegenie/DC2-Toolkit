@@ -17,7 +17,7 @@ language select, title, the attract demo, New Game, the costume screen, the open
 the castle dungeon with its HUD, and the main and item menus. `port/tests/run.py` passes on macOS.
 Linux x86-64 builds and plays too (2026-10-21, in a Docker container on the Mac; see "This
 machine"): both binaries link with 0 stubs, the title, a town and a dungeon play headless on
-Vulkan, and `port/tests/run.py` passes; fixes 17 to 22 are what it left. Part 2 below
+Vulkan, and `port/tests/run.py` passes; fixes 17 to 21 are what it left. Part 2 below
 describes the port as it is now; the table and notes after this paragraph are the earlier review
 of the emulated port and are kept for the engine milestones and the fixes.
 
@@ -153,9 +153,9 @@ written fresh. These are what it found to fix:
     Use `$XDG_DATA_HOME/Dark Chronicle/saves`, falling back to `~/.local/share`.
 21. **The costume screen draws white patches over Max** (face, hands, a block over the body),
     on macOS and Linux alike, in the release build after New Game.
-22. **Debug warps from the title during the attract demo** only end the demo: the warp's
-    Start+Select press is taken as "leave the demo", so the first `town` or `dungeon` there does
-    nothing and a second one is needed.
+22. **Done: debug warps from the title during the attract demo.** The warp's Start+Select press
+    only ended the demo; a warp from the title now presses again every 30 frames until the title
+    is left (`port/debug/scenario.cpp`).
 
 ### Gates only the user can run
 

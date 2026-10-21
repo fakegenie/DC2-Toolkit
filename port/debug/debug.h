@@ -59,6 +59,7 @@ const DebugFrame *debug_frame_back(int back);
 const char *debug_arg(const DebugArgs *args, const char *key, const char *fallback);
 long debug_arg_int(const DebugArgs *args, const char *key, long fallback);
 double debug_arg_number(const DebugArgs *args, const char *key, double fallback);
+int debug_map_number(const char *text);
 void debug_parse_query(const char *query, DebugArgs *args);
 void debug_print(DebugReply *reply, const char *format, ...);
 void debug_print_string(DebugReply *reply, const char *text);
@@ -117,6 +118,7 @@ void debug_replay_input(struct port_input_state *state);
 void debug_replay_frame(void);
 void debug_savestate_frame(void);
 void debug_reload_frame(void);
+void debug_scenario_frame(void);
 
 #ifdef __cplusplus
 }

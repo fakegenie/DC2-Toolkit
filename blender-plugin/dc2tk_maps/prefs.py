@@ -2,7 +2,7 @@ import os
 import sys
 
 import bpy
-from bpy.props import StringProperty
+from bpy.props import IntProperty, StringProperty
 
 PACKAGE = __package__
 
@@ -57,6 +57,25 @@ class Dc2tkPreferences(bpy.types.AddonPreferences):
         subtype="FILE_PATH",
         default="",
     )
+    port_binary: StringProperty(
+        name="Debug port",
+        description="The native port's debug build Play in Game runs; empty for build/port/darkchronicle-debug in the repository",
+        subtype="FILE_PATH",
+        default="",
+    )
+    overrides_dir: StringProperty(
+        name="Override folder",
+        description="Where Play in Game builds the mod's game files for the port to read; empty for overrides beside the port",
+        subtype="DIR_PATH",
+        default="",
+    )
+    debug_port: IntProperty(
+        name="API port",
+        description="The port of the debug build's API (DC2TK_DEBUG_PORT)",
+        default=7777,
+        min=1,
+        max=65535,
+    )
 
     def draw(self, context):
         layout = self.layout
@@ -71,6 +90,10 @@ class Dc2tkPreferences(bpy.types.AddonPreferences):
         layout.prop(self, "source_dir")
         layout.prop(self, "iso_path")
         layout.prop(self, "output_iso")
+        layout.separator()
+        layout.prop(self, "port_binary")
+        layout.prop(self, "overrides_dir")
+        layout.prop(self, "debug_port")
 
 
 def get(context=None):

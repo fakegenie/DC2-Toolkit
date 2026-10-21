@@ -760,6 +760,14 @@ class Dc2tkSettings(bpy.types.PropertyGroup):
     test_play: BoolProperty(
         name="Boot in PCSX2", description="Boot the test image in PCSX2 once it is built (build --play)", default=False
     )
+    play_start: EnumProperty(
+        name="Start", description="Where Play in Game puts the player",
+        items=(
+            ("CURSOR", "3D cursor", "Enter the map with the player at the 3D cursor, facing its way", "PIVOT_CURSOR", 0),
+            ("PLAYER", "Where the player is", "Reload the map with the player where they stand in the game", "USER", 1),
+        ),
+        default="CURSOR",
+    )
     place_name: StringProperty(name="Name", description="The game's name (31 bytes at most)", get=get_node_name, set=set_node_name)
     place_template: StringProperty(name="Template", description="PARTS_NAME: the template this placement copies", get=get_template, set=set_template)
     place_show: BoolProperty(name="Shown", description="MAP_PARTS show flag", get=get_show, set=set_show)

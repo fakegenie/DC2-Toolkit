@@ -2,8 +2,9 @@
 the last Preview Changes (dc2tk build --dry-run, whose memory check is the engine's own sums)."""
 
 import bpy
+import numpy
 
-from . import c2data, schema
+from . import c2data, outliner, schema
 
 PREVIEW_TEXT = "dc2tk preview"
 
@@ -20,11 +21,12 @@ def placement_slots(root):
 
 def new_models(root):
     """Models made in Blender: pieces whose meshes carry no mds_index (no model of the disc)."""
+    children = c2data.child_map()
     found = set()
-    for piece in c2data.descendants(root):
+    for piece in c2data.descendants(root, children):
         if c2data.role(piece) != "piece":
             continue
-        meshes = [obj for obj in c2data.descendants(piece) if obj.type == "MESH"]
+        meshes = [obj for obj in c2data.descendants(piece, children) if obj.type == "MESH"]
         if meshes and all("mds_index" not in (c2data.get(obj) or {}) for obj in meshes):
             found.add(str(c2data.lookup(piece, ("model",), "")).lower())
     return sorted(found)
@@ -48,12 +50,21 @@ def new_pictures(root):
     return found
 
 
+def mesh_triangles(mesh):
+    totals = numpy.zeros(len(mesh.polygons), dtype=numpy.int32)
+    mesh.polygons.foreach_get("loop_total", totals)
+    return int(totals.sum()) - 2 * len(totals)
+
+
 def triangles(root):
     drawn = collision = 0
+    counted = {}
     for obj in c2data.map_objects(root):
         if obj.type != "MESH":
             continue
-        count = sum(len(polygon.vertices) - 2 for polygon in obj.data.polygons)
+        if obj.data not in counted:
+            counted[obj.data] = mesh_triangles(obj.data)
+        count = counted[obj.data]
         if c2data.is_collision_mesh(obj):
             collision += count
         else:
@@ -84,19 +95,33 @@ def meter(layout, label, used, limit, note=""):
         row.progress(factor=min(1.0, used / float(limit)), text="%d%%" % round(100.0 * used / limit))
 
 
+_figures = {"key": None}
+
+
+def figures(root):
+    key = (root.name, outliner.content["count"])
+    if _figures["key"] != key:
+        placed = c2data.placements(root)
+        _figures.update(key=key, slots=placement_slots(root), models=new_models(root), pictures=new_pictures(root),
+                        triangles=triangles(root), placements=len(placed), points=len(c2data.points(root)),
+                        templates=any(c2data.is_preview(obj) for obj in placed))
+    return _figures
+
+
 def draw(layout, context, root):
     name = c2data.map_name(root)
     dungeon = name.startswith("d")
-    slots, new = placement_slots(root)
+    found = figures(root)
+    slots, new = found["slots"]
     box = layout.box()
     meter(box, "Placements", slots, schema.PLACEMENT_LIMIT_DUNGEON if dungeon else schema.PLACEMENT_LIMIT,
           "(%d new)" % new if new else "")
-    models = new_models(root)
+    models = found["models"]
     meter(box, "New models", len(models), 0, "(a pack holds %d)" % schema.PACK_MODELS)
-    pictures = new_pictures(root)
+    pictures = found["pictures"]
     texels = sum(w * h for w, h in pictures.values())
     meter(box, "New pictures", len(pictures), 0, "(%d texels)" % texels if pictures else "")
-    drawn, collision = triangles(root)
+    drawn, collision = found["triangles"]
     box.label(text="Triangles: %d drawn, %d collision" % (drawn, collision), icon="MESH_DATA")
     lines = preview_lines(name)
     box = layout.box()

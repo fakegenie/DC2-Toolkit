@@ -220,13 +220,14 @@ def show_sky(context, hour, roots=None):
     layer_objects = context.view_layer.objects
     for root in roots if roots is not None else c2data.scene_map_roots(context.scene):
         wanted = sky_band(root, hour)
+        children = c2data.child_map()
         for obj in c2data.display_objects(root):
             obj.hide_select = True
             band = c2data.lookup(obj, ("band",))
             if c2data.lookup(obj, ("what",)) != "sky band":
                 continue
             visible = band == wanted
-            for below in c2data.descendants(obj):
+            for below in c2data.descendants(obj, children):
                 if below.name in layer_objects:
                     below.hide_set(not visible)
                 below.hide_render = not visible
@@ -236,8 +237,9 @@ def show_hour(context, hour, enabled=True, roots=None):
     hidden = 0
     layer_objects = context.view_layer.objects
     show_sky(context, hour if enabled else None, roots)
+    children = c2data.child_map()
     for root in roots if roots is not None else c2data.scene_map_roots(context.scene):
-        for piece in c2data.descendants(root):
+        for piece in c2data.descendants(root, children):
             if c2data.role(piece) != "piece":
                 continue
             placement = c2data.placement_of(piece)
@@ -247,7 +249,7 @@ def show_hour(context, hour, enabled=True, roots=None):
                 and (placement is None or shown(placement))
             )
             hidden += not visible
-            for obj in c2data.descendants(piece):
+            for obj in c2data.descendants(piece, children):
                 if obj.name in layer_objects:
                     obj.hide_set(not visible)
                 obj.hide_render = not visible

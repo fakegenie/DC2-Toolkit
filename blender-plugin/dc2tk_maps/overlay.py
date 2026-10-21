@@ -373,20 +373,22 @@ LAYERS = (
 CELL_COLOURS = ((0.6, 0.6, 0.6, 1.0), (1.0, 0.35, 0.2, 1.0))
 
 
-def _make_batches(context, shader):
+def _make_batches(context, shader, shown):
     from gpu_extras.batch import batch_for_shader
 
     batches = []
     for setting, coords_of, colour in LAYERS:
+        if setting not in shown:
+            continue
         lines, selected = coords_of(context)
         for coords, tint in ((lines, colour), (selected, SELECTED)):
             if coords:
                 batches.append((batch_for_shader(shader, "LINES", {"pos": coords}), tint, setting, False))
-    if context.window_manager.dc2tk_maps.show_cells:
+    if "show_cells" in shown:
         for coords, tint in zip(cell_coords(context), CELL_COLOURS):
             if coords:
                 batches.append((batch_for_shader(shader, "LINES", {"pos": coords}), tint, "show_cells", False))
-    if context.window_manager.dc2tk_maps.show_walkable:
+    if "show_walkable" in shown:
         for coords, tint in walkable_tris(context):
             if coords:
                 batches.append((batch_for_shader(shader, "TRIS", {"pos": coords}), tint, "show_walkable", True))
@@ -406,17 +408,15 @@ def draw():
     shader = _shader()
     if shader is None:
         return
-    if _batches is None:
-        _batches = _make_batches(context, shader)
-    if not _batches:
+    if _batches is None or _batches[0] != shown:
+        _batches = (shown, _make_batches(context, shader, shown))
+    if not _batches[1]:
         return
     import gpu
 
     gpu.state.line_width_set(1.5)
     shader.bind()
-    for batch, colour, setting, filled in _batches:
-        if setting not in shown:
-            continue
+    for batch, colour, setting, filled in _batches[1]:
         if filled:
             gpu.state.blend_set("ALPHA")
             gpu.state.depth_test_set("LESS_EQUAL")

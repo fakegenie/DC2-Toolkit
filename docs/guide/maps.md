@@ -19,6 +19,8 @@
    (Without the add-on, export the scene as **glTF Separate** with custom properties and +Y up, and add the line yourself.)
 3. Build the ISO with `dc2tk build`. It rewrites only what changed: the `.map` file, edited or new models, and edited or new textures. An unedited scene changes nothing.
 
+To see a change in the game without building an ISO, press **Play in Game** (F5) in the add-on instead of step 3. It exports the map, builds it into the native port's override folder, and shows it in the port's debug build with the player at the 3D cursor, starting the game first if it is not running. Press F5 again after each edit; **Cursor to Player** takes the 3D cursor back to where the player stands in the game. This needs the debug build (`python3 -I tools/port.py --movies --debug`) and the retail ISO set in the add-on's preferences.
+
 `dc2tk map-export --list` lists every map with its title. Dungeon floor libraries such as `d01f01` are not in `extracted/maps`; export them the same way (see [Dungeons](dungeons.md)).
 
 ## Installing the Blender add-on

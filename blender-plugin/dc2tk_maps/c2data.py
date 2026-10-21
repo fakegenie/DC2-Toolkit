@@ -159,13 +159,22 @@ def map_name(root):
     return schema.game_name(root.name, "map") if root is not None else ""
 
 
-def descendants(obj):
+def child_map():
+    found = {}
+    for obj in bpy.data.objects:
+        if obj.parent is not None:
+            found.setdefault(obj.parent, []).append(obj)
+    return found
+
+
+def descendants(obj, children=None):
+    children = child_map() if children is None else children
     found = []
     stack = [obj]
     while stack:
         current = stack.pop()
         found.append(current)
-        stack.extend(current.children)
+        stack.extend(children.get(current, ()))
     return found
 
 
@@ -181,6 +190,7 @@ def make_new_node(obj):
 def map_objects(root):
     """The map's own objects: every one under its root but what the scene only shows (role
     display: its sky), which is never exported."""
+    children = child_map()
     found = []
     stack = [root]
     while stack:
@@ -188,16 +198,17 @@ def map_objects(root):
         if role(current) == "display":
             continue
         found.append(current)
-        stack.extend(current.children)
+        stack.extend(children.get(current, ()))
     return found
 
 
 def display_objects(root):
     """What the scene only shows of the map (its sky): every display node and what is below."""
+    children = child_map()
     found = []
-    for obj in descendants(root):
+    for obj in descendants(root, children):
         if role(obj) == "display" and (obj.parent is None or role(obj.parent) != "display"):
-            found.extend(descendants(obj))
+            found.extend(descendants(obj, children))
     return found
 
 
@@ -241,9 +252,10 @@ def collision_pieces(root, kinds=schema.COLLISION_KINDS):
 
 
 def collision_meshes(root):
+    children = child_map()
     found = []
     for piece in collision_pieces(root):
-        for obj in descendants(piece):
+        for obj in descendants(piece, children):
             if obj.type == "MESH":
                 found.append(obj)
     return found

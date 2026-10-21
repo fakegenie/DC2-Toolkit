@@ -30,6 +30,7 @@ def match_nodes(gltf, roots):
     nodes = gltf.get("nodes", [])
     scene = gltf.get("scenes", [{}])[gltf.get("scene", 0)] if gltf.get("scenes") else {}
     found = {}
+    children = c2data.child_map()
 
     def pair(indices, objects):
         by_name = {}
@@ -42,7 +43,7 @@ def match_nodes(gltf, roots):
                 continue
             obj = candidates.pop(0)
             found[index] = obj
-            pair(nodes[index].get("children") or [], list(obj.children))
+            pair(nodes[index].get("children") or [], children.get(obj, []))
 
     pair(scene.get("nodes", []), roots)
     return found
@@ -235,17 +236,18 @@ def postprocess(context, gltf_path, new_objects, log=None):
             )
 
     mode = context.window_manager.dc2tk_maps.collision_colour if hasattr(context.window_manager, "dc2tk_maps") else "AREA"
+    children = c2data.child_map()
     for root in roots:
         collections = collision_collections(context, root)
         for piece in c2data.collision_pieces(root):
             kind = c2data.lookup(piece, ("kind",))
-            for obj in c2data.descendants(piece):
+            for obj in c2data.descendants(piece, children):
                 move_to(obj, collections[kind])
         for kind in collections:
             set_collision_visible(context, root, kind, False)
         colour_collision(root, mode)
 
-        for obj in c2data.descendants(root):
+        for obj in c2data.descendants(root, children):
             role = c2data.role(obj)
             if role == "placement" and obj.type == "EMPTY":
                 obj.empty_display_type = "PLAIN_AXES"
@@ -253,7 +255,7 @@ def postprocess(context, gltf_path, new_objects, log=None):
             elif role == "group" and obj.type == "EMPTY":
                 obj.empty_display_size = 5.0
 
-        materials = {slot.material for obj in c2data.descendants(root) if obj.type == "MESH" for slot in obj.material_slots}
+        materials = {slot.material for obj in c2data.descendants(root, children) if obj.type == "MESH" for slot in obj.material_slots}
         look.apply_all([material for material in materials if material is not None])
         if hasattr(context.window_manager, "dc2tk_maps"):
             settings = context.window_manager.dc2tk_maps

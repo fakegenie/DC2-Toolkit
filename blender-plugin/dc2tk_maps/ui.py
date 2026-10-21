@@ -2,7 +2,7 @@ import json
 
 import bpy
 
-from . import c2data, edit, import_map, outliner, prefs, props, runner, schema, scripts, validate
+from . import budgets, c2data, edit, import_map, outliner, prefs, props, runner, schema, scripts, validate
 
 CATEGORY = "Dark Chronicle"
 ROLE_LABELS = {
@@ -335,7 +335,8 @@ class DC2TK_PT_main(bpy.types.Panel):
         row.prop(settings, "show_spots")
         if c2data.lookup(root, ("cfg",)) is not None:
             box.prop(settings, "show_cfg")
-        if any(c2data.is_preview(obj) for obj in c2data.placements(root)):
+        found = budgets.figures(root)
+        if found["templates"]:
             box.prop(settings, "show_cells", text="Dungeon cells and closed sides")
         row = box.row(align=True)
         row.prop(settings, "by_hour", text="", icon="TIME")
@@ -346,7 +347,7 @@ class DC2TK_PT_main(bpy.types.Panel):
         row.operator("dc2tk.play_animations", icon="PAUSE" if animation_playing() else "PLAY")
         row.operator("dc2tk.read_scripts", icon="TEXT")
         counts = box.column(align=True)
-        counts.label(text="%d placements, %d points" % (len(c2data.placements(root)), len(c2data.points(root))))
+        counts.label(text="%d placements, %d points" % (found["placements"], found["points"]))
 
 
 def animation_playing():
@@ -444,8 +445,6 @@ class DC2TK_PT_budgets(bpy.types.Panel):
         return c2data.current_map_root(context) is not None
 
     def draw(self, context):
-        from . import budgets
-
         budgets.draw(self.layout, context, c2data.current_map_root(context))
 
 
@@ -607,6 +606,9 @@ class DC2TK_PT_export(bpy.types.Panel):
         box.operator("dc2tk.export_mod", icon="EXPORT")
         box = layout.box()
         box.label(text="Try it", icon="PLAY")
+        from . import play
+
+        play.draw(box, context)
         row = box.row(align=True)
         row.operator("dc2tk.preview_changes", icon="VIEWZOOM")
         row.operator("dc2tk.test_here", icon="PLAY")

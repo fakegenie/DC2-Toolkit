@@ -16,7 +16,8 @@ Chronicle adds every kind of point, a door to another map, a template of any
 map, a placement copy, a new model and a player to measure by; right-clicking
 an object gives Drop to Ground, Copy Game Coordinates and the template
 tools; Shift+Alt+D opens a pie of the common ones (door, light, spawn, chest,
-drop to ground, duplicate, validate, test here).
+drop to ground, duplicate, validate, play in game), and F5 plays the map in the
+native port (Play in Game, below).
 
 ## Install
 
@@ -48,6 +49,7 @@ Preferences:
 | map export arguments | `map-export {name} -o {out}` |
 | exported maps | `extracted/maps` in the repository |
 | mod folder, source tree, retail disc, output disc image | for Export and Build; the source tree defaults to `extracted/scripts`; the retail disc is the ISO or an untouched extracted disc folder |
+| debug port, override folder, API port | for Play in Game: `build/port/darkchronicle-debug`, `overrides` beside it, 7777 (the port's `DC2TK_DEBUG_PORT`) |
 
 ## Use
 
@@ -303,6 +305,19 @@ the built map will have (deleted ones keep their slots) against its limit,
 the new models and pictures, the triangles drawn and collided with, and the
 last preview's memory figures, which are the engine's own sums.
 
+**Play in Game (F5).** Exports the map into the mod, builds the mod into the
+native port's override folder (`dc2tk mod watch --once`, a second or two for a
+map) and shows it in the debug port: on the map with the player at the 3D
+cursor, facing its way, or, with "Where the player is", reloaded with the
+player where they stand. The debug port (`python3 -I tools/port.py --movies
+--debug`) is started over the retail disc when it is not running, and taken past
+the language select and the title by itself; the retail disc must be the ISO.
+Edit, press F5 again, and the game shows the change a few seconds later. The
+cursor button beside it, Cursor to Player, does the opposite: it puts the 3D
+cursor where the player stands in the game and centres the view there. A dungeon
+floor's map is reloaded where the player is, since its parts are laid out at
+run time.
+
 **Try it.** Read Map Scripts runs `dc2tk map SOURCE NAME --json` and keeps
 what the map's scripts know of it in the .blend: their programs, the spots
 where they place the player, and the placements, pieces and points they
@@ -423,7 +438,8 @@ placements, the player for scale); `outliner.py`, `menus.py` and
 `budgets.py` are the list, Blender's menus and the Budgets panel;
 `lighting.py` edits light sets and keeps turned suns in step; `animate.py`
 steps anime points; `scripts.py` keeps the scripts' report in a text block;
-`testing.py` is the loop to the game (preview, test image); `wizards.py`
+`testing.py` is the loop to the game (preview, test image), and `play.py` the
+one to the native port (Play in Game, Cursor to Player); `wizards.py`
 makes doors, programs and new maps; `library.py` takes templates from other
 maps and lays dungeon layouts out; `collision.py`, `views.py` and
 `gizmos.py` are the collision tools, cameras and draw flags, and the

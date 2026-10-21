@@ -35,12 +35,25 @@ _cache = {"key": None, "flags": None}
 
 # bumped whenever the scene changes, for what panels work out from the whole map
 generation = {"count": 0}
+# bumped when more than where things are changes: what the map holds, its meshes, pictures, data
+content = {"count": 0}
+
+
+def moved_only(depsgraph):
+    for update in depsgraph.updates:
+        if isinstance(update.id, bpy.types.Scene):
+            continue
+        if not isinstance(update.id, bpy.types.Object) or update.is_updated_geometry or not update.is_updated_transform:
+            return False
+    return True
 
 
 @bpy.app.handlers.persistent
-def invalidate(*_args):
+def invalidate(_scene=None, depsgraph=None):
     _cache["key"] = None
     generation["count"] += 1
+    if depsgraph is None or not moved_only(depsgraph):
+        content["count"] += 1
 
 
 def describe(obj):

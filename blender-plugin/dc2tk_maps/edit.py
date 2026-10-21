@@ -418,8 +418,9 @@ class DC2TK_OT_toggle_collision(bpy.types.Operator):
         visible = import_map.collision_visible(context, root, self.kind)
         if visible is None:
             collections = import_map.collision_collections(context, root)
+            children = c2data.child_map()
             for piece in c2data.collision_pieces(root, (self.kind,)):
-                for obj in c2data.descendants(piece):
+                for obj in c2data.descendants(piece, children):
                     import_map.move_to(obj, collections[self.kind])
             visible = False
         import_map.set_collision_visible(context, root, self.kind, not visible)

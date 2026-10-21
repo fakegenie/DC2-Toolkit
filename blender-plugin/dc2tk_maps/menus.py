@@ -60,7 +60,7 @@ class DC2TK_MT_pie(bpy.types.Menu):
         pie.operator("dc2tk.duplicate_placement", icon="DUPLICATE")
         pie.operator_context = "INVOKE_DEFAULT"
         pie.operator("dc2tk.validate", icon="CHECKMARK")
-        pie.operator("dc2tk.test_here", icon="PLAY")
+        pie.operator("dc2tk.play_in_game", icon="PLAY")
 
 
 def menu_add(self, context):
@@ -88,6 +88,7 @@ def register():
         item = keymap.keymap_items.new("wm.call_menu_pie", key, "PRESS", shift=shift, alt=alt)
         item.properties.name = DC2TK_MT_pie.bl_idname
         _keymaps.append((keymap, item))
+        _keymaps.append((keymap, keymap.keymap_items.new("dc2tk.play_in_game", "F5", "PRESS")))
 
 
 def unregister():

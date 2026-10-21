@@ -97,6 +97,8 @@ pub fn disc_location(relative: &str, disc: &DiscSource) -> Option<Location> {
     Some(Location { top: top.to_string(), members: parts[1..].iter().map(|part| part.to_string()).collect() })
 }
 
+pub const HEADERS_DIFFER: &str = "the SDK or definition headers differ from the ones the tree was decompiled with";
+
 /// Scripts that cannot differ from the disc: unchanged since the decompiler wrote them, as are the
 /// libraries they include, and replaced by no override. Every retail script compiles back to its
 /// own bytes (verify), so build need not compile these. Empty for a tree with no record, with why.
@@ -113,12 +115,6 @@ pub fn settled_and_why(
             Some("the tree has no record of what was decompiled; decompile it again for fast builds".into()),
         ));
     };
-    if record["headers"].as_str() != Some(tree::headers_hash(headers).as_str()) {
-        return Ok((
-            HashSet::new(),
-            Some("the SDK or definition headers differ from the ones the tree was decompiled with".into()),
-        ));
-    }
     let recorded: IndexMap<String, String> = record["files"]
         .as_object()
         .map(|files| files.iter().filter_map(|(path, hash)| Some((path.clone(), hash.as_str()?.to_string()))).collect())
@@ -131,7 +127,32 @@ pub fn settled_and_why(
             }
         }
     }
+    if record["headers"].as_str() != Some(tree::headers_hash(headers).as_str()) {
+        return Ok((HashSet::new(), Some(HEADERS_DIFFER.into())));
+    }
     Ok((settled_scripts(tree_dir, overrides, &recorded)?, None))
+}
+
+/// After a build compiled every script because the headers changed: when every script that would
+/// have been left alone still compiles to the disc's bytes, the new headers change nothing, and the
+/// tree's record takes them, so the next build compiles only what changed again.
+fn take_headers(
+    tree_dir: &Path,
+    overrides: &IndexMap<String, String>,
+    headers: &IndexMap<String, String>,
+    plan: Option<&patches::Plan>,
+    changed: &[Change],
+) -> Result<bool> {
+    let Some(recorded) = tree::originals(tree_dir)? else { return Ok(false) };
+    let mut untouched = settled_scripts(tree_dir, overrides, &recorded)?;
+    if let Some(plan) = plan {
+        untouched.retain(|path| !plan.scripts.contains_key(path));
+    }
+    if changed.iter().any(|change| untouched.contains(&change.source)) {
+        return Ok(false);
+    }
+    tree::record(tree_dir, &[], Some(&tree::headers_hash(headers)), &[])?;
+    Ok(true)
 }
 
 fn settled_scripts(
@@ -197,7 +218,7 @@ pub fn changes(
     full: bool,
     plan: Option<&patches::Plan>,
 ) -> Result<Changes> {
-    let (mut skip, why) = if full {
+    let (mut skip, mut why) = if full {
         (HashSet::new(), Some("--full".to_string()))
     } else {
         settled_and_why(tree_dir, overrides, tools.headers)?
@@ -258,6 +279,9 @@ pub fn changes(
         if let Some(change) = result? {
             found.push(change);
         }
+    }
+    if why.as_deref() == Some(HEADERS_DIFFER) && take_headers(tree_dir, overrides, tools.headers, plan, &found)? {
+        why = Some(format!("{HEADERS_DIFFER}; every unedited script still compiles to the disc's bytes, so the tree now records these headers"));
     }
     let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     for change in &found {

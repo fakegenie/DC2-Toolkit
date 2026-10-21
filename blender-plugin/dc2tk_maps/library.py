@@ -136,13 +136,14 @@ def adopt(context, root, placement, source, template):
     placement.name = schema.PREFIX["placement"] + name
     models = {str(c2data.lookup(obj, ("model",), "")).lower() for obj in c2data.descendants(root) if c2data.role(obj) == "piece"}
     renamed = {}
-    for piece in [obj for obj in c2data.descendants(placement) if c2data.role(obj) == "piece"]:
+    children = c2data.child_map()
+    for piece in [obj for obj in c2data.descendants(placement, children) if c2data.role(obj) == "piece"]:
         model = str(c2data.lookup(piece, ("model",), ""))
         if model not in renamed:
             stem = model[:-4] if model.lower().endswith(".mds") else model
             renamed[model] = own_name(models, "%s_%s" % (source, stem), schema.NAME_LIMIT - len(".mds")) + ".mds"
         c2data.assign(piece, ("model",), renamed[model])
-        for node in c2data.descendants(piece)[1:]:
+        for node in c2data.descendants(piece, children)[1:]:
             if c2data.role(node) == "mds":
                 c2data.make_new_node(node)
     pictures = set()
@@ -181,10 +182,11 @@ def adopt(context, root, placement, source, template):
                 if material.get("texture") is not None:
                     material["texture"] = images[node.image.name]
     collections = import_map.collision_collections(context, root)
-    for piece in [obj for obj in c2data.descendants(placement) if c2data.role(obj) == "piece"]:
+    children = c2data.child_map()
+    for piece in [obj for obj in c2data.descendants(placement, children) if c2data.role(obj) == "piece"]:
         kind = c2data.lookup(piece, ("kind",))
         if kind in schema.COLLISION_KINDS:
-            for obj in c2data.descendants(piece):
+            for obj in c2data.descendants(piece, children):
                 import_map.move_to(obj, collections[kind])
     import_map.colour_collision(root, context.window_manager.dc2tk_maps.collision_colour)
     materials = {slot.material for obj in c2data.descendants(placement) if obj.type == "MESH" for slot in obj.material_slots}
