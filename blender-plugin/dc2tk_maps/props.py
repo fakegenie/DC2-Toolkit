@@ -724,6 +724,16 @@ class Dc2tkSettings(bpy.types.PropertyGroup):
     outline_referenced: BoolProperty(
         name="Named by scripts", description="Only what the map's scripts name (read with Read Map Scripts)", default=False
     )
+    select_level: EnumProperty(
+        name="Click selects",
+        description="What clicking a mesh of the map selects: a model's meshes are shared by every placement of it",
+        items=(
+            ("PLACEMENT", "Placement", "Select the placement a clicked mesh is in, to move it", "OUTLINER_OB_EMPTY", 0),
+            ("PIECE", "Piece", "Select the piece a clicked mesh is in", "OBJECT_DATA", 1),
+            ("OBJECT", "Object", "Select the clicked mesh itself, to edit the model every placement of it shares", "MESH_DATA", 2),
+        ),
+        default="PLACEMENT",
+    )
     outline_counts: BoolProperty(name="Instances", description="Show how many placements each template has", default=False)
     show_walkable: BoolProperty(
         name="Walkable",

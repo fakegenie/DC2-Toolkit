@@ -18,16 +18,18 @@ import bpy
 
 from . import (
     schema, c2data, look, lighting, prefs, props, runner, scripts, import_map, edit, tools, outliner, budgets,
-    validate, export_mod, testing, play, wizards, library, collision, animate, views, gizmos, overlay, menus, ui,
+    validate, export_mod, testing, play, picking, wizards, library, collision, animate, views, gizmos, overlay, menus,
+    ui,
 )
 
 _all = (
     schema, c2data, look, lighting, prefs, props, runner, scripts, import_map, edit, tools, outliner, budgets,
-    validate, export_mod, testing, play, wizards, library, collision, animate, views, gizmos, overlay, menus, ui,
+    validate, export_mod, testing, play, picking, wizards, library, collision, animate, views, gizmos, overlay, menus,
+    ui,
 )
 _modules = (
-    prefs, props, lighting, import_map, edit, tools, outliner, validate, export_mod, testing, play, wizards, library,
-    collision, animate, views, gizmos, overlay, menus, ui,
+    prefs, props, lighting, import_map, edit, tools, outliner, validate, export_mod, testing, play, picking, wizards,
+    library, collision, animate, views, gizmos, overlay, menus, ui,
 )
 
 

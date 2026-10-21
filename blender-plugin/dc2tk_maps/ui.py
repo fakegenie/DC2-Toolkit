@@ -311,6 +311,7 @@ class DC2TK_PT_main(bpy.types.Panel):
             return
         box = layout.box()
         box.label(text=root.name, icon="WORLD")
+        box.prop(settings, "select_level", expand=True)
         row = box.row(align=True)
         for kind, label in (("collision", "Collision"), ("camera", "Camera col.")):
             visible = import_map.collision_visible(context, root, kind)

@@ -12,7 +12,8 @@ import bpy
 from mathutils import Matrix, Vector
 
 from dc2tk_maps import (
-    animate, budgets, c2data, collision, export_mod, gizmos, library, lighting, look, outliner, overlay, play, prefs,
+    animate, budgets, c2data, collision, export_mod, gizmos, library, lighting, look, outliner, overlay, picking, play,
+    prefs,
     schema, scripts, testing, tools, validate, views, wizards,
 )
 
@@ -451,6 +452,27 @@ def check_new_map(context, check, root):
     check(refused, "a bad name is refused")
 
 
+def check_picking(context, check, root):
+    settings = context.window_manager.dc2tk_maps
+    placement = next(obj for obj in c2data.placements(root) if any(o.type == "MESH" for o in c2data.descendants(obj)))
+    mesh = next(o for o in c2data.descendants(placement) if o.type == "MESH")
+    point = next(iter(c2data.points(root)), None)
+    for level, wanted in (("PLACEMENT", placement), ("PIECE", c2data.piece_of(mesh) or placement), ("OBJECT", mesh)):
+        settings.select_level = level
+        for obj in context.selected_objects:
+            obj.select_set(False)
+        mesh.select_set(True)
+        context.view_layer.objects.active = mesh
+        picking.redirect(context)
+        check(context.view_layer.objects.active == wanted and wanted.select_get() and (wanted == mesh or not mesh.select_get()),
+              "click selects the %s: %s" % (level.lower(), context.view_layer.objects.active.name))
+    settings.select_level = "PLACEMENT"
+    if point is not None:
+        context.view_layer.objects.active = point
+        picking.redirect(context)
+        check(context.view_layer.objects.active == point, "a point stays itself")
+
+
 def check_play(context, check, root, work):
     context.scene.cursor.matrix = Matrix.Translation((12.0, -34.0, 5.0))
     request = play.enter_request(context, root, "CURSOR")
@@ -487,10 +509,11 @@ def run(context, root, work, check):
     check_walkable(context, check)
     check_test_loop(context, check, work)
     check_play(context, check, root, work)
+    check_picking(context, check, root)
     check_door_wizard(context, check, root)
     check_library(context, check, root)
     check_collision_tools(context, check, root)
     check_new_map(context, check, root)
     print("PASS: map editing tools (%s)" % ", ".join(
         ["multi-edit", "outliner", "ground", "coordinates", "instances", "lighting", "animation", "scripts", "budgets",
-         "handles", "cells", "walkable", "test loop", "play", "door", "library", "collision", "new map"]))
+         "handles", "cells", "walkable", "test loop", "play", "picking", "door", "library", "collision", "new map"]))

@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -16,6 +17,14 @@ PRESS_SECONDS = 1.5
 LOG = "blender-game.log"
 
 status = {"text": ""}
+WRITTEN = re.compile(r"(\d+) game files in .* \((\d+) written, (\d+) removed\)")
+
+
+def build_summary(lines):
+    """What the build left to say: (nothing reached the game, its notes and warnings)."""
+    unchanged = any((found := WRITTEN.search(line)) and found.group(2) == "0" and found.group(3) == "0" for line in lines)
+    said = [line for line in lines if line.startswith(("note:", "warning:"))]
+    return unchanged, said
 
 
 def port_binary(settings):
@@ -183,8 +192,13 @@ class DC2TK_OT_play_in_game(bpy.types.Operator):
             runner.write_text(self._job)
             if self._job["returncode"] != 0 or any(line.startswith("not rebuilt") for line in runner.output_lines(self._job)):
                 return self.end(context, {"ERROR"}, "The build failed; see the text \"%s\"" % runner.TEXT_NAME)
+            unchanged, said = build_summary(runner.output_lines(self._job))
+            for line in said[:5]:
+                self.report({"WARNING"}, line)
+            if unchanged:
+                self.report({"WARNING"}, "The game gets nothing new: the mod builds to the same files as before")
             if not self._started and "the game reloaded" in (runner.output_lines(self._job) or [""])[-1]:
-                return self.end(context, {"INFO"}, "In the game on %s" % self._name)
+                return self.end(context, {"INFO"}, "In the game on %s%s" % (self._name, " (nothing changed)" if unchanged else ""))
             self._entering = True
             self._since = time.monotonic()
             status["text"] = "Starting the game..."

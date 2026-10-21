@@ -167,9 +167,14 @@ The list editor accepts JSON, such as `[1, 2, 3]` or `["t01.img", "other.img"]`.
 Map Settings shows the map root's settings (`extras.c2.map`: light sets,
 fog, background colours, time, sky...) the same way.
 
-Move, turn and scale with Blender's tools as usual. Edit meshes as usual
-too: a mesh is shared by every piece that places the same model, as in the
-game. Building rebuilds only the models whose meshes you changed (Blender's
+Move, turn and scale with Blender's tools as usual. Clicking a mesh of the map
+selects its placement (Click selects, in the Map panel: Placement, Piece or
+Object), since that is what moves a building: a model's meshes are shared by
+every placement of it, as in the game, so moving a mesh inside its model (Click
+selects: Object) moves it in every placement of that model once built, though
+Blender shows it moved in one. Points, cameras and placements are selected as
+they are. Edit meshes as usual too: a mesh is shared by every piece that places
+the same model, as in the game. Building rebuilds only the models whose meshes you changed (Blender's
 own rewriting of untouched meshes is allowed for), and a rebuilt mesh keeps
 the vertex alpha fades Blender leaves out.
 

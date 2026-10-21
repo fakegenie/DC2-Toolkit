@@ -251,6 +251,74 @@ fn tree_of(
     })
 }
 
+/// Each glTF node's parent.
+fn parents_of(doc: &Value) -> HashMap<usize, usize> {
+    let mut found = HashMap::new();
+    for (index, node) in doc["nodes"].as_array().into_iter().flatten().enumerate() {
+        for child in node["children"].as_array().into_iter().flatten().filter_map(Value::as_u64) {
+            found.insert(child as usize, index);
+        }
+    }
+    found
+}
+
+/// The name of the placement a piece's node is in, for notes.
+fn placement_name(doc: &Value, parents: &HashMap<usize, usize>, mut at: usize) -> String {
+    while let Some(&parent) = parents.get(&at) {
+        at = parent;
+        if c2_of(&doc["nodes"][at])["role"] == "placement" {
+            break;
+        }
+    }
+    doc["nodes"][at]["name"].as_str().unwrap_or("").to_string()
+}
+
+/// How a piece's model nodes are laid out: their names, meshes and transforms, rounded, with a
+/// rotation and its negation alike (Blender writes either), so the pieces of a model that nobody
+/// moved inside compare equal.
+fn model_layout(doc: &Value, roots: &[usize]) -> String {
+    let mut text = String::new();
+    let mut pending: Vec<usize> = roots.iter().rev().copied().collect();
+    while let Some(at) = pending.pop() {
+        let node = &doc["nodes"][at];
+        let trs = trs_of(node).ok().flatten().unwrap_or(Trs {
+            translation: [0.0; 3],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            scale: [1.0; 3],
+        });
+        let sign = if trs.rotation.iter().rev().find(|value| value.abs() > 1e-6).is_some_and(|value| *value < 0.0) {
+            -1.0
+        } else {
+            1.0
+        };
+        let rounded = |values: &[f64]| {
+            values
+                .iter()
+                .map(|value| format!("{:.3}", (value * 1000.0).round() / 1000.0 + 0.0))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        let rotation: Vec<f64> = trs.rotation.iter().map(|value| value * sign).collect();
+        text.push_str(&format!(
+            "{}|{}|{}|{}|{};",
+            node["name"].as_str().unwrap_or(""),
+            node["mesh"],
+            rounded(&trs.translation),
+            rounded(&rotation),
+            rounded(&trs.scale)
+        ));
+        let children: Vec<usize> = node["children"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_u64)
+            .map(|child| child as usize)
+            .collect();
+        pending.extend(children.into_iter().rev());
+    }
+    text
+}
+
 /// The items of one of a glTF doc's lists that a subtree takes: their indices in the order first
 /// reached, and each one's index in the subtree.
 #[derive(Default)]
@@ -484,9 +552,17 @@ pub fn import_map(
         out.notes.extend(placement_notes(&original_map, &edit, &rebuilt, slots));
     }
 
-    // each model's first piece (lowest glTF node index): its node subtree is the model as edited
+    // each model's pieces, lowest glTF node index first: the one whose node subtree differs from the
+    // disc's model is the model as edited (the first when none does)
     let mut piece_nodes: Vec<usize> = model_roots.keys().copied().collect();
     piece_nodes.sort();
+    let mut pieces_of: HashMap<String, Vec<usize>> = HashMap::new();
+    for &piece in &piece_nodes {
+        if let Some(model) = c2_of(&doc["nodes"][piece])["model"].as_str() {
+            pieces_of.entry(model.to_lowercase()).or_default().push(piece);
+        }
+    }
+    let parents = parents_of(&doc);
     let mut done: HashSet<String> = HashSet::new();
     // the scene's buffers, read once though every model's subtree names them
     let buffer_cache: RefCell<HashMap<String, Arc<Vec<u8>>>> = RefCell::new(HashMap::new());
@@ -507,9 +583,9 @@ pub fn import_map(
         if model.is_empty() || model_roots_here.is_empty() || !done.insert(model.to_lowercase()) {
             continue;
         }
-        let sub = subtree(&doc, model_roots_here).context(&model)?;
-        let given = from_gltf::with_buffers(sub, &read_cached)?;
         let Some((kind, data)) = find_model(packs, &model) else {
+            let sub = subtree(&doc, model_roots_here).context(&model)?;
+            let given = from_gltf::with_buffers(sub, &read_cached)?;
             // made in the scene: a new model of every mesh under its first piece
             let kind = new_model_kind(c2["kind"].as_str().unwrap_or(""), &model);
             let stem = model.rsplit_once('.').map_or(model.as_str(), |(stem, _)| stem);
@@ -521,9 +597,33 @@ pub fn import_map(
         if kind == PackType::Character {
             continue;
         }
-        let rebuilt =
-            models::build_map_model(&given, data, &options_for(kind, textures)).with_context(|| model.clone())?;
-        if rebuilt != data {
+        let mut layouts: Vec<(String, usize)> = Vec::new();
+        for &other in &pieces_of[&model.to_lowercase()] {
+            let layout = model_layout(&doc, &model_roots[&other]);
+            if !layouts.iter().any(|(seen, _)| *seen == layout) {
+                layouts.push((layout, other));
+            }
+        }
+        let mut edited: Vec<(usize, Vec<u8>)> = Vec::new();
+        for (_, first) in &layouts {
+            let sub = subtree(&doc, &model_roots[first]).context(&model)?;
+            let given = from_gltf::with_buffers(sub, &read_cached)?;
+            let rebuilt =
+                models::build_map_model(&given, data, &options_for(kind, textures)).with_context(|| model.clone())?;
+            if rebuilt != data {
+                edited.push((*first, rebuilt));
+            }
+        }
+        if edited.len() > 1 {
+            let named: Vec<String> = edited.iter().map(|(piece, _)| placement_name(&doc, &parents, *piece)).collect();
+            out.notes.push(format!(
+                "model {model} is edited differently in placements {}; every placement shares the model, so the build \
+                 takes the edit in {}",
+                named.join(", "),
+                named[0]
+            ));
+        }
+        if let Some((_, rebuilt)) = edited.into_iter().next() {
             out.models.push((model, rebuilt));
         }
     }
@@ -634,7 +734,8 @@ mod tests {
         let corpus = dc2tk_disc::samples::corpus();
         let root = std::path::Path::new(&corpus);
         let mut checked = 0;
-        for name in ["map/s/s17/s17", "map/m/m05/m05"] {
+        let mut shared_checked = 0;
+        for name in ["map/s/s17/s17", "map/m/m05/m05", "map/m/m01/m01"] {
             let folder = root.join(name).parent().unwrap().to_path_buf();
             let stem = name.rsplit('/').next().unwrap();
             let map_bytes = std::fs::read(root.join(format!("{name}.map"))).unwrap();
@@ -687,8 +788,58 @@ mod tests {
             assert!(imported.new_models.is_empty(), "{name}: new models");
             let pictures: Vec<&String> = imported.textures.iter().map(|edit| &edit.name).collect();
             assert!(pictures.is_empty(), "{name}: pictures changed: {pictures:?}");
+            let nodes = gltf_doc["nodes"].as_array().unwrap();
+            let mut pieces: HashMap<String, Vec<usize>> = HashMap::new();
+            for (index, node) in nodes.iter().enumerate() {
+                let c2 = c2_of(node);
+                let has_model_node =
+                    node["children"].as_array().into_iter().flatten().filter_map(Value::as_u64).any(|child| {
+                        matches!(nodes[child as usize]["extras"]["c2"]["role"].as_str(), Some("mds") | None)
+                    });
+                if c2["role"] == "piece" && has_model_node {
+                    pieces.entry(c2["model"].as_str().unwrap_or("").to_lowercase()).or_default().push(index);
+                }
+            }
+            let Some((model, shared)) =
+                pieces.iter().filter(|(_, found)| found.len() > 1).min_by_key(|(model, _)| *model)
+            else {
+                checked += 1;
+                continue;
+            };
+            let model_node = |piece: usize| {
+                let mut at = piece;
+                for _ in 0..2 {
+                    match nodes[at]["children"].as_array().and_then(|children| children.first()).and_then(Value::as_u64)
+                    {
+                        Some(child) => at = child as usize,
+                        None => break,
+                    }
+                }
+                at
+            };
+            let mut moved: Value = gltf_doc.clone();
+            moved["nodes"][model_node(shared[1])]["translation"] = json!([5.0, 0.0, 0.0]);
+            let text = serde_json::to_vec(&moved).unwrap();
+            let imported = import_map(&text, &read, &map_bytes, &packs, &search, map_edit::Slots::Keep).unwrap();
+            let changed: Vec<String> = imported.models.iter().map(|(found, _)| found.to_lowercase()).collect();
+            assert_eq!(
+                changed,
+                std::slice::from_ref(model),
+                "{name}: a model moved inside its second piece is rebuilt"
+            );
+            moved["nodes"][model_node(shared[0])]["translation"] = json!([0.0, 0.0, 7.0]);
+            let text = serde_json::to_vec(&moved).unwrap();
+            let imported = import_map(&text, &read, &map_bytes, &packs, &search, map_edit::Slots::Keep).unwrap();
+            assert_eq!(imported.models.len(), 1, "{name}: one model, however many pieces show it");
+            assert!(
+                imported.notes.iter().any(|note| note.contains("edited differently")),
+                "{name}: {:?}",
+                imported.notes
+            );
+            shared_checked += 1;
             checked += 1;
         }
+        assert!(shared_checked > 0, "no corpus map has a model two pieces share");
         println!("{checked} maps export and import unchanged");
     }
 }
