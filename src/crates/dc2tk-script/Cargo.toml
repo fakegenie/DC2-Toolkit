@@ -8,6 +8,8 @@ description = "Dark Chronicle's scripts: the .stb format, its assembly, decompil
 [dependencies]
 dc2tk-assets.workspace = true
 dc2tk-disc.workspace = true
+crc32fast.workspace = true
+flate2.workspace = true
 indexmap.workspace = true
 serde.workspace = true
 rayon.workspace = true

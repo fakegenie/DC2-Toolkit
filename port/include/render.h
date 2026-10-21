@@ -122,6 +122,8 @@ void render_quality(int *scale, int *samples);
 
 int render_target(uint32_t base, int width, int height);
 int render_texture(int width, int height);
+int render_texture_at_scale(int width, int height, int scale);
+void render_upload_full(int texture, const uint32_t *pixels);
 int render_scaled_texture(int width, int height);
 void render_release(int texture);
 int render_width(int texture);

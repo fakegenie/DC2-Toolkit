@@ -65,7 +65,12 @@ fn setup(folder: &Path, mod_files: &ModFiles) -> (PathBuf, Vec<PathBuf>) {
 }
 
 fn plan_of(dirs: &[PathBuf], root: &Path) -> Result<Plan> {
-    mods::patch_plan(dirs, root, &IndexMap::new(), true)
+    mods::patch_plan(
+        dirs,
+        root,
+        &IndexMap::new(),
+        dirs.first().map(|first| first.parent().unwrap().join(numbers::LOCK)).as_deref(),
+    )
 }
 
 fn program_of(root: &Path, plan: &Plan, script: &str) -> Result<Node> {
@@ -476,7 +481,7 @@ fn numbers_are_given_once_kept_and_never_shared() {
     assert_eq!(run(&program, "show"), strings(&["1024 9000"]));
     assert_eq!(run(&program, "show_test_b"), strings(&["1026 9001"]));
     let held: serde_json::Value = serde_json::from_str(&read(&lock)).unwrap();
-    assert_eq!(held["flag"], serde_json::json!({"test.a/FIGHT": 1024, "test.b/FIGHT": 1026}));
+    assert_eq!(held["numbers"]["flag"], serde_json::json!({"test.a/FIGHT": 1024, "test.b/FIGHT": 1026}));
     // b alone keeps its numbers, and a's stay reserved
     assert_eq!(plan_of(&dirs[1..], &root).unwrap().numbers, given(&[("b", &[("FIGHT", 1026), ("SHOW", 9001)])]));
     let mine = dirs[0].parent().unwrap().join("c");
@@ -489,8 +494,11 @@ fn numbers_are_given_once_kept_and_never_shared() {
 fn a_whole_file_asking_for_a_number_is_refused() {
     let folder = TempDir::new("patches-whole-file-number");
     let library = "NEW_FLAG(SEEN);\n\nvoid greet(void)\n{\n    set_flag(SEEN, 1);\n}\n";
-    let (root, dirs) = setup(folder.path(), &[("a", &[("files/lib/map/s/s17/greet.c", library)])]);
-    fails(plan_of(&dirs, &root), "asks for a number with NEW_FLAG(SEEN), but build compiles the files under files/");
+    let manifest = r#"{"format": 2, "id": "test.a", "version": "1.0.0",
+                       "scripts": {"whole": {"lib/map/s/s17/greet.c": "files/lib/map/s/s17/greet.c"}}}"#;
+    let (root, dirs) =
+        setup(folder.path(), &[("a", &[("mod.json", manifest), ("files/lib/map/s/s17/greet.c", library)])]);
+    fails(plan_of(&dirs, &root), "asks for a number with NEW_FLAG(SEEN), but build compiles the whole files");
 }
 
 #[test]
@@ -528,8 +536,11 @@ fn counters_are_given_from_32_kept_and_never_shared() {
     let program = program_of(&root, &plan, "map/s/s17_valley/s17_1.c").unwrap();
     assert_eq!(run(&program, "score"), strings(&["34 1024"]));
     let held: serde_json::Value = serde_json::from_str(&read(&folder.path().join("mods").join(numbers::LOCK))).unwrap();
-    assert_eq!(held["counter"], serde_json::json!({"test.a/WINS": 34, "test.b/LOSSES": 35, "test.b/WINS": 36}));
-    assert_eq!(held["flag"], serde_json::json!({"test.a/WON": 1024}));
+    assert_eq!(
+        held["numbers"]["counter"],
+        serde_json::json!({"test.a/WINS": 34, "test.b/LOSSES": 35, "test.b/WINS": 36})
+    );
+    assert_eq!(held["numbers"]["flag"], serde_json::json!({"test.a/WON": 1024}));
 }
 
 #[test]
@@ -627,7 +638,7 @@ fn required_mods_are_added_and_every_mod_comes_after_those_it_names() {
         ],
     );
     let mods_dir = dirs[0].parent().unwrap();
-    let found = mods::chosen(mods_dir, &strings(&["a", "test.c"])).unwrap();
+    let found = mods::chosen(mods_dir, &strings(&["test.a", "test.c"])).unwrap();
     assert_eq!(names_of(&found.dirs), strings(&["c", "b", "a"]));
     assert_eq!(found.added, [("test.b".to_string(), "test.a".to_string())]);
     // after orders only mods that are chosen
@@ -636,23 +647,30 @@ fn required_mods_are_added_and_every_mod_comes_after_those_it_names() {
     assert!(listed.contains("test.a in a  (0 files)\n    1.2.0\n    needs test.b ^1.0\n"), "{listed}");
     assert!(listed.contains("    built after test.c, test.unknown\n"), "{listed}");
     write(&dirs[0], "mod.json", &manifest("test.a", ", \"dependencies\": {\"test.b\": \"^2.0\"}"));
-    fails(mods::chosen(mods_dir, &strings(&["a"])), "mod test.a needs test.b ^2.0, and the one in");
+    fails(mods::chosen(mods_dir, &strings(&["test.a"])), "mod test.a needs test.b ^2.0, and the one in");
     write(&dirs[0], "mod.json", &manifest("test.a", ", \"conflicts\": {\"test.c\": \"*\"}"));
-    fails(mods::chosen(mods_dir, &strings(&["a", "c"])), "mod test.a cannot be built with test.c 1.0.0");
+    fails(mods::chosen(mods_dir, &strings(&["test.a", "test.c"])), "mod test.a cannot be built with test.c 1.0.0");
     write(&dirs[0], "mod.json", &manifest("test.a", ", \"dependencies\": {\"test.b\": \"^1.0\"}"));
     write(&dirs[2], "mod.json", &manifest("test.c", ", \"dependencies\": {\"test.a\": \"*\"}"));
-    fails(mods::chosen(mods_dir, &strings(&["c"])), "(test.c after test.a, test.a after test.b, test.b after test.c)");
+    fails(
+        mods::chosen(mods_dir, &strings(&["test.c"])),
+        "(test.c after test.a, test.a after test.b, test.b after test.c)",
+    );
     assert!(mods::listing(mods_dir, &root, &IndexMap::new()).unwrap().contains("go round in a cycle"));
     write(&dirs[2], "mod.json", &manifest("test.c", ", \"dependencies\": {\"test.gone\": \"*\"}"));
-    fails(mods::chosen(mods_dir, &strings(&["c"])), "mod test.c needs test.gone *, which is not in");
-    write(&dirs[2], "mod.json", "{\"requires\": [\"a\"]}");
-    fails(mods::chosen(mods_dir, &strings(&["c"])), "it is an older mod; convert it with dc2tk mod upgrade c");
+    fails(mods::chosen(mods_dir, &strings(&["test.c"])), "mod test.c needs test.gone *, which is not in");
+    write(
+        &dirs[2],
+        "mod.json",
+        "{\"format\": 2, \"id\": \"test.c\", \"version\": \"1.0.0\", \"requires\": [\"test.a\"]}",
+    );
+    fails(mods::chosen(mods_dir, &strings(&["test.a"])), "unknown field `requires`");
 }
 
 #[test]
 fn a_mod_uses_the_library_numbers_and_overrides_of_the_mods_it_requires() {
     let base_patch = "#pragma target map s17\n#include \"names.h\"\n\n#pragma override\nvoid greet(void)\n{\n    PRINT(\"base\");\n    original();\n}\n";
-    let patch = "#pragma target map s17\n#include \"test.base/names.h\"\n#include \"base/value.c\"\n\nNEW_FLAG(OWN);\n\n\
+    let patch = "#pragma target map s17\n#include \"test.base/names.h\"\n#include \"test.base/value.c\"\n\nNEW_FLAG(OWN);\n\n\
                  #pragma override\nvoid greet(void)\n{\n    PRINT(\"top\", SHARED, OWN, base_value());\n    original();\n}\n";
     let folder = TempDir::new("patches-requires-use");
     let (root, dirs) = setup(
@@ -678,7 +696,7 @@ fn a_mod_uses_the_library_numbers_and_overrides_of_the_mods_it_requires() {
             ),
         ],
     );
-    let chosen = mods::chosen(dirs[0].parent().unwrap(), &strings(&["top"])).unwrap();
+    let chosen = mods::chosen(dirs[0].parent().unwrap(), &strings(&["test.top"])).unwrap();
     assert_eq!(names_of(&chosen.dirs), strings(&["base", "top"]));
     let plan = plan_of(&chosen.dirs, &root).unwrap();
     assert_eq!(plan.numbers, given(&[("base", &[("SHARED", 1024)]), ("top", &[("OWN", 1025)])]));
@@ -950,4 +968,44 @@ fn slim_turns_whole_files_into_patches_that_build_the_same() {
     edit(copied[1], "PROGRAM(500, talk);\n", "");
     let outcome = slim::slim(&mods_dir, "fat", &root, &tools.toolchain(), &IndexMap::new()).unwrap();
     assert!(outcome.kept[0].1.contains("removes PROGRAM(500, talk)"), "{:?}", outcome.kept);
+}
+
+#[test]
+fn settings_reach_a_patch_as_constants_from_their_defaults_or_the_set() {
+    let manifest = r#"{"format": 2, "id": "test.tuned", "version": "1.0.0",
+                      "settings": {"hard": {"type": "bool", "default": false}, "level": {"type": "int", "default": 2, "min": 1, "max": 5}}}"#;
+    let patch = "#pragma target map s17\n\n#pragma override\nvoid greet(void)\n{\n#if SETTING_hard\n    PRINT(\"hard\", SETTING_level);\n#else\n    PRINT(\"easy\", SETTING_level);\n#endif\n}\n";
+    let folder = TempDir::new("patches-settings");
+    let (root, dirs) = setup(folder.path(), &[("tuned", &[("mod.json", manifest), ("p.c", patch)])]);
+    dc2tk_script::manifest::choose_settings(Default::default());
+    let plan = plan_of(&dirs, &root).unwrap();
+    assert_eq!(run(&program_of(&root, &plan, "map/s/s17_valley/s17_1.c").unwrap(), "start"), strings(&["easy 2"]));
+    let chosen = std::collections::BTreeMap::from([(
+        "test.tuned".to_string(),
+        IndexMap::from([("hard".to_string(), serde_json::json!(true)), ("level".to_string(), serde_json::json!(4))]),
+    )]);
+    dc2tk_script::manifest::choose_settings(chosen);
+    let plan = plan_of(&dirs, &root).unwrap();
+    assert_eq!(run(&program_of(&root, &plan, "map/s/s17_valley/s17_1.c").unwrap(), "start"), strings(&["hard 4"]));
+    let wrong = std::collections::BTreeMap::from([(
+        "test.tuned".to_string(),
+        IndexMap::from([("speed".to_string(), serde_json::json!(1))]),
+    )]);
+    dc2tk_script::manifest::choose_settings(wrong);
+    fails(plan_of(&dirs, &root), "mod test.tuned has no setting speed");
+    dc2tk_script::manifest::choose_settings(Default::default());
+}
+
+#[test]
+fn mod_dir_names_the_mods_own_folder_on_the_disc() {
+    let patch =
+        "#pragma target map s17\n\n#pragma override\nvoid greet(void)\n{\n    PRINT(MOD_DIR \"calc.chr\");\n}\n";
+    let folder = TempDir::new("patches-mod-dir");
+    let (root, dirs) = setup(folder.path(), &[("calc", &[("p.c", patch)])]);
+    let plan = plan_of(&dirs, &root).unwrap();
+    let id = dc2tk_script::mods::name(&dirs[0]).unwrap();
+    assert_eq!(
+        run(&program_of(&root, &plan, "map/s/s17_valley/s17_1.c").unwrap(), "start"),
+        strings(&[&format!("mods/{id}/calc.chr")])
+    );
 }

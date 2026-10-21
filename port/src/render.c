@@ -814,6 +814,8 @@ int render_target(uint32_t base, int width, int height) {
 
 int render_texture(int width, int height) { return new_texture(width, height, 1, 1); }
 
+int render_texture_at_scale(int width, int height, int scale) { return new_texture(width, height, scale, 1); }
+
 int render_scaled_texture(int width, int height) {
     int slot = new_texture(width, height, quality_scale, 1);
     textures[slot].scaled = 1;
@@ -905,6 +907,14 @@ void render_upload(int slot, int x, int y, int width, int height, const uint32_t
         blit_slots(temporary, 0, 0, width, height, slot, x, y, SDL_GPU_FILTER_NEAREST);
         render_release(temporary);
     }
+    changed(slot);
+}
+
+void render_upload_full(int slot, const uint32_t *pixels) {
+    flush_if_used(slot);
+    if (bound == slot) flush();
+    Texture *texture = &textures[slot];
+    upload(texture->color, 0, 0, texture->width * texture->scale, texture->height * texture->scale, pixels);
     changed(slot);
 }
 

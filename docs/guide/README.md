@@ -38,7 +38,7 @@ A mod lives in its own folder, `mods/<name>/`, so `extracted/` stays a clean cop
    ```sh
    dc2tk mod asset dc2.iso super-wrench data:items
    ```
-   This writes `mods/super-wrench/data/items.json` and adds `"data:items": "data/items.json"` to `mods/super-wrench/mod.json`.
+   This writes `mods/super-wrench/data/items.json` and a `mods/super-wrench/mod.json` that gives the mod the id `local.super-wrench` and the line `"data": {"items": "data/items.json"}`.
 2. Open `mods/super-wrench/data/items.json` and replace its contents with only the record and field you change. The Battle Wrench is item `1`, and its attack is `8`:
    ```json
    {
@@ -49,12 +49,12 @@ A mod lives in its own folder, `mods/<name>/`, so `extracted/` stays a clean cop
    ```
 3. Check the mod:
    ```sh
-   dc2tk mod check extracted/scripts super-wrench --disc dc2.iso
+   dc2tk mod check extracted/scripts local.super-wrench --disc dc2.iso
    ```
    It prints `1 values changed: item 1 (Battle Wrench) weapon.attack`.
 4. Build `modded.iso` and launch it in PCSX2:
    ```sh
-   dc2tk build extracted/scripts dc2.iso -o modded.iso --mod super-wrench --play
+   dc2tk build extracted/scripts dc2.iso -o modded.iso --mod local.super-wrench --play
    ```
 
 ### Other ways to start a mod

@@ -158,6 +158,6 @@ Create `mods/castle/mod.json` with `"dev": {"start_at": "s51:story_50"}` to jump
 Validate and build:
 
 ```sh
-dc2tk mod check extracted/scripts castle
-dc2tk build extracted/scripts dc2.iso -o test.iso --mod castle --dev --play
+dc2tk mod check extracted/scripts you.castle
+dc2tk build extracted/scripts dc2.iso -o test.iso --mod you.castle --dev --play
 ```

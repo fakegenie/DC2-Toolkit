@@ -16,6 +16,7 @@ pub const FORMAT: u32 = 2;
 pub const GAME: &str = "dc2-pal";
 pub const FIRST_VERSION: &str = "0.1.0";
 pub const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const PORT_API: &str = "1.0.0";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -55,6 +56,65 @@ pub struct Addition {
     pub includes: Vec<String>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub wrap: IndexMap<String, Wrap>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Scripts {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<String>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub whole: IndexMap<String, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additions: Vec<Addition>,
+}
+
+impl Scripts {
+    fn is_empty(&self) -> bool {
+        self.sources.is_empty() && self.whole.is_empty() && self.additions.is_empty()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SettingKind {
+    Bool,
+    Int,
+    Enum,
+    String,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Setting {
+    #[serde(rename = "type")]
+    pub kind: SettingKind,
+    pub default: Value,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<i64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub values: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Port {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub api: String,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub settings: IndexMap<String, Value>,
+}
+
+impl Port {
+    pub fn is_empty(&self) -> bool {
+        self.sources.is_empty() && self.api.is_empty() && self.settings.is_empty()
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
@@ -120,8 +180,18 @@ pub struct Manifest {
     pub replace: IndexMap<String, Value>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub add: IndexMap<String, Value>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub additions: Vec<Addition>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub files: IndexMap<String, Value>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub data: IndexMap<String, Value>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub text: IndexMap<String, Value>,
+    #[serde(default, skip_serializing_if = "Scripts::is_empty")]
+    pub scripts: Scripts,
+    #[serde(default, skip_serializing_if = "Port::is_empty")]
+    pub port: Port,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub settings: IndexMap<String, Setting>,
     #[serde(default, skip_serializing_if = "Dev::is_empty")]
     pub dev: Dev,
 }
@@ -146,7 +216,12 @@ impl Manifest {
             conflicts: IndexMap::new(),
             replace: IndexMap::new(),
             add: IndexMap::new(),
-            additions: Vec::new(),
+            files: IndexMap::new(),
+            data: IndexMap::new(),
+            text: IndexMap::new(),
+            scripts: Scripts::default(),
+            port: Port::default(),
+            settings: IndexMap::new(),
             dev: Dev::default(),
         }
     }
@@ -160,7 +235,7 @@ impl Manifest {
     }
 
     pub fn additions_as_values(&self) -> Vec<Value> {
-        self.additions.iter().map(|addition| serde_json::to_value(addition).unwrap_or(Value::Null)).collect()
+        self.scripts.additions.iter().map(|addition| serde_json::to_value(addition).unwrap_or(Value::Null)).collect()
     }
 }
 
@@ -199,6 +274,9 @@ pub fn check_id(id: &str) -> Result<()> {
 
 fn checked(manifest: Manifest, path: &Path) -> Result<Manifest> {
     let fail = |message: String| Error::invalid(format!("{}: {message}", path.display()));
+    if manifest.format != FORMAT {
+        return Err(fail(format!("\"format\" is {}, and this dc2tk reads format {FORMAT}", manifest.format)));
+    }
     check_id(&manifest.id).map_err(|error| fail(error.to_string()))?;
     semver::parse_version(&manifest.version).map_err(|error| fail(format!("\"version\": {error}")))?;
     if manifest.game != GAME {
@@ -231,7 +309,140 @@ fn checked(manifest: Manifest, path: &Path) -> Result<Manifest> {
     for id in &manifest.after {
         check_id(id).map_err(|error| fail(format!("\"after\": {error}")))?;
     }
+    for (name, setting) in &manifest.settings {
+        let is_name = name.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !is_name {
+            return Err(fail(format!("setting {name:?} is not named as a C identifier, as hard_mode")));
+        }
+        if setting.kind == SettingKind::Enum && setting.values.is_empty() {
+            return Err(fail(format!("setting {name} is an enum with no \"values\"")));
+        }
+        setting_value(setting, &setting.default).map_err(|error| fail(format!("setting {name}'s default: {error}")))?;
+    }
+    if !manifest.port.is_empty() {
+        if manifest.targets != [Target::Native] {
+            return Err(fail(
+                "\"port\" works only on the native port: declare \"targets\": [\"native\"], which keeps the mod out of disc images"
+                    .into(),
+            ));
+        }
+        if !manifest.port.sources.is_empty() && manifest.port.api.is_empty() {
+            return Err(fail(format!(
+                "\"port\" has sources but no \"api\": write the port_mod.h range it needs, as \"^{PORT_API}\""
+            )));
+        }
+        if !manifest.port.api.is_empty() {
+            let range =
+                semver::parse_range(&manifest.port.api).map_err(|error| fail(format!("\"port\" \"api\": {error}")))?;
+            if !semver::matches(&range, semver::parse_version(PORT_API)?) {
+                return Err(fail(format!("the mod needs port_mod.h {range}, and this port's is {PORT_API}")));
+            }
+        }
+        for (name, value) in &manifest.port.settings {
+            if !(value.is_string() || value.is_number() || value.is_boolean()) {
+                return Err(fail(format!("\"port\" setting {name} is not a string, number or true/false")));
+            }
+        }
+    }
     Ok(manifest)
+}
+
+pub fn port_sources(mod_dir: &Path) -> Result<Vec<PathBuf>> {
+    let own = read(mod_dir)?;
+    let mut found = Vec::new();
+    for relative in crate::discfiles::files_in(mod_dir)? {
+        if own.port.sources.iter().any(|pattern| crate::additions::fnmatch(&relative, pattern)) {
+            found.push(paths::join_relative(mod_dir, &relative));
+        }
+    }
+    Ok(found)
+}
+
+pub fn object_prefix(id: &str) -> String {
+    let safe: String = id.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+    format!("mod_{safe}_")
+}
+
+pub fn port_settings_text(mod_dirs: &[PathBuf]) -> Result<String> {
+    let mut text = String::new();
+    for mod_dir in mod_dirs {
+        let own = read(mod_dir)?;
+        for (name, value) in settings_of(&own)? {
+            let shown = match value {
+                Value::String(text) => text,
+                other => other.to_string(),
+            };
+            text.push_str(&format!("{}.{name}={shown}\n", own.id));
+        }
+        for (name, value) in &own.port.settings {
+            let shown = match value {
+                Value::String(text) => text.clone(),
+                other => other.to_string(),
+            };
+            text.push_str(&format!("{name}={shown}\n"));
+        }
+    }
+    Ok(text)
+}
+
+pub fn setting_value(setting: &Setting, value: &Value) -> Result<Value> {
+    let wrong = |what: &str| Error::invalid(format!("{value} is not {what}"));
+    match setting.kind {
+        SettingKind::Bool => value.as_bool().map(Value::Bool).ok_or_else(|| wrong("true or false")),
+        SettingKind::Int => {
+            let number = value.as_i64().ok_or_else(|| wrong("a whole number"))?;
+            if setting.min.is_some_and(|min| number < min) || setting.max.is_some_and(|max| number > max) {
+                return Err(wrong(&format!(
+                    "between {} and {}",
+                    setting.min.map_or("any".to_string(), |min| min.to_string()),
+                    setting.max.map_or("any".to_string(), |max| max.to_string())
+                )));
+            }
+            Ok(Value::from(number))
+        }
+        SettingKind::Enum => match value.as_str() {
+            Some(text) if setting.values.iter().any(|known| known == text) => Ok(Value::from(text)),
+            _ => Err(wrong(&format!("one of {}", setting.values.join(", ")))),
+        },
+        SettingKind::String => value.as_str().map(Value::from).ok_or_else(|| wrong("text")),
+    }
+}
+
+static CHOSEN: std::sync::Mutex<BTreeMap<String, IndexMap<String, Value>>> = std::sync::Mutex::new(BTreeMap::new());
+
+pub fn choose_settings(chosen: BTreeMap<String, IndexMap<String, Value>>) {
+    *CHOSEN.lock().unwrap() = chosen;
+}
+
+pub fn settings_of(manifest: &Manifest) -> Result<IndexMap<String, Value>> {
+    let chosen = CHOSEN.lock().unwrap().get(&manifest.id).cloned().unwrap_or_default();
+    for name in chosen.keys() {
+        if !manifest.settings.contains_key(name) {
+            return Err(Error::invalid(format!("mod {} has no setting {name}", manifest.id)));
+        }
+    }
+    let mut out = IndexMap::new();
+    for (name, setting) in &manifest.settings {
+        let value = chosen.get(name).unwrap_or(&setting.default);
+        out.insert(
+            name.clone(),
+            setting_value(setting, value)
+                .map_err(|error| Error::invalid(format!("mod {} setting {name}: {error}", manifest.id)))?,
+        );
+    }
+    Ok(out)
+}
+
+pub fn setting_define(setting: &Setting, value: &Value) -> String {
+    match (setting.kind, value) {
+        (SettingKind::Bool, Value::Bool(on)) => if *on { "1" } else { "0" }.to_string(),
+        (SettingKind::Enum, Value::String(text)) => {
+            setting.values.iter().position(|known| known == text).unwrap_or(0).to_string()
+        }
+        (SettingKind::String, Value::String(text)) => format!("{text:?}"),
+        (_, other) => other.to_string(),
+    }
 }
 
 pub fn has_manifest(mod_dir: &Path) -> bool {
@@ -241,33 +452,35 @@ pub fn has_manifest(mod_dir: &Path) -> bool {
 pub fn read(mod_dir: &Path) -> Result<Manifest> {
     let path = mod_dir.join(MANIFEST);
     if !path.is_file() {
-        return Err(Error::invalid(format!(
-            "{} has no {MANIFEST}; start a mod with dc2tk mod new, or convert an older one with dc2tk mod upgrade",
-            mod_dir.display()
-        )));
+        return Err(Error::invalid(format!("{} has no {MANIFEST}; start a mod with dc2tk mod new", mod_dir.display())));
     }
-    let text = dc2tk_disc::textfile::read_text(&path)?;
-    let value: Value =
-        serde_json::from_str(&text).map_err(|error| Error::invalid(format!("{}: {error}", path.display())))?;
-    match value.get("format") {
-        None => {
-            return Err(Error::invalid(format!(
-                "{} has no \"format\": it is an older mod; convert it with dc2tk mod upgrade {}",
-                path.display(),
-                paths::file_name(mod_dir)
-            )))
-        }
-        Some(found) if found.as_u64() != Some(FORMAT.into()) => {
-            return Err(Error::invalid(format!(
-                "{} is format {found}, and this dc2tk reads format {FORMAT}",
-                path.display()
-            )))
-        }
-        Some(_) => {}
-    }
-    let manifest: Manifest =
-        serde_json::from_value(value).map_err(|error| Error::invalid(format!("{}: {error}", path.display())))?;
+    let manifest: Manifest = serde_json::from_str(&dc2tk_disc::textfile::read_text(&path)?)
+        .map_err(|error| Error::invalid(format!("{}: {error}", path.display())))?;
     checked(manifest, &path)
+}
+
+pub fn read_body(mod_dir: &Path) -> Result<serde_json::Map<String, Value>> {
+    let path = mod_dir.join(MANIFEST);
+    match serde_json::from_str(&dc2tk_disc::textfile::read_text(&path)?) {
+        Ok(Value::Object(body)) => Ok(body),
+        _ => Err(Error::invalid(format!("{} is not a JSON object", path.display()))),
+    }
+}
+
+pub fn write_body(mod_dir: &Path, body: &serde_json::Map<String, Value>) -> Result<()> {
+    let text = dc2tk_disc::textfile::json_text(&Value::Object(body.clone()));
+    dc2tk_disc::textfile::write_text(&mod_dir.join(MANIFEST), &text)?;
+    read(mod_dir).map(|_| ())
+}
+
+pub fn section<'a>(
+    body: &'a mut serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<&'a mut serde_json::Map<String, Value>> {
+    match body.entry(key).or_insert_with(|| Value::Object(serde_json::Map::new())) {
+        Value::Object(found) => Ok(found),
+        _ => Err(Error::invalid(format!("\"{key}\" in {MANIFEST} is not an object"))),
+    }
 }
 
 pub fn write(mod_dir: &Path, manifest: &Manifest) -> Result<()> {
@@ -321,125 +534,36 @@ pub fn create(mod_dir: &Path, id: Option<&str>) -> Result<Manifest> {
     Ok(manifest)
 }
 
-pub struct Upgraded {
-    pub manifest: Manifest,
-    pub notes: Vec<String>,
+pub fn mods_folder_of(mod_dir: &Path) -> PathBuf {
+    let parent = mod_dir.parent().map(Path::to_path_buf).unwrap_or_default();
+    if paths::file_name(&parent) == crate::package::UNPACKED {
+        return parent.parent().map(Path::to_path_buf).unwrap_or_default();
+    }
+    parent
 }
 
-fn old_names(old: &Value, key: &str, path: &Path) -> Result<Vec<String>> {
-    match &old[key] {
-        Value::Null => Ok(Vec::new()),
-        Value::Array(items) => items
-            .iter()
-            .map(|item| {
-                item.as_str()
-                    .map(str::to_string)
-                    .ok_or_else(|| Error::invalid(format!("{}: \"{key}\" is a list of mod names", path.display())))
-            })
-            .collect(),
-        _ => Err(Error::invalid(format!("{}: \"{key}\" is a list of mod names", path.display()))),
+pub fn mod_dirs(mods_dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut found = Vec::new();
+    if !mods_dir.is_dir() {
+        return Ok(found);
     }
-}
-
-fn typed<T: serde::de::DeserializeOwned>(value: &Value, key: &str, path: &Path) -> Result<T> {
-    serde_json::from_value(value.clone())
-        .map_err(|error| Error::invalid(format!("{}: \"{key}\": {error}", path.display())))
-}
-
-pub fn upgrade(mod_dir: &Path, id: &str, ids: &dyn Fn(&str) -> String) -> Result<Upgraded> {
-    check_id(id)?;
-    let path = mod_dir.join(MANIFEST);
-    let old: Value = if path.is_file() {
-        serde_json::from_str(&dc2tk_disc::textfile::read_text(&path)?)
-            .map_err(|error| Error::invalid(format!("{}: {error}", path.display())))?
-    } else {
-        Value::Object(Default::default())
-    };
-    let Some(map) = old.as_object() else {
-        return Err(Error::invalid(format!("{} is not a JSON object", path.display())));
-    };
-    if map.contains_key("format") {
-        return Err(Error::invalid(format!("{} is format {} already", path.display(), map["format"])));
-    }
-    let known = [
-        "title",
-        "version",
-        "requires",
-        "after",
-        "start_at",
-        "replace",
-        "add",
-        "additions",
-        "files",
-        "includes",
-        "note",
-    ];
-    let unknown: Vec<&String> = map.keys().filter(|key| !known.contains(&key.as_str())).collect();
-    if !unknown.is_empty() {
-        let listed: Vec<&str> = unknown.iter().map(|key| key.as_str()).collect();
-        return Err(Error::invalid(format!(
-            "{} has keys format 1 did not read ({}); remove or rename them, then upgrade",
-            path.display(),
-            listed.join(", ")
-        )));
-    }
-    let mut notes = Vec::new();
-    let mut manifest = Manifest::new(id);
-    if let Some(title) = old["title"].as_str() {
-        manifest.name = title.to_string();
-    }
-    if let Some(version) = old["version"].as_str() {
-        if semver::parse_version(version).is_ok() {
-            manifest.version = version.to_string();
-        } else {
-            notes.push(format!("version {version:?} is not MAJOR.MINOR.PATCH, so the mod starts at {FIRST_VERSION}"));
+    let mut entries: Vec<PathBuf> =
+        dc2tk_disc::files::read_dir(mods_dir)?.flatten().map(|entry| mods_dir.join(entry.file_name())).collect();
+    entries.sort_by_key(|path| path.to_string_lossy().to_lowercase());
+    for entry in entries {
+        if entry.is_dir() && has_manifest(&entry) {
+            found.push(entry);
+        } else if entry.is_file() && paths::file_name(&entry).ends_with(crate::package::SUFFIX) {
+            found.push(crate::package::unpacked(&entry)?);
         }
     }
-    for required in old_names(&old, "requires", &path)? {
-        manifest.dependencies.insert(ids(&required), "*".to_string());
-    }
-    manifest.after = old_names(&old, "after", &path)?.iter().map(|name| ids(name)).collect();
-    if let Some(start_at) = old["start_at"].as_str().filter(|scene| !scene.is_empty()) {
-        manifest.dev.start_at = Some(start_at.to_string());
-        notes.push(format!("start_at {start_at} moved under \"dev\"; build uses it with --dev, and mod watch always"));
-    }
-    if !old["replace"].is_null() {
-        manifest.replace = typed(&old["replace"], "replace", &path)?;
-    }
-    if !old["add"].is_null() {
-        manifest.add = typed(&old["add"], "add", &path)?;
-    }
-    if !old["additions"].is_null() {
-        manifest.additions = typed(&old["additions"], "additions", &path)?;
-    }
-    let mut lock = read_lock(mod_dir)?;
-    if !old["files"].is_null() {
-        let files: BTreeMap<String, LockedFile> = typed(&old["files"], "files", &path)?;
-        lock.files.extend(files);
-    }
-    if !old["includes"].is_null() {
-        let includes: BTreeMap<String, String> = typed(&old["includes"], "includes", &path)?;
-        lock.includes.extend(includes);
-    }
-    let manifest = checked(manifest, &path)?;
-    write(mod_dir, &manifest)?;
-    write_lock(mod_dir, &lock)?;
-    Ok(Upgraded { manifest, notes })
+    Ok(found)
 }
 
 pub fn index(mods_dir: &Path) -> Result<IndexMap<String, PathBuf>> {
     let mut found: IndexMap<String, PathBuf> = IndexMap::new();
-    if !mods_dir.is_dir() {
-        return Ok(found);
-    }
-    let mut folders: Vec<PathBuf> = dc2tk_disc::files::read_dir(mods_dir)?
-        .flatten()
-        .map(|entry| mods_dir.join(entry.file_name()))
-        .filter(|path| has_manifest(path))
-        .collect();
-    folders.sort_by_key(|path| path.to_string_lossy().to_lowercase());
-    for folder in folders {
-        let Ok(manifest) = read(&folder) else { continue };
+    for folder in mod_dirs(mods_dir)? {
+        let manifest = read(&folder)?;
         if let Some(other) = found.get(&manifest.id) {
             return Err(Error::invalid(format!(
                 "two mods in {} have the id {}: {} and {}; give one another id",
@@ -492,17 +616,17 @@ mod tests {
         let error = manifest(r#"{"format": 2, "id": "andrew.calc", "version": "1.0.0", "requires": []}"#).unwrap_err();
         assert!(error.to_string().contains("unknown field `requires`"), "{error}");
         let error =
-            manifest(r#"{"format": 2, "id": "a.b", "version": "1.0.0", "additions": [{"map": "s17", "program": {}}]}"#)
+            manifest(r#"{"format": 2, "id": "a.b", "version": "1.0.0", "scripts": {"additions": [{"map": "s17", "program": {}}]}}"#)
                 .unwrap_err();
         assert!(error.to_string().contains("unknown field `program`"), "{error}");
     }
 
     #[test]
-    fn an_older_mod_is_told_to_upgrade() {
-        let error = manifest(r#"{"title": "Calc"}"#).unwrap_err();
-        assert!(error.to_string().contains("mod upgrade"), "{error}");
+    fn format_id_and_version_are_needed() {
+        let error = manifest(r#"{"id": "a.b", "version": "1.0.0"}"#).unwrap_err();
+        assert!(error.to_string().contains("missing field `format`"), "{error}");
         let error = manifest(r#"{"format": 3, "id": "a.b", "version": "1.0.0"}"#).unwrap_err();
-        assert!(error.to_string().contains("format 3"), "{error}");
+        assert!(error.to_string().contains("this dc2tk reads format 2"), "{error}");
     }
 
     #[test]
@@ -515,6 +639,17 @@ mod tests {
         assert!(manifest(r#"{"format": 2, "id": "a.b", "version": "1.0.0", "game": "dc2-ntsc"}"#).is_err());
         assert!(manifest(r#"{"format": 2, "id": "a.b", "version": "1.0.0", "tool": ">=99.0"}"#).is_err());
         assert!(manifest(r#"{"format": 2, "id": "a.b", "version": "1.0.0", "targets": ["native"]}"#).is_ok());
+        let port = r#""port": {"sources": ["x.c"], "api": "^1.0"}"#;
+        assert!(manifest(&format!(r#"{{"format": 2, "id": "a.b", "version": "1.0.0", {port}}}"#)).is_err());
+        assert!(manifest(&format!(
+            r#"{{"format": 2, "id": "a.b", "version": "1.0.0", "targets": ["native"], {port}}}"#
+        ))
+        .is_ok());
+        let later = r#""port": {"sources": ["x.c"], "api": "^2.0"}"#;
+        assert!(manifest(&format!(
+            r#"{{"format": 2, "id": "a.b", "version": "1.0.0", "targets": ["native"], {later}}}"#
+        ))
+        .is_err());
     }
 
     #[test]
@@ -540,8 +675,27 @@ mod tests {
         full.conflicts.insert("e.f".into(), "*".into());
         full.replace.insert("texture:x".into(), "x.png".into());
         full.add.insert("texture:y".into(), "y.png".into());
+        full.files.insert("mod:z.img".into(), "z".into());
+        full.data.insert("items".into(), "items.json".into());
+        full.text.insert("en/shopname".into(), "shopname.txt".into());
+        full.scripts.sources = vec!["*.c".into()];
+        full.scripts.whole.insert("map/s/s17/s17_1.c".into(), "files/map/s/s17/s17_1.c".into());
+        full.port.sources = vec!["port/*.c".into()];
+        full.port.api = "^1.0".into();
+        full.port.settings.insert("render.scale".into(), 2.into());
+        full.settings.insert(
+            "hard".into(),
+            Setting {
+                kind: SettingKind::Int,
+                default: 1.into(),
+                label: "l".into(),
+                min: Some(0),
+                max: Some(3),
+                values: vec!["v".into()],
+            },
+        );
         let wrap = Wrap { before: vec!["b".into()], after: vec!["a".into()] };
-        full.additions = vec![Addition {
+        full.scripts.additions = vec![Addition {
             map: Some("s17".into()),
             scripts: vec!["x.c".into()],
             programs: IndexMap::from([("9000".to_string(), "go".to_string())]),
@@ -551,8 +705,11 @@ mod tests {
         full.dev.start_at = Some("m01".into());
         let written = serde_json::to_value(&full).unwrap();
         assert_eq!(keys(&written), keys(&schema["properties"]));
-        assert_eq!(keys(&written["additions"][0]), keys(&schema["$defs"]["addition"]["properties"]));
+        assert_eq!(keys(&written["scripts"]), keys(&schema["properties"]["scripts"]["properties"]));
+        assert_eq!(keys(&written["scripts"]["additions"][0]), keys(&schema["$defs"]["addition"]["properties"]));
         assert_eq!(keys(&written["dev"]), keys(&schema["properties"]["dev"]["properties"]));
+        assert_eq!(keys(&written["port"]), keys(&schema["properties"]["port"]["properties"]));
+        assert_eq!(keys(&written["settings"]["hard"]), keys(&schema["$defs"]["setting"]["properties"]));
         assert_eq!(schema["required"], serde_json::json!(["format", "id", "version"]));
     }
 
@@ -561,27 +718,5 @@ mod tests {
         assert_eq!(default_id("castle-golems"), "local.castle-golems");
         assert_eq!(default_id("My_Mod 2"), "local.my-mod-2");
         assert_eq!(default_id("..."), "local.mod");
-    }
-
-    #[test]
-    fn upgrading_moves_keys_to_their_new_places() {
-        let folder = fresh_folder();
-        let old = r#"{"title": "Calc", "version": "1.2", "requires": ["kit"], "after": ["lights"],
-                      "start_at": "m01", "replace": {"texture:a": "a.png"},
-                      "files": {"x.c": {"original": "abc", "unnamed": "x.c"}}, "includes": {}, "note": "n"}"#;
-        std::fs::write(folder.join(MANIFEST), old).unwrap();
-        let upgraded = upgrade(&folder, "andrew.calc", &|name| format!("local.{name}")).unwrap();
-        let found = read(&folder).unwrap();
-        assert_eq!(found, upgraded.manifest);
-        assert_eq!(found.name, "Calc");
-        assert_eq!(found.version, FIRST_VERSION);
-        assert_eq!(found.dependencies.get("local.kit").map(String::as_str), Some("*"));
-        assert_eq!(found.after, vec!["local.lights".to_string()]);
-        assert_eq!(found.start_at(), Some("m01"));
-        assert_eq!(found.replace["texture:a"], "a.png");
-        assert_eq!(read_lock(&folder).unwrap().files["x.c"].unnamed, "x.c");
-        assert_eq!(upgraded.notes.len(), 2);
-        assert!(upgrade(&folder, "andrew.calc", &|name| name.to_string()).is_err());
-        std::fs::remove_dir_all(&folder).unwrap();
     }
 }

@@ -224,6 +224,6 @@ Create `mods/max-combo/mod.json` with `"dev": {"start_at": "d01f01"}` so **New G
 Validate and build:
 
 ```sh
-dc2tk mod check extracted/scripts max-combo
-dc2tk build extracted/scripts dc2.iso -o test.iso --mod max-combo --dev --play
+dc2tk mod check extracted/scripts you.max-combo
+dc2tk build extracted/scripts dc2.iso -o test.iso --mod you.max-combo --dev --play
 ```

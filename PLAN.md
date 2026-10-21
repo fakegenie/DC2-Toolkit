@@ -468,7 +468,8 @@ does the same and is kept in step with `native.rs` (fix 7):
 | `audio.c`, `midi.c`, `spu2.c`, `sound.cpp`, `ezbgm.cpp`, `iop.c` | the sound library and the `CSound` replacements | 1,560 |
 | `input.c`, `memory_card.c`, `movie.cpp`, `movie_decode.c` | pads, cards, movies | 1,000 |
 | `frame.cpp`, `collision.cpp`, `link_fixups.cpp` | asm replacements | 230 |
-| `port/debug/*` (debug build only), `hooks.c`, `port_stats.h` | debug window and API, counters, scenario controls, frame capture, input replay, savestates; the normal build has only empty hooks and counters | |
+| `mods.c`, `port_mod.h`, `hooks.c`, `port_stats.h` | port mods: the hook tables mods register (`PORT_MOD`), their debug API commands and window panels, `port_setting` from the override folder's `dc2tk-port.cfg`; counters | |
+| `port/debug/*` (the `dc2tk.debug-tools` port mod, debug build only) | debug window and API, scenario controls, frame capture, input replay, savestates | |
 
 About 7,900 lines with headers and shaders, not counting the generated `shaders.h`; the tests
 are about 3,100 more.
@@ -508,8 +509,9 @@ change the second-to-last does not.
 Mostly built: `--scale 1-4` renders at whole multiples of the PS2 resolution, `--msaa 1|2|4|8`
 adds multisampling, and the debug API's `scale` and `msaa` change both while running. Left to do:
 
-1. **A player-facing setting:** an options screen or a remembered config file, fullscreen or
-   borderless, and vsync. The window is a fixed 960x720 with the picture fitted 4:3 inside.
+1. **A player-facing setting:** an options screen, fullscreen or borderless, and vsync. A mod
+   set can already choose `render.scale` and `render.msaa` as port settings (a native-only mod's
+   `"port": {"settings"}`), which the port reads from the override folder's `dc2tk-port.cfg`. The window is a fixed 960x720 with the picture fitted 4:3 inside.
 2. **Any resolution:** non-integer scales, so 1080p and 1440p fit exactly.
 3. **The known 1x gaps:** render-to-texture cache textures stay 1x and shadow edges are not
    antialiased; the bitmap fonts and 2D art go soft when upscaled, so they need a filter choice.

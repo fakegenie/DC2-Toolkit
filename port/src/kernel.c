@@ -1,5 +1,6 @@
 #include "port_fiber.h"
 #include "port_kernel.h"
+#include "port_mod.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -55,7 +56,6 @@ static int host_requested;
 extern void port_graphics_tick(void);
 extern void port_graphics_wait(void);
 
-__attribute__((weak)) void debug_host(void) {}
 
 static void ready(int id) {
     threads[id].state = READY;
@@ -332,7 +332,7 @@ int port_kernel_run(int (*entry)(void)) {
     port_fiber_switch(&host_context, &threads[1].context);
     while (host_requested) {
         host_requested = 0;
-        debug_host();
+        port_mods_host();
         port_fiber_switch(&host_context, &threads[running].context);
     }
     return game_result;

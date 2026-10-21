@@ -1,7 +1,7 @@
 #include "mglib.hpp"
 #include "draw.hpp"
 #include "port_present.h"
-#include "port_debug.h"
+#include "port_mod.h"
 #include "sce/eekernel.h"
 #include "sce/libgraph.h"
 #include <cstdlib>
@@ -39,14 +39,14 @@ int port_debug;
 
 PORT_OVERRIDE void mgEndFrame(mgCDrawManager *manager) {
     if (port_debug) DebugFlag = 1;
-    debug_frame_enter();
+    port_mods_frame_enter();
     mgEndFrameRetail(manager);
-    debug_frame_drawn();
+    port_mods_frame_drawn();
     port_present_show(display_target, display_width, display_height);
     gs_next_frame();
     visual_next_frame();
     sprite_next_frame();
-    debug_frame_exit();
+    port_mods_frame_exit();
 }
 
 PORT_OVERRIDE void mgSetPkTextureRepeat(sceGsClamp clamp) {

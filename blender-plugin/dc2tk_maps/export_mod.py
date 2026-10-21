@@ -199,6 +199,10 @@ def default_id(folder):
     return "local." + (name.rstrip("-") or "mod")
 
 
+def mod_id(mod_dir):
+    return read_mod_json(mod_dir)[1].get("id") or default_id(os.path.basename(os.path.normpath(mod_dir)))
+
+
 def read_mod_json(mod_dir):
     path = os.path.join(mod_dir, "mod.json")
     data = OrderedDict()
@@ -416,7 +420,7 @@ class DC2TK_OT_build(bpy.types.Operator):
             "--mods",
             os.path.dirname(mod_dir),
             "--mod",
-            os.path.basename(mod_dir),
+            mod_id(mod_dir),
         ]
         return ("dc2tk build", command, prefs.working_dir(settings))
 

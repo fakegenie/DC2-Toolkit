@@ -80,7 +80,7 @@ static void place_player_at_door(void)
 // Gill as he waits: under the fish, his back to the door, turning slowly with it.
 static void load_gill(void)
 {
-    load_chara(MEMORY_STACK_EVENT, "mods/gill/gill.chr", "info.cfg", GILL);
+    load_chara(MEMORY_STACK_EVENT, MOD_DIR "gill.chr", "info.cfg", GILL);
     set_chara_active(GILL);
     place_chara(GILL, GILL_X, 0.0, GILL_Z, 3.14);
     set_chara_motion(GILL, "spin");

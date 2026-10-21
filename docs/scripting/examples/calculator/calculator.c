@@ -5,9 +5,9 @@
 // It is a patch of every language of map s17's script. It adds the start program the mod's
 // "dev": {"start_at"} warps a --dev build's new game to, and replaces program 500, which runs
 // when the player presses the action button at the map's "talk" point (the Spheda trial's, unused
-// while the mod's game starts here). Its files come from mod.json: the model (mods/calculator/calc.chr), the face, cursor and
-// digits (mods/calculator/calc_ui.img) and the sounds, added to bank SP_042, which nothing else
-// loads.
+// while the mod's game starts here). Its files come from mod.json's "files" (MOD_DIR "calc.chr",
+// the model; MOD_DIR "calc_ui.img", the face, cursor and digits) and the sounds, added to bank
+// SP_042, which nothing else loads.
 #pragma target map s17
 
 #include <event.h>
@@ -293,7 +293,7 @@ void start_calculator_valley(void)
     set_func_point_enabled("", "branch", 0);
     set_func_point_enabled("p01_s17", "invent_30001-0", 0);
     reset_memory_stack(MEMORY_STACK_SUB_CHARA);
-    load_chara(MEMORY_STACK_SUB_CHARA, "mods/calculator/calc.chr", "info.cfg", KIOSK_SLOT);
+    load_chara(MEMORY_STACK_SUB_CHARA, MOD_DIR "calc.chr", "info.cfg", KIOSK_SLOT);
     set_chara_active(KIOSK_SLOT);
     place_chara(KIOSK_SLOT, KIOSK_X, KIOSK_Y, KIOSK_Z, 0.0);
     place_chara(0, KIOSK_X, KIOSK_Y, KIOSK_Z + 80.0, 3.14);
@@ -413,7 +413,7 @@ void use_calculator(void)
     show_status_bar(0, 1.0);
     load_sound(SND_PORT_MENU, "snd2/sp/sp_042.snd", &sound);
     reset_memory_stack(MEMORY_STACK_EVENT);
-    load_image(MEMORY_STACK_EVENT, "mods/calculator/calc_ui.img", UI_IMAGE, &block);
+    load_image(MEMORY_STACK_EVENT, MOD_DIR "calc_ui.img", UI_IMAGE, &block);
     open_sprite(SPRITE_FACE, "calc_body", block);
     place_sprite(SPRITE_FACE, 0, 0, 256, 256, 0, 0);
     open_sprite(SPRITE_CURSOR, "calc_cursor", block);

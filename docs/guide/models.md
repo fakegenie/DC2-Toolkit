@@ -13,7 +13,7 @@
 3. Edit the meshes, textures, or animations, and export back over `e33a.gltf` with **Format** set to **glTF Separate (`.gltf` + `.bin` + textures)**.
 4. Build the ISO with `dc2tk build`. Only the meshes and animations you changed are rebuilt.
 
-A pattern copies every model it matches: `'model:c02fuku*'` copies Monica's ten outfit models (`c02fuku1` to `c02fuku5`, and `c02fuku1t` to `c02fuku5t`). To export a whole character pack instead, run `dc2tk mod asset dc2.iso my-mod chara/c02a.chr --as gltf`, which writes `mods/my-mod/disc/chara/c02a.chr.gltf/`.
+A pattern copies every model it matches: `'model:c02fuku*'` copies Monica's ten outfit models (`c02fuku1` to `c02fuku5`, and `c02fuku1t` to `c02fuku5t`). To export a whole character pack instead, run `dc2tk mod asset dc2.iso my-mod chara/c02a.chr --as gltf`, which writes `mods/my-mod/raw/chara/c02a.chr.gltf/` and adds `"chara/c02a.chr": "raw/chara/c02a.chr.gltf"` to the mod's `"files"`.
 
 ### Max and Monica
 
@@ -33,21 +33,21 @@ Motions in sets other than `0` are Actions named `<set>:<name>` (such as `3:bow`
 
 ## Add a new model pack (`.chr`)
 
-Add a `"file:<disc-path>"` entry under `"add"` in `mod.json` to build a new `.chr` model pack from a glTF file. Scripts load it with `load_chara` (or the `load_scene_chara` helper):
+Add a `"mod:NAME"` line to `"files"` in `mod.json` to build a new `.chr` model pack from a glTF file. Scripts load it with `load_chara` (or the `load_scene_chara` helper) from `MOD_DIR`, the mod's own folder on the disc:
 
 ```json
 {
-  "add": {
-    "file:mods/gill/gill.chr": {
+  "files": {
+    "mod:gill.chr": {
       "file": "model/gill.gltf",
       "like": "model:p01_01a"
-    },
-    "file:mods/calculator/calc.chr": {
-      "file": "model/calc.gltf",
-      "like": "model:uki"
     }
   }
 }
+```
+
+```c
+load_chara(MEMORY_STACK_EVENT, MOD_DIR "gill.chr", "info.cfg", GILL);
 ```
 
 | Template (`"like"`) | Use Case |

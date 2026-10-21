@@ -104,8 +104,8 @@ Create `mods/sindain-hello/mod.json` with `"dev": {"start_at": "g01"}` so **New 
 Validate and build:
 
 ```sh
-dc2tk mod check extracted/scripts sindain-hello
-dc2tk build extracted/scripts dc2.iso -o test.iso --mod sindain-hello --dev --play
+dc2tk mod check extracted/scripts you.sindain-hello
+dc2tk build extracted/scripts dc2.iso -o test.iso --mod you.sindain-hello --dev --play
 ```
 
 > **Tip: Custom characters, scene skipping, and warps**

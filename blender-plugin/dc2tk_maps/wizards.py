@@ -304,7 +304,7 @@ class DC2TK_OT_new_map(bpy.types.Operator):
     name: StringProperty(name="Name", description="Lower-case letters, digits and _, from a letter, 12 at most")
     title: StringProperty(name="Title", description="The map's title in the game's map table (printable ASCII)")
     script: BoolProperty(name="Script of its own", default=True)
-    start_at: BoolProperty(name="New Game starts there", description="The mod's start_at (test images only)", default=True)
+    start_at: BoolProperty(name="New Game starts there", description="The mod's dev start_at (--dev builds only)", default=True)
     empty: BoolProperty(
         name="Start empty",
         description="Remove every placement and point (the light sets, fog and cameras stay) and lay a ground with collision",
@@ -375,7 +375,9 @@ class DC2TK_OT_new_map(bpy.types.Operator):
         added["map:%s" % self.name] = line
         data["add"] = added
         if self.start_at:
-            data["start_at"] = self.name
+            dev = data.get("dev") if isinstance(data.get("dev"), dict) else OrderedDict()
+            dev["start_at"] = self.name
+            data["dev"] = dev
         export_mod.write_mod_json(path, data)
         try:
             export_mod.export_map(context, c2data.current_map_root(context) or root, mod_dir)

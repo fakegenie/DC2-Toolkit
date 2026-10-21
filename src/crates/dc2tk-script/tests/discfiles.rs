@@ -68,10 +68,11 @@ fn new_files_get_index_records_before_the_terminator() {
 fn two_mods_replacing_one_game_file_clash() {
     let folder = TempDir::new("discfiles-clash");
     for name in ["a", "b"] {
-        let path = folder.path().join(name).join(discfiles::DISC).join("chara/x.chr.d/x.img");
+        let path = folder.path().join(name).join("raw/x.img");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, name.as_bytes()).unwrap();
-        build_common::write_manifest(&folder.path().join(name), serde_json::json!({}));
+        let files = serde_json::json!({"files": {"chara/x.chr.d/x.img": "raw/x.img"}});
+        build_common::write_manifest(&folder.path().join(name), files);
     }
     let (found, clashes) = discfiles::collect(&[folder.path().join("a"), folder.path().join("b")]).unwrap();
     assert_eq!(found["chara/x.chr.d/x.img"].0, "test.a");

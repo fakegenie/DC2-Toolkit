@@ -99,6 +99,13 @@ pub fn compile(
     let mut defines: std::collections::HashMap<String, String> =
         patches::LANGUAGES.iter().map(|(name, value)| (name.to_string(), value.to_string())).collect();
     defines.insert("LANGUAGE".into(), language.to_string());
+    defines.insert("MOD_DIR".into(), format!("\"{}/\"", crate::replace::mod_folder(&script.module)));
+    defines.extend(
+        constants
+            .iter()
+            .filter(|(name, _)| name.starts_with("SETTING_"))
+            .map(|(name, value)| (name.clone(), value.to_string())),
+    );
     let shown = script.source.to_string_lossy();
     let fail = |error: Error| Error::invalid(format!("{shown}: {error}"));
     let libraries = library::include_texts(&text, &script.source, None, tools.sdk_dir, extra).map_err(fail)?;
@@ -248,12 +255,20 @@ pub fn build_one(
     tools: &Toolchain,
     numbers: &BTreeMap<String, IndexMap<String, i64>>,
 ) -> Result<Vec<(String, Vec<u8>)>> {
-    let mod_dir = mod_dirs
-        .iter()
-        .find(|dir| dir.file_name().is_some_and(|name| name.to_string_lossy() == script.module))
-        .cloned()
-        .unwrap_or_default();
-    let constants = constants_for(&script.module, numbers);
+    let mut mod_dir = PathBuf::new();
+    let mut constants = constants_for(&script.module, numbers);
+    for dir in mod_dirs {
+        let manifest = crate::manifest::read(dir)?;
+        if manifest.id != script.module {
+            continue;
+        }
+        for (name, value) in crate::manifest::settings_of(&manifest)? {
+            if let Ok(number) = crate::manifest::setting_define(&manifest.settings[&name], &value).parse::<i64>() {
+                constants.insert(format!("SETTING_{name}"), number);
+            }
+        }
+        mod_dir = dir.clone();
+    }
     built(script, tree, &include_folders(&mod_dir, tree), tools, &constants)
         .map_err(|error| Error::invalid(format!("map:{} (mod {}): {error}", script.map, script.module)))
 }

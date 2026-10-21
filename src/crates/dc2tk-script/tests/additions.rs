@@ -83,7 +83,7 @@ fn several_mods_can_add_to_one_script_and_a_mod_needs_no_copies() {
     for (module, program) in [(&first, "9000"), (&second, "9001")] {
         build_common::write_manifest(
             module,
-            serde_json::json!({"additions": [{"map": "s17", "programs": {program: "go"}}]}),
+            serde_json::json!({"scripts": {"additions": [{"map": "s17", "programs": {program: "go"}}]}}),
         );
     }
     let (texts, clashes) = mods::overlay(&[first, second], &root, &names()).unwrap();

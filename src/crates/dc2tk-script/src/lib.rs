@@ -66,9 +66,11 @@ pub mod maptable;
 pub mod memory;
 pub mod mods;
 pub mod numbers;
+pub mod package;
 pub mod patches;
 pub mod replace;
 pub mod semver;
+pub mod sets;
 pub mod slim;
 pub mod startat;
 

@@ -312,16 +312,16 @@ fn a_text_changes_its_messages_at_every_place() {
     fails(built(&disc, &["names"]), "@1: the English font has no '\u{e9}'");
     // not a .txt
     write(&mod_dir.join("names.png"), &png([0, 0, 0]));
-    mod_json(&mod_dir, &json!({"replace": {"text:en/names": "names.png"}}));
+    mod_json(&mod_dir, &json!({"text": {"en/names": "names.png"}}));
     fails(replace::lines(&mod_dir), "is not a .txt file of messages");
 
-    // by path, as mod asset --as txt writes it into disc/
+    // by path, as mod asset --as txt writes it into raw/ with its files line
     let paths = ["menu/1/b.pac.d/names.mes".to_string()];
-    let written = discfiles::copy_out(&disc.iso, &mod_dir, &paths, Some("txt")).unwrap();
-    assert_eq!(written, ["menu/1/b.pac.d/names.mes.txt"]);
-    let file = mod_dir.join("disc/menu/1/b.pac.d/names.mes.txt");
-    write(&file, fs::read_to_string(&file).unwrap().replace("Lid", "Cover").as_bytes());
     mod_json(&mod_dir, &json!({}));
+    let written = discfiles::copy_out(&disc.iso, &mod_dir, &paths, Some("txt")).unwrap();
+    assert_eq!(written, ["raw/menu/1/b.pac.d/names.mes.txt"]);
+    let file = mod_dir.join("raw/menu/1/b.pac.d/names.mes.txt");
+    write(&file, fs::read_to_string(&file).unwrap().replace("Lid", "Cover").as_bytes());
     let (wanted, _) = discfiles::collect(std::slice::from_ref(&mod_dir)).unwrap();
     let (files, _) =
         discfiles::replaced(&disc.iso, &wanted, &BTreeMap::new(), &Default::default(), &Default::default()).unwrap();
@@ -374,7 +374,7 @@ fn two_mods_changing_one_asset_or_place_are_refused() {
 
     // a whole game file in one mod and a picture inside it in another
     write(&disc.mods.join("b").join("raw.img"), b"raw");
-    mod_json(&disc.mods.join("b"), &json!({"replace": {"file:map/b/b02.ipk.d/x.img": "raw.img"}}));
+    mod_json(&disc.mods.join("b"), &json!({"files": {"map/b/b02.ipk.d/x.img": "raw.img"}}));
     fails(built(&disc, &["a", "b"]), "map/b/b02.ipk.d/x.img (mod test.b) and texture:wall (mod test.a) both change");
 
     // a model in one mod and a picture of its pack in another go together
@@ -392,22 +392,19 @@ fn a_file_line_converts_a_folder_by_the_game_file_it_stands_for() {
     let disc = disc("file");
     let mod_dir = disc.mods.join("raw");
     write(&mod_dir.join("walls/wall.png"), &png([4, 4, 4]));
-    mod_json(&mod_dir, &json!({"replace": {"file:map/b/b02.ipk.d/x.img": "walls"}}));
+    mod_json(&mod_dir, &json!({"files": {"map/b/b02.ipk.d/x.img": "walls"}}));
     let (wanted, _) = discfiles::collect(std::slice::from_ref(&mod_dir)).unwrap();
     let (files, report) =
         discfiles::replaced(&disc.iso, &wanted, &BTreeMap::new(), &Default::default(), &Default::default()).unwrap();
     assert_eq!(report[0].path, "map/b/b02.ipk.d/x.img");
     assert_eq!(pixels(&at(&disc, &files, "map/b/b02.ipk", &["x.img"]), "wall"), [4, 4, 4, 0x80].repeat(64));
     // a folder for a file with no common format is refused
-    mod_json(&mod_dir, &json!({"replace": {"file:map/b/b02.ipk": "walls"}}));
+    mod_json(&mod_dir, &json!({"files": {"map/b/b02.ipk": "walls"}}));
     let (wanted, _) = discfiles::collect(std::slice::from_ref(&mod_dir)).unwrap();
     fails(
         discfiles::replaced(&disc.iso, &wanted, &BTreeMap::new(), &Default::default(), &Default::default()),
         "stands only for",
     );
-    // given in disc/ too
-    write(&mod_dir.join("disc/map/b/b02.ipk"), b"x");
-    fails(discfiles::collect(std::slice::from_ref(&mod_dir)), "is given twice");
 }
 
 #[test]
@@ -423,19 +420,19 @@ fn a_file_line_made_like_a_disc_file_is_a_new_texture_file_or_pack() {
     }
     mod_json(
         &mod_dir,
-        &json!({"add": {
-            "file:mods/calc/ui.img": {"file": "ui", "like": "texture:tex02"},
-            "file:mods/calc/calc.chr": {"file": "model", "like": "model:c01"},
-            "file:map/b/b02.ipk.d/keys.img": {"file": "ui/calc_key.png", "like": "map/b/b02.ipk.d/x.img"},
+        &json!({"files": {
+            "mod:ui.img": {"file": "ui", "like": "texture:tex02"},
+            "mod:calc.chr": {"file": "model", "like": "model:c01"},
+            "map/b/b02.ipk.d/keys.img": {"file": "ui/calc_key.png", "like": "map/b/b02.ipk.d/x.img"},
         }}),
     );
     let lines = replace::lines(&mod_dir).unwrap();
     assert!(replace::needs_index(&lines));
-    assert_eq!(replace::described(&mod_dir).unwrap()[0], "adds file:mods/calc/ui.img: ui (like texture:tex02)");
+    assert_eq!(replace::described(&mod_dir).unwrap()[0], "adds file:mods/test.calc/ui.img: ui (like texture:tex02)");
     fails(replace::templates(&lines, None), "the disc has no asset texture:tex02");
     let templates = replace::templates(&lines, Some(&disc.index)).unwrap();
-    assert_eq!(templates["mods/calc/ui.img"].place.display(), "map/a/a01.ipk.d/a01.img");
-    assert_eq!(templates["mods/calc/calc.chr"].name, "c01");
+    assert_eq!(templates["mods/test.calc/ui.img"].place.display(), "map/a/a01.ipk.d/a01.img");
+    assert_eq!(templates["mods/test.calc/calc.chr"].name, "c01");
     let (wanted, _) = discfiles::collect(std::slice::from_ref(&mod_dir)).unwrap();
     let (files, report) =
         discfiles::replaced(&disc.iso, &wanted, &BTreeMap::new(), &Default::default(), &templates).unwrap();
@@ -445,16 +442,16 @@ fn a_file_line_made_like_a_disc_file_is_a_new_texture_file_or_pack() {
         shown,
         [
             ("map/b/b02.ipk.d/keys.img", None, false),
-            ("mods/calc/calc.chr", None, true),
-            ("mods/calc/ui.img", None, true)
+            ("mods/test.calc/calc.chr", None, true),
+            ("mods/test.calc/ui.img", None, true)
         ]
     );
 
     // the new texture file: a picture per PNG, named after it, in the template picture's format
-    let ui = im3::read(&files["mods/calc/ui.img"]).unwrap();
+    let ui = im3::read(&files["mods/test.calc/ui.img"]).unwrap();
     let names: Vec<(&str, Format)> = ui.iter().map(|image| (image.name.as_str(), image.format)).collect();
     assert_eq!(names, [("calc_bg", Format::Ct32), ("calc_key", Format::Ct32)]);
-    for (name, png) in dc2tk_assets::textures::export(&files["mods/calc/ui.img"]).unwrap() {
+    for (name, png) in dc2tk_assets::textures::export(&files["mods/test.calc/ui.img"]).unwrap() {
         let seed = if name == "calc_bg.png" { 10 } else { 200 };
         assert_eq!(png::read_png(&png).unwrap().data, colours(seed), "{name}");
     }
@@ -462,7 +459,7 @@ fn a_file_line_made_like_a_disc_file_is_a_new_texture_file_or_pack() {
     assert_eq!(im3::read(&keys).unwrap()[0].name, "calc_key");
 
     // the new pack: the glTF's mesh and texture under the pack's own name, the template's cfg
-    let pack = &files["mods/calc/calc.chr"];
+    let pack = &files["mods/test.calc/calc.chr"];
     let members: Vec<String> = dc2tk_disc::archive::parse_pack(pack).unwrap().into_iter().map(|m| m.name).collect();
     assert_eq!(members, ["calc.img", "calc.mds", "info.cfg"]);
     let cfg = rebuild::read_member(pack, &["info.cfg".to_string()]).unwrap();
@@ -486,10 +483,10 @@ fn a_file_line_made_like_a_disc_file_is_a_new_texture_file_or_pack() {
         mod_json(&mod_dir, &body);
         fails(replace::lines(&mod_dir), words);
     };
-    case(json!({"add": {"file:a/b.img": {"file": "ui", "like": "model:c01"}}}), "names a texture");
-    case(json!({"add": {"file:a/b.chr": {"file": "ui/calc_bg.png", "like": "chara/c01.chr"}}}), "is not a .gltf file");
-    case(json!({"add": {"file:a/b.snd": {"file": "ui", "like": "texture:tex02"}}}), "makes texture files");
-    case(json!({"add": {"file:a/b.img": {"file": "ui", "like": "texture:tex*"}}}), "names one texture");
+    case(json!({"files": {"a/b.img": {"file": "ui", "like": "model:c01"}}}), "names a texture");
+    case(json!({"files": {"a/b.chr": {"file": "ui/calc_bg.png", "like": "chara/c01.chr"}}}), "is not a .gltf file");
+    case(json!({"files": {"a/b.snd": {"file": "ui", "like": "texture:tex02"}}}), "makes texture files");
+    case(json!({"files": {"a/b.img": {"file": "ui", "like": "texture:tex*"}}}), "names one texture");
     case(json!({"add": {"texture:x": {"file": "ui", "like": "texture:tex02"}}}), "unknown option \"like\"");
 }
 
@@ -515,7 +512,7 @@ fn lines_are_checked_as_mod_json_is_read() {
     // only a new map may leave its deleted placements out, the disc's maps keep their slots
     case(json!({"replace": {"map:s17": {"file": "a.png", "compact": true}}}), "unknown option \"compact\"");
     case(json!({"add": {"map:s17x": {"file": "a.png", "like": "s17", "compact": 1}}}), "\"compact\" is true or false");
-    case(json!({"replace": {"data:items": {"file": "a.png", "like": "x"}}}), "unknown option \"like\"");
+    case(json!({"data": {"items": {"file": "a.png", "like": "x"}}}), "unknown option \"like\"");
     case(json!({"replace": {"sound:x": {"file": "a.wav", "bank": "SP_004"}}}), "unknown option \"bank\"");
     case(json!({"replace": {"sound:x": {"file": "a.wav", "volume": 300}}}), "0 to 127");
     case(json!({"add": {"sound:SE_NEW": "a.wav"}}), "say which bank");
@@ -524,13 +521,14 @@ fn lines_are_checked_as_mod_json_is_read() {
     case(json!({"replace": ["texture:x"]}), "invalid type: sequence, expected a map");
     mod_json(
         &mod_dir,
-        &json!({"replace": {"sound:SE_X": {"file": "a.wav", "volume": 90}, "file:\\snd2\\x.snd": "a.wav"},
-                              "add": {"sound:SE_NEW": {"file": "a.wav", "bank": "SP_004"}}}),
+        &json!({"replace": {"sound:SE_X": {"file": "a.wav", "volume": 90}},
+                              "add": {"sound:SE_NEW": {"file": "a.wav", "bank": "SP_004"}},
+                              "files": {"\\snd2\\x.snd": "a.wav"}}),
     );
     let lines = replace::lines(&mod_dir).unwrap();
     assert!(matches!(lines[0].kind, LineKind::Sound { volume: Some(90), .. }));
-    assert_eq!(lines[1].disc_path(), "snd2/x.snd");
-    assert!(matches!(&lines[2].kind, LineKind::Sound { bank: Some(bank), .. } if bank == "bank:SP_004"));
+    assert!(matches!(&lines[1].kind, LineKind::Sound { bank: Some(bank), .. } if bank == "bank:SP_004"));
+    assert_eq!(lines[2].disc_path(), "snd2/x.snd");
     assert_eq!(replace::raw_files(&mod_dir).unwrap(), [("snd2/x.snd".to_string(), mod_dir.join("a.wav"))]);
 }
 
@@ -584,18 +582,18 @@ fn data_lines_name_a_table_and_merge_across_mods() {
         mod_json(&mod_dir, &body);
         fails(replace::lines(&mod_dir), words);
     };
-    case(json!({"replace": {"data:weapons": "items.json"}}), "data:items, data:shops, data:monsters, data:inventions");
-    case(json!({"add": {"data:items": "items.json"}}), "replaces one of the tables");
-    case(json!({"replace": {"data:items": "a.png"}}), "is not a .json file");
-    case(json!({"replace": {"data:items": {"file": "items.json", "only": "menu"}}}), "unknown option \"only\"");
-    mod_json(&mod_dir, &json!({"replace": {"DATA:Items": "items.json"}}));
+    case(json!({"data": {"weapons": "items.json"}}), "data:items, data:shops, data:monsters, data:inventions");
+    case(json!({"add": {"data:items": "items.json"}}), "go in mod.json's \"data\"");
+    case(json!({"data": {"items": "a.png"}}), "is not a .json file");
+    case(json!({"data": {"items": {"file": "items.json", "only": "menu"}}}), "unknown option \"only\"");
+    mod_json(&mod_dir, &json!({"data": {"Items": "items.json"}}));
     let lines = replace::lines(&mod_dir).unwrap();
     assert!(lines[0].is_data() && !replace::needs_index(&lines));
     assert_eq!(lines[0].data_table(), "items");
     // two mods may both give a table: build merges them field by field
     let other = folder.path().join("n");
     write(&other.join("items.json"), b"{\"items\": []}");
-    mod_json(&other, &json!({"replace": {"data:items": "items.json"}}));
+    mod_json(&other, &json!({"data": {"items": "items.json"}}));
     assert!(replace::key_clashes(&[mod_dir, other]).unwrap().is_empty());
 }
 
@@ -628,7 +626,15 @@ fn line(module: &str, key: &str, file: &Path, add: bool) -> Line {
     } else {
         LineKind::Asset { kind: ids::kind_of(key).unwrap(), only: vec![] }
     };
-    Line { module: module.into(), key: key.into(), shown: String::new(), file: file.to_path_buf(), add, kind }
+    Line {
+        module: module.into(),
+        key: key.into(),
+        shown: String::new(),
+        file: file.to_path_buf(),
+        add,
+        kind,
+        inline: None,
+    }
 }
 
 #[test]
@@ -716,13 +722,16 @@ fn a_banks_folder_reaches_the_copies_whose_entry_plays_alike() {
 fn named_wavs_give_the_mods_patches_constants() {
     let folder = TempDir::new("wav-names");
     let mod_dir = folder.path().join("beeps");
-    let wavs = mod_dir.join("disc/snd2/sp/sp_004.snd.wav");
+    let wavs = mod_dir.join("raw/snd2/sp/sp_004.snd.wav");
     for name in ["001_door.wav", "005_beep.wav", "006.wav", "007_Big beep!.wav"] {
         write(&wavs.join(name), b"");
     }
     // a file: line's folder counts too; a bank: line's cannot add entries and gives none
     write(&mod_dir.join("menu/sp_001/003_chime.wav"), b"");
-    mod_json(&mod_dir, &json!({"replace": {"file:menu/0/m.pac.d/SP_001.snd": "menu/sp_001"}}));
+    mod_json(
+        &mod_dir,
+        &json!({"files": {"snd2/sp/sp_004.snd": "raw/snd2/sp/sp_004.snd.wav", "menu/0/m.pac.d/SP_001.snd": "menu/sp_001"}}),
+    );
     let found = replace::wav_constants(&mod_dir).unwrap();
     let found: Vec<(&str, i64)> = found.iter().map(|(name, number)| (name.as_str(), *number)).collect();
     assert_eq!(
@@ -903,4 +912,20 @@ fn the_english_fonts_letters_are_every_mods_together() {
     .to_string();
     assert!(error.contains("uses 33 letters past the English font's own"), "{error}");
     assert!(error.contains("used by text:en/allmenu (mod one), data:items (mod two)"), "{error}");
+}
+
+#[test]
+fn a_line_with_when_follows_its_setting() {
+    let folder = TempDir::new("when");
+    let mod_dir = folder.path().join("switch");
+    write(&mod_dir.join("a.png"), &png([1, 2, 3]));
+    mod_json(
+        &mod_dir,
+        &json!({"settings": {"red": {"type": "bool", "default": false}},
+                "replace": {"texture:wall": {"file": "a.png", "when": "red"}, "texture:tex01": {"file": "a.png", "when": "!red"}}}),
+    );
+    let keys: Vec<String> = replace::lines(&mod_dir).unwrap().into_iter().map(|line| line.key).collect();
+    assert_eq!(keys, ["texture:tex01"]);
+    mod_json(&mod_dir, &json!({"replace": {"texture:wall": {"file": "a.png", "when": "red"}}}));
+    assert!(replace::lines(&mod_dir).unwrap_err().to_string().contains("is not a true/false setting"));
 }

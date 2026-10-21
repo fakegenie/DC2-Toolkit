@@ -478,9 +478,10 @@ pub(super) fn file_state(text: &str, defines: &HashMap<String, String>, file: &s
     let chars: Vec<char> = text.chars().collect();
     let mut macros = Macros::default();
     for (name, value) in defines {
-        macros.define(name, cpp::Macro { params: None, body: value.clone() }, true);
-        if let Ok(value) = value.trim().parse::<i128>() {
-            macros.values.insert(name.clone(), value);
+        let number = value.trim().parse::<i128>();
+        macros.define(name, cpp::Macro { params: None, body: value.clone() }, number.is_ok());
+        if let Ok(number) = number {
+            macros.values.insert(name.clone(), number);
         }
     }
     let predefined = macros.values.clone();

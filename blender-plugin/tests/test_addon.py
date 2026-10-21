@@ -605,7 +605,7 @@ def main():
         from dc2tk_maps import runner
 
         text = "\n".join(runner.output_lines(runner.current)) if runner.current else ""
-        check("build" in text and "--mod testmod" in text and "--mods" in text, "build arguments: %s" % text)
+        check("build" in text and "--mod local.testmod" in text and "--mods" in text, "build arguments: %s" % text)
         check(bpy.data.texts.get(runner.TEXT_NAME) is not None, "output in the text block")
         # an extracted disc folder in place of the image; a folder extract did not write is refused
         folder = os.path.join(work, "extracted_disc")

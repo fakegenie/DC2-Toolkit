@@ -12,10 +12,12 @@ Run `dc2tk help <command>` to see all options for any command.
 | --- | --- |
 | `dc2tk setup dc2.iso` | Extract the disc, decompile all scripts, and export assets, maps, and data tables into `extracted/`. |
 | `dc2tk build extracted/scripts dc2.iso -o modded.iso` | Build a playable ISO from `extracted/scripts` and any `--mod` flags. |
-| `dc2tk build extracted/scripts dc2.iso -o test.iso --mod mymod --play` | Build with a mod and launch the ISO in PCSX2. |
+| `dc2tk build extracted/scripts dc2.iso -o test.iso --mod local.mymod --play` | Build with a mod and launch the ISO in PCSX2. |
 | `dc2tk build extracted/scripts dc2.iso -o test.iso --start-at s51:story_50` | Build an ISO where **New Game** jumps directly to map `s51` at program `story_50`. |
-| `dc2tk build extracted/scripts dc2.iso --dry-run --mod mymod` | Validate that a mod compiles and fits in memory without writing an ISO file. |
+| `dc2tk build extracted/scripts dc2.iso --dry-run --mod local.mymod` | Validate that a mod compiles and fits in memory without writing an ISO file. |
+| `dc2tk build extracted/scripts dc2.iso -o modded.iso --set my-game.json` | Build the mods a [mod set](mods.md#mod-sets) chooses, with its settings; its numbers go in `my-game.lock`. |
 | `dc2tk play modded.iso` | Launch an ISO in PCSX2 (skips PS2 boot logos; pass `--full-boot` to keep them). |
+| `dc2tk play dc2.iso --native --set my-game.json` | Run the native port over the retail disc with a mod set's game files (`--build-only` prints the command instead). |
 
 `build` also takes `--mods <dir>` (the folder that holds the mods), `--dev` (use the chosen mods' `"dev"` settings: New Game starts at their `start_at`), and `--full` (compile every script, not only the edited ones). `--play` and `play` find PCSX2 through `--pcsx2 <exe>`, the `PCSX2` environment variable, your `PATH`, or its usual install folder.
 
@@ -27,7 +29,7 @@ The native build needs clang 21, binutils (llvm-objcopy and llvm-nm on macOS), P
 installs that SDK. Run the binary with `--graphics modded.iso`. It warns when the
 mounted disc's executable differs from the one used for the build. For MPEG2 movies, run
 `python3 -I tools/movie_sdk.py` (or install FFmpeg for `pkg-config`) and add `--movies` to the native build. Engine mods are checked
-with clang as well as MWCC by `mod check --native`. A mod cannot override a function supplied by `port/src`.
+with clang as well as MWCC by `mod check --native`. A mod cannot override a function supplied by `port/src`. A chosen mod's `"port"` sources are compiled into the binary too (see [Native port mods](mods.md#native-port-mods)); `python3 -I tools/port.py --mod mods/<name>` does the same for the port's own build.
 
 ## The engine
 
@@ -41,7 +43,7 @@ The game's executable (`SCES_511.90`) built from [ChronicleTwo](https://github.c
 | `dc2tk build extracted/scripts dc2.iso -o test.iso --executable SCES_511.90` | Build an image with an executable `engine build` wrote. When it has outgrown the disc's, it moves past the end of the volume. |
 
 A chosen mod's `engine/` files are built automatically by `dc2tk build … --mod NAME`, including
-`--dry-run`. `dc2tk mod check extracted/scripts NAME --disc dc2.iso` builds them too. These
+`--dry-run`. `dc2tk mod check extracted/scripts ID --disc dc2.iso` builds them too. These
 commands need the same container tools as `engine build`; `mod check --native` also builds the port, which needs the native
 clang/SDL3 tools, and `--disc` for the retail libraries. Engine mods cannot be combined with `--executable`. See [Engine files](mods.md#engine-files)
 for function replacement, `original()`, headers, added units and native declarations.
@@ -60,17 +62,18 @@ The first build makes the container image, which takes a while; later builds reu
 | `dc2tk changes extracted/scripts` | List only `.c` scripts modified in `extracted/scripts/`. |
 | `dc2tk mod make dc2.iso <name>` | Package the edited scripts, assets, and disc files in `extracted/` into `mods/<name>/` (edits in `extracted/data` and `extracted/maps` are not packaged). |
 | `dc2tk mod asset dc2.iso <name> <id>` | Copy an asset or data table into `mods/<name>/` and register it in `mod.json` (for example, `data:items` or `texture:e254a1`). |
-| `dc2tk mod new extracted/scripts <name> <file> [--id author.name]` | Copy whole script files into `mods/<name>/files/` to edit there, starting the mod's `mod.json` if it has none. |
+| `dc2tk mod new extracted/scripts <name> [<file>...] [--id author.name]` | Start a mod in `mods/<name>/` with its `mod.json`, copying any whole script files given into its `files/` (listed under `"scripts": {"whole"}`). |
 | `dc2tk mod save extracted/scripts <name>` | Copy every script file edited or added in `extracted/scripts` into `mods/<name>/`. |
 | `dc2tk mod override extracted/scripts <name> --map s51 <func>` | Create a patch in `mods/<name>/` that overrides `<func>` (also accepts `--monster`, `--script`, or `--library`). |
-| `dc2tk mod check extracted/scripts <name>` | Compile and validate a mod without building an ISO (pass `--disc dc2.iso` to also check assets and data tables). |
-| `dc2tk mod test extracted/scripts <name>` | Run unit tests in `mods/<name>/tests.c` inside the built-in script VM. |
+| `dc2tk mod check extracted/scripts <id>...` | Compile and validate a mod without building an ISO (pass `--disc dc2.iso` to also check assets and data tables). |
+| `dc2tk mod test extracted/scripts <id>` | Run unit tests in the mod's `tests.c` inside the built-in script VM. |
 | `dc2tk mod list extracted/scripts` | List all mods in `mods/`, their patches, and allocated IDs. |
-| `dc2tk mod upgrade <folder> [--id author.name]` | Convert an older mod (a `mod.json` without `"format"`) to format 2: give it an id, move its keys to their new places, and key its numbers in `mods/numbers.json` by the id. |
 | `dc2tk mod slim extracted/scripts <name>` | Convert full-file script copies in a mod into small function patches. |
 | `dc2tk mod header extracted/scripts <name>` | Regenerate `.editor/` headers and `compile_commands.json` for `clangd`. |
-| `dc2tk mod apply extracted/scripts <name>...` | Write mods' files into a source tree. |
-| `dc2tk mod watch extracted/scripts dc2.iso <name>...` | Rebuild mods into the native port's override folder whenever they change and make the running debug build reload them (see [Hot reloading](mods.md#hot-reloading-in-the-native-port)). |
+| `dc2tk mod apply extracted/scripts <id>...` | Write mods' files into a source tree. |
+| `dc2tk mod watch extracted/scripts dc2.iso <id>...` | Rebuild mods into the native port's override folder whenever they change and make the running debug build reload them (see [Hot reloading](mods.md#hot-reloading-in-the-native-port)). |
+| `dc2tk mod pack <id> [-o DIR] [--disc dc2.iso]` | Pack a mod into `<id>-<version>.dc2mod`, a zip of its files that is the same bytes every time (see [Sharing a mod](mods.md#sharing-a-mod)). |
+| `dc2tk mod install <file>.dc2mod` | Copy a packed mod into the mods folder, replacing an older version of it. |
 
 ## Searching and inspecting the game
 

@@ -1,6 +1,6 @@
 //! Mods: changes layered over a decompiled tree. A mod is a folder in the mods folder with a
 //! mod.json (manifest) that gives its id (andrew.castle-golems); the id, not the folder's name, is
-//! how other mods, numbers and messages name it. Its patches, .c files that say which scripts they change with
+//! how builds choose it and how other mods, numbers and messages name it. Its patches, .c files that say which scripts they change with
 //! #pragma target, hold only the functions, globals and programs they add or override, and are
 //! merged into those scripts when they are built (patches); several mods can patch one script, and
 //! the numbers they ask for with NEW_FLAG and the like are given by build (numbers).
@@ -52,34 +52,35 @@ pub const INDEX: &str = manifest::MANIFEST;
 pub const FILES: &str = "files";
 const SOURCE_SUFFIXES: [&str; 2] = ["c", "h"];
 
-/// The folder of the mod named in the mods folder: the mod with that id, or else the folder of that
-/// name. A folder name is letters, digits, '.', '_' and '-', and not only dots ("." and ".." would
-/// be the mods folder itself or the one above it).
+/// The folder of that name in the mods folder, for a command that makes or edits a mod there. A
+/// name is letters, digits, '.', '_' and '-', and not only dots ("." and ".." would be the mods
+/// folder itself or the one above it).
 pub fn folder(mods_dir: &Path, name: &str) -> Result<PathBuf> {
     static MOD_NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Za-z0-9_.-]+$").unwrap());
     if !MOD_NAME.is_match(name) || name.chars().all(|c| c == '.') {
         return Err(Error::invalid(format!(
-            "a mod name uses letters, digits, '.', '_' and '-' only, and not only dots: {name}"
+            "a mod's folder uses letters, digits, '.', '_' and '-' only, and not only dots: {name}"
         )));
-    }
-    if manifest::check_id(name).is_ok() {
-        if let Some(found) = manifest::index(mods_dir)?.get(name) {
-            return Ok(found.clone());
-        }
     }
     Ok(mods_dir.join(name))
 }
 
-/// A mod's name: the id its mod.json gives, or its folder's name while it has none.
-pub fn name(mod_dir: &Path) -> String {
-    manifest::read(mod_dir).map(|found| found.id).unwrap_or_else(|_| paths::file_name(mod_dir))
+/// The folder of the mod with that id in the mods folder.
+pub fn by_id(mods_dir: &Path, id: &str) -> Result<PathBuf> {
+    manifest::check_id(id)?;
+    manifest::index(mods_dir)?
+        .get(id)
+        .cloned()
+        .ok_or_else(|| Error::invalid(format!("no mod with the id {id} in {}", mods_dir.display())))
+}
+
+/// A mod's id, from its mod.json.
+pub fn name(mod_dir: &Path) -> Result<String> {
+    Ok(manifest::read(mod_dir)?.id)
 }
 
 pub fn exists(mod_dir: &Path) -> bool {
-    mod_dir.join(FILES).is_dir()
-        || mod_dir.join(discfiles::DISC).is_dir()
-        || mod_dir.join(INDEX).is_file()
-        || sources(mod_dir).is_ok_and(|found| !found.is_empty())
+    manifest::has_manifest(mod_dir)
 }
 
 /// The chosen mods in the order they are applied, with the mods they require: dirs, and the mods
@@ -128,12 +129,8 @@ pub fn chosen(mods_dir: &Path, names: &[String]) -> Result<Chosen> {
     let mut added = Vec::new();
     let mut found: HashMap<String, (PathBuf, Manifest)> = HashMap::new();
     let mut pending: std::collections::VecDeque<(PathBuf, Option<String>)> = std::collections::VecDeque::new();
-    for name in names {
-        let dir = folder(mods_dir, name)?;
-        if !dir.is_dir() {
-            return Err(Error::invalid(format!("no mod {name} in {}", mods_dir.display())));
-        }
-        pending.push_back((dir, None));
+    for id in names {
+        pending.push_back((by_id(mods_dir, id)?, None));
     }
     while let Some((dir, by)) = pending.pop_front() {
         let own = manifest::read(&dir)?;
@@ -228,21 +225,23 @@ fn required_among(mod_dirs: &[PathBuf]) -> Result<HashMap<String, Vec<String>>> 
 /// The mod's own source files, outside files/: its patches, the libraries and headers they
 /// include, and tests.c. [(path, text)] in path order.
 pub fn sources(mod_dir: &Path) -> Result<Vec<(PathBuf, String)>> {
-    if !mod_dir.is_dir() {
+    if !manifest::has_manifest(mod_dir) {
         return Ok(Vec::new());
     }
+    let own = manifest::read(mod_dir)?;
+    let whole: BTreeSet<&str> = own.scripts.whole.values().map(String::as_str).collect();
     let mut found = Vec::new();
     for relative in discfiles::files_in(mod_dir)? {
         let parts: Vec<&str> = relative.split('/').collect();
         let suffix = relative.rsplit_once('.').map(|(_, suffix)| suffix);
         let hidden = parts.iter().any(|part| part.starts_with('.'));
         let stem_only = parts.last().is_some_and(|name| name.starts_with('.') && name[1..].find('.').is_none());
-        if suffix.is_some_and(|suffix| SOURCE_SUFFIXES.contains(&suffix))
-            && !stem_only
-            && parts[0] != FILES
-            && parts[0] != discfiles::DISC
-            && !hidden
-        {
+        let listed = if own.scripts.sources.is_empty() {
+            suffix.is_some_and(|suffix| SOURCE_SUFFIXES.contains(&suffix))
+        } else {
+            own.scripts.sources.iter().any(|pattern| additions::fnmatch(&relative, pattern))
+        };
+        if listed && !stem_only && !hidden && !whole.contains(relative.as_str()) && parts[0] != FILES {
             let path = paths::join_relative(mod_dir, &relative);
             let text = dc2tk_disc::textfile::read_text(&path)?;
             found.push((path, text));
@@ -251,41 +250,41 @@ pub fn sources(mod_dir: &Path) -> Result<Vec<(PathBuf, String)>> {
     Ok(found)
 }
 
-/// The chosen mods' patches and numbers (patches::plan), with numbers kept in the mods folder's
-/// numbers.json when lock is true. No mod is given a number any mod in the folder writes by hand,
+/// The chosen mods' patches and numbers (patches::plan), with numbers kept in the lock file (the
+/// mods folder's mods.lock, or a set's) when one is given. No mod is given a number any mod in the folder writes by hand,
 /// chosen or not, so building them together later cannot clash. A mod's patches see the numbers of
-/// the mods it requires too.
-pub fn patch_plan(mod_dirs: &[PathBuf], tree_dir: &Path, consts: &IndexMap<String, i64>, lock: bool) -> Result<Plan> {
+/// the mods it depends on too.
+pub fn patch_plan(
+    mod_dirs: &[PathBuf],
+    tree_dir: &Path,
+    consts: &IndexMap<String, i64>,
+    lock: Option<&Path>,
+) -> Result<Plan> {
     let mut mod_list = Vec::new();
     let mut required = required_among(mod_dirs)?;
     for mod_dir in mod_dirs {
         let whole = contents(mod_dir, tree_dir)?;
         no_numbers_asked(mod_dir, &whole)?;
         mod_list.push(ModTexts {
-            name: name(mod_dir),
+            name: name(mod_dir)?,
             dir: mod_dir.clone(),
             texts: sources(mod_dir)?,
             written: whole.into_values().collect(),
-            requires: required.remove(&name(mod_dir)).unwrap_or_default(),
+            requires: required.remove(&name(mod_dir)?).unwrap_or_default(),
         });
     }
-    let parent = mod_dirs.first().map(|first| first.parent().map(Path::to_path_buf).unwrap_or_default());
+    let parent = mod_dirs.first().map(|first| manifest::mods_folder_of(first));
     let mut written = Vec::new();
     if let Some(parent) = parent.as_ref().filter(|parent| parent.is_dir() || parent.as_os_str().is_empty()) {
         let listing = if parent.as_os_str().is_empty() { Path::new(".") } else { parent.as_path() };
-        let mut others: Vec<PathBuf> = files::read_dir(listing)?
-            .flatten()
-            .map(|entry| parent.join(entry.file_name()))
-            .filter(|path| path.is_dir() && !mod_dirs.contains(path) && exists(path))
-            .collect();
-        others.sort_by_key(|path| path.to_string_lossy().to_lowercase());
+        let others: Vec<PathBuf> =
+            manifest::mod_dirs(listing)?.into_iter().filter(|path| !mod_dirs.contains(path)).collect();
         for other in others {
             written.extend(sources(&other)?.into_iter().map(|(_, text)| text));
             written.extend(contents(&other, tree_dir)?.into_values());
         }
     }
-    let held = parent.filter(|_| lock).map(|parent| parent.join(numbers::LOCK));
-    patches::plan(&mod_list, tree_dir, consts, held.as_deref(), &written)
+    patches::plan(&mod_list, tree_dir, consts, lock, &written)
 }
 
 /// A mod's whole files (`contents`) are compiled as the tree's own, without the numbers build
@@ -296,10 +295,10 @@ fn no_numbers_asked(mod_dir: &Path, whole: &IndexMap<String, String>) -> Result<
         let Some((kind, names)) = numbers::requests([text]).into_iter().next() else { continue };
         let asked = names.first().map_or("", String::as_str);
         return Err(Error::invalid(format!(
-            "mod {}: its whole file {path} asks for a number with NEW_{}({asked}), but build compiles the files \
-             under {FILES}/ without the mod's numbers; ask for it and use it in the mod's own sources outside \
-             {FILES}/ (a patch, a header or library it includes, tests.c), or write a free {} by hand",
-            name(mod_dir),
+            "mod {}: its whole file {path} asks for a number with NEW_{}({asked}), but build compiles the \
+             whole files without the mod's numbers; ask for it and use it in the mod's own sources (a patch, a \
+             header or library it includes, tests.c), or write a free {} by hand",
+            name(mod_dir)?,
             kind.key().to_uppercase(),
             kind.word()
         )));
@@ -386,7 +385,7 @@ pub fn override_functions(
     let mut text = if path.is_file() {
         dc2tk_disc::textfile::read_text(&path)?
     } else {
-        patches::patch_header(&name(mod_dir), kind, value, &model_text)
+        patches::patch_header(&name(mod_dir)?, kind, value, &model_text)
     };
     let added: Vec<String> = functions
         .iter()
@@ -438,7 +437,8 @@ pub fn check_with(
     if !clashes.is_empty() {
         return Err(Error::invalid(clash_text(&clashes)));
     }
-    let mut found = patch_plan(mod_dirs, tree_dir, consts, true)?;
+    let lock = mod_dirs.first().map(|first| manifest::mods_folder_of(first).join(numbers::LOCK));
+    let mut found = patch_plan(mod_dirs, tree_dir, consts, lock.as_deref())?;
     for patch in &mut found.patches {
         if let Some(added) = added.get(&patch.module) {
             patch.numbers.extend(added.iter().map(|(name, value)| (name.clone(), *value)));
@@ -478,9 +478,7 @@ pub fn check_with(
 
 /// The mod's whole files, by path in files/, sorted.
 pub fn mod_files(mod_dir: &Path) -> Result<Vec<String>> {
-    let mut found = paths::walk(&mod_dir.join(FILES), |entry| {
-        !entry.name.starts_with('.') && (entry.is_dir || entry.name != source::EDITOR_FLAGS)
-    })?;
+    let mut found: Vec<String> = manifest::read(mod_dir)?.scripts.whole.into_keys().collect();
     found.sort();
     Ok(found)
 }
@@ -505,6 +503,7 @@ pub fn add(tree_dir: &Path, mod_dir: &Path, paths: &[String], overwrite: bool) -
 
 fn add_files(tree_dir: &Path, mod_dir: &Path, paths: &[String], overwrite: bool) -> Result<Vec<String>> {
     let mut lock = manifest::read_lock(mod_dir)?;
+    let mut body = manifest::read_body(mod_dir)?;
     let recorded = tree::originals(tree_dir)?.unwrap_or_default();
     let mut copied = Vec::new();
     for path in paths {
@@ -514,6 +513,8 @@ fn add_files(tree_dir: &Path, mod_dir: &Path, paths: &[String], overwrite: bool)
         }
         files::create_dir_all(target.parent().unwrap())?;
         fs::copy(paths::join_relative(tree_dir, path), &target)?;
+        let scripts = manifest::section(&mut body, "scripts")?;
+        manifest::section(scripts, "whole")?.insert(path.clone(), format!("{FILES}/{path}").into());
         copied.push(path.clone());
         lock.files.insert(
             path.clone(),
@@ -528,6 +529,7 @@ fn add_files(tree_dir: &Path, mod_dir: &Path, paths: &[String], overwrite: bool)
             }
         }
     }
+    manifest::write_body(mod_dir, &body)?;
     manifest::write_lock(mod_dir, &lock)?;
     Ok(copied)
 }
@@ -592,9 +594,12 @@ pub fn contents(mod_dir: &Path, tree_dir: &Path) -> Result<IndexMap<String, Stri
     for (included, plain) in &lock.includes {
         includes.insert(included.clone(), pathnames::named(tree_dir, plain)?);
     }
+    let whole = manifest::read(mod_dir)?.scripts.whole;
     let mut result = IndexMap::new();
     for (path, target) in targets(mod_dir, tree_dir)? {
-        let text = dc2tk_disc::textfile::read_text(&paths::join_relative(&mod_dir.join(FILES), &path))?;
+        let file = paths::inside_mod(mod_dir, &whole[&path])
+            .ok_or_else(|| Error::invalid(format!("{}: {} is not a path inside the mod", INDEX, whole[&path])))?;
+        let text = dc2tk_disc::textfile::read_text(&file)?;
         let text = if path.ends_with(source::EXTENSION) { with_includes(&text, &includes, tree_dir)? } else { text };
         result.insert(target, text);
     }
@@ -647,7 +652,7 @@ pub fn overlay(
             return Err(Error::invalid(format!("no mod at {}", mod_dir.display())));
         }
         for (path, text) in contents(mod_dir, tree_dir)? {
-            owners.entry(path.clone()).or_default().push(name(mod_dir));
+            owners.entry(path.clone()).or_default().push(name(mod_dir)?);
             texts.insert(path, text);
         }
     }
@@ -726,7 +731,7 @@ pub fn apply(
             warnings.push(format!(
                 "{} changed in the decompiler's output since {} was made; compare them",
                 path,
-                name(mod_dir)
+                name(mod_dir)?
             ));
         }
     }
@@ -735,7 +740,7 @@ pub fn apply(
             if patches::is_patch(&text) {
                 warnings.push(format!(
                     "{}'s patch {} is merged in by build only, not written into the tree",
-                    name(mod_dir),
+                    name(mod_dir)?,
                     paths::file_name(&path)
                 ));
             }
@@ -778,22 +783,13 @@ fn addition_line(addition: &Value) -> String {
 /// `mod list`'s report: every mod in `mods_dir` with what it holds, adds and asks for, then the
 /// mods that cannot be built together.
 pub fn listing(mods_dir: &Path, tree_dir: &Path, consts: &IndexMap<String, i64>) -> Result<String> {
-    let mut mods: Vec<PathBuf> = if mods_dir.is_dir() {
-        files::read_dir(mods_dir)?
-            .flatten()
-            .map(|entry| mods_dir.join(entry.file_name()))
-            .filter(|path| exists(path))
-            .collect()
-    } else {
-        Vec::new()
-    };
-    mods.sort_by_key(|path| path.to_string_lossy().to_lowercase());
+    let mods = manifest::mod_dirs(mods_dir)?;
     if mods.is_empty() {
         return Ok(format!("no mods in {}", mods_dir.display()));
     }
     let mut lines = Vec::new();
     let held = numbers::read_lock(Some(&mods_dir.join(numbers::LOCK)))?;
-    let known = manifest::index(mods_dir)?;
+    let known = manifest::index(mods_dir).unwrap_or_default();
     let mut readable = Vec::new();
     for mod_dir in &mods {
         let found = match manifest::read(mod_dir) {
@@ -820,7 +816,7 @@ pub fn listing(mods_dir: &Path, tree_dir: &Path, consts: &IndexMap<String, i64>)
         if !mine.is_empty() {
             counted = format!("{} patch{}, {}", mine.len(), if mine.len() == 1 { "" } else { "es" }, counted);
         }
-        let folder = paths::file_name(mod_dir);
+        let folder = crate::package::shown_name(mod_dir);
         let place = if folder == name { String::new() } else { format!(" in {folder}") };
         lines.push(format!("{name}{place}  ({counted})"));
         let about: Vec<&str> =
@@ -861,7 +857,6 @@ pub fn listing(mods_dir: &Path, tree_dir: &Path, consts: &IndexMap<String, i64>)
         let mut paths: Vec<&String> = texts.keys().collect();
         paths.sort();
         lines.extend(paths.iter().map(|path| format!("    {path}")));
-        lines.extend(discfiles::mod_files(mod_dir)?.keys().map(|path| format!("    replaces {path}")));
         lines.extend(crate::replace::described(mod_dir)?.into_iter().map(|line| format!("    {line}")));
         lines.extend(found.additions_as_values().iter().map(addition_line));
         if let Some(start_at) = found.start_at() {
@@ -917,13 +912,18 @@ pub fn run_tests(
         )));
     }
     let name = manifest::read(mod_dir)?.id;
-    let mods_dir = mod_dir.parent().map(Path::to_path_buf).unwrap_or_default();
+    let mods_dir = manifest::mods_folder_of(mod_dir);
     let dirs = chosen(&mods_dir, std::slice::from_ref(&name))?.dirs;
     let (texts, _) = overlay(&dirs, tree_dir, consts)?;
     // the mods it requires come first, and their numbers before its own
-    let numbers = patch_plan(&dirs, tree_dir, consts, true)?.numbers;
-    let given: IndexMap<String, i64> =
-        dirs.iter().flat_map(|dir| numbers.get(&self::name(dir)).cloned().unwrap_or_default()).collect();
+    let numbers = patch_plan(&dirs, tree_dir, consts, Some(&mods_dir.join(numbers::LOCK)))?.numbers;
+    let given: IndexMap<String, i64> = dirs
+        .iter()
+        .map(|dir| Ok(numbers.get(&self::name(dir)?).cloned().unwrap_or_default()))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect();
     let standing_in = tree_dir.join(TESTS);
     let mut headers = tools.headers.clone();
     headers.extend(crate::definitions::source_headers(&standing_in)?);

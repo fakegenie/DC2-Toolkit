@@ -260,12 +260,12 @@ def check_test_loop(context, check, work):
     from dc2tk_maps import runner
 
     text = "\n".join(runner.output_lines(runner.current))
-    check("--dry-run" in text and "--mod testmod" in text, "the preview is a dry run of the mod: %s" % text)
+    check("--dry-run" in text and "--mod local.testmod" in text, "the preview is a dry run of the mod: %s" % text)
     context.scene.cursor.location = (12.0, -34.0, 5.0)
     result = bpy.ops.dc2tk.test_here()
     check(result == {"FINISHED"}, "test here: %s" % result)
     text = "\n".join(runner.output_lines(runner.current))
-    check("--start-at t01:TEST_HERE" in text and "--mod test-here" in text and "-test.iso" in text, "the test build: %s" % text)
+    check("--start-at t01:TEST_HERE" in text and "--mod local.test-here" in text and "-test.iso" in text, "the test build: %s" % text)
     with open(os.path.join(mods, "test-here", "test_here.c"), encoding="utf-8") as handle:
         check("place_chara(CHARA_PLAYER, 12, 5, 34, 0);" in handle.read(), "the player stands at the cursor")
 
@@ -433,7 +433,7 @@ def check_new_map(context, check, root):
     line = data["add"]["map:t01x"]
     check(line == {"file": "maps/t01x/t01x.gltf", "like": "t01", "compact": True, "title": "Test Two", "script": "t01x.c"},
           "its line: %s" % line)
-    check(data.get("start_at") == "t01x", "new games start there")
+    check(data.get("dev", {}).get("start_at") == "t01x", "new games start there")
     check(os.path.isfile(os.path.join(mod_dir, "maps", "t01x", "t01x.gltf")), "exported into the mod")
     with open(os.path.join(mod_dir, "t01x.c"), encoding="utf-8") as handle:
         check("PROGRAM(map_start, arrive);" in handle.read(), "a script of its own")

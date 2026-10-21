@@ -5,6 +5,7 @@
 mod build;
 mod check;
 mod pcsx2;
+mod play;
 mod watch;
 
 use std::path::{Path, PathBuf};
@@ -16,7 +17,7 @@ use indexmap::{IndexMap, IndexSet};
 
 use dc2tk_script::patches::TargetKind;
 use dc2tk_script::{
-    capture, datatables, definitions, discfiles, editor, index, manifest, mods, numbers, paths, replace, sdk, slim,
+    capture, datatables, definitions, discfiles, editor, index, manifest, mods, package, paths, replace, sdk, slim,
 };
 
 use crate::options::{Common, ModsDir};
@@ -24,10 +25,11 @@ use crate::{asset_tree, files};
 
 pub use build::{run_build, BuildArgs};
 pub use pcsx2::launch;
+pub use play::run_native;
 
 #[derive(Subcommand)]
 pub enum ModCommand {
-    /// Copy tree files into a mod, to edit them there.
+    /// Start a mod (its mod.json), and copy tree files into it whole to edit them there.
     New {
         /// The decompiled source tree.
         source: PathBuf,
@@ -36,8 +38,7 @@ pub enum ModCommand {
         /// The mod's id, author.name, for a new mod; local.<folder> when left out.
         #[arg(long)]
         id: Option<String>,
-        /// Tree files to copy into the mod, relative to the tree.
-        #[arg(required = true)]
+        /// Tree files to copy into the mod whole, relative to the tree; none starts an empty mod.
         files: Vec<String>,
         #[command(flatten)]
         mods: ModsDir,
@@ -71,18 +72,28 @@ pub enum ModCommand {
         #[command(flatten)]
         common: Common,
     },
-    /// List the mods, their files, and mods that change the same file.
-    /// Turn an older mod (a mod.json without "format") into a format 2 mod: give it an id, move
-    /// its keys to their new places, and key its numbers in the mods folder by the id.
-    Upgrade {
-        /// The mod's folder in the mods folder.
+    /// Pack a mod into <id>-<version>.dc2mod, a zip of the files its mod.json names, the same bytes
+    /// every time; its "dev" settings are left out.
+    Pack {
+        /// The mod's id.
         name: String,
-        /// The id to give it, author.name, as andrew.castle-golems; local.<folder> when left out.
-        #[arg(long)]
-        id: Option<String>,
+        /// The folder to write the zip in.
+        #[arg(short, long, value_name = "DIR", default_value = ".")]
+        output: PathBuf,
+        /// The retail disc: refuse any file whose bytes are one of the disc's own.
+        #[arg(long, value_name = "ISO")]
+        disc: Option<PathBuf>,
         #[command(flatten)]
         mods: ModsDir,
     },
+    /// Copy a .dc2mod into the mods folder, replacing an older zip of the same mod.
+    Install {
+        /// The .dc2mod file.
+        file: PathBuf,
+        #[command(flatten)]
+        mods: ModsDir,
+    },
+    /// List the mods, their files, and mods that change the same file.
     List {
         /// The decompiled source tree.
         source: PathBuf,
@@ -93,7 +104,7 @@ pub enum ModCommand {
     Test {
         /// The decompiled source tree.
         source: PathBuf,
-        /// The mod's name.
+        /// The mod's id.
         name: String,
         #[command(flatten)]
         mods: ModsDir,
@@ -104,7 +115,8 @@ pub enum ModCommand {
     Apply {
         /// The source tree to apply them to.
         source: PathBuf,
-        /// Mods to apply, in order (with the mods they require, ordered by requires and after).
+        /// The ids of the mods to apply, in order (with the mods they depend on, ordered by
+        /// "dependencies" and "after").
         #[arg(required = true)]
         names: Vec<String>,
         /// Replace files edited in the tree too.
@@ -183,7 +195,7 @@ pub enum ModCommand {
     Check {
         /// The decompiled source tree.
         source: PathBuf,
-        /// Mods to check together, in build order.
+        /// The ids of the mods to check together, in build order.
         #[arg(required = true)]
         names: Vec<String>,
         #[command(flatten)]
@@ -224,8 +236,9 @@ pub fn run_mod(command: &ModCommand) -> Result<ExitCode> {
             run_mod_new(source, name, id.as_deref(), files, mods, common)
         }
         ModCommand::Save { source, name, id, mods, common } => run_mod_save(source, name, id.as_deref(), mods, common),
-        ModCommand::Upgrade { name, id, mods } => run_mod_upgrade(name, id.as_deref(), mods),
         ModCommand::Slim { source, name, mods, common } => run_mod_slim(source, name, mods, common),
+        ModCommand::Pack { name, output, disc, mods } => run_mod_pack(name, output, disc.as_deref(), mods),
+        ModCommand::Install { file, mods } => run_mod_install(file, mods),
         ModCommand::List { source, mods } => {
             println!("{}", mods::listing(mods.path(), source, &default_constants(source)?)?);
             Ok(ExitCode::SUCCESS)
@@ -265,10 +278,12 @@ fn run_mod_new(
     let created = !manifest::has_manifest(&mod_dir);
     let copied = mods::new(source, &mod_dir, paths, id)?;
     if created {
-        println!("made {} with id {}", shown(&mod_dir.join(manifest::MANIFEST)), mods::name(&mod_dir));
+        println!("made {} with id {}", shown(&mod_dir.join(manifest::MANIFEST)), mods::name(&mod_dir)?);
     }
-    println!("{} files copied into {}; edit them there", copied.len(), shown(&mod_dir.join(mods::FILES)));
-    mods::write_editor_flags(&mod_dir, source, &common.sdk_dir(), &common.definitions()?.sets)?;
+    if !copied.is_empty() {
+        println!("{} files copied into {}; edit them there", copied.len(), shown(&mod_dir.join(mods::FILES)));
+        mods::write_editor_flags(&mod_dir, source, &common.sdk_dir(), &common.definitions()?.sets)?;
+    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -283,26 +298,44 @@ fn run_mod_save(source: &Path, name: &str, id: Option<&str>, mods_dir: &ModsDir,
     Ok(ExitCode::SUCCESS)
 }
 
-fn run_mod_upgrade(name: &str, id: Option<&str>, mods_dir: &ModsDir) -> Result<ExitCode> {
-    let mod_dir = mods_dir.folder(name)?;
-    if !mod_dir.is_dir() {
-        bail!("no mod at {}", shown(&mod_dir));
-    }
-    let folder = dc2tk_script::paths::file_name(&mod_dir);
-    let id = id.map_or_else(|| manifest::default_id(&folder), str::to_string);
-    let mods_path = mods_dir.path().to_path_buf();
-    let id_of = |other: &str| match manifest::read(&mods_path.join(other)) {
-        Ok(found) => found.id,
-        Err(_) => manifest::default_id(other),
+fn run_mod_pack(name: &str, output: &Path, disc: Option<&Path>, mods_dir: &ModsDir) -> Result<ExitCode> {
+    let mod_dir = mods::by_id(mods_dir.path(), name)?;
+    let known = match disc {
+        Some(disc) => Some(package::disc_hashes(&dc2tk_disc::DiscSource::open(disc)?)?),
+        None => None,
     };
-    let upgraded = manifest::upgrade(&mod_dir, &id, &id_of)?;
-    println!("{} is format {} now, with id {}", shown(&mod_dir), manifest::FORMAT, upgraded.manifest.id);
-    for note in &upgraded.notes {
-        println!("note: {note}");
+    let packed = package::pack(&mod_dir, output, known.as_ref())?;
+    if !packed.refused.is_empty() {
+        bail!(
+            "these files are the disc's own bytes; a mod carries its changes, not the game's files:\n  {}",
+            packed.refused.join("\n  ")
+        );
     }
-    let renamed = numbers::rename_module(&mods_dir.path().join(numbers::LOCK), &folder, &upgraded.manifest.id)?;
-    if renamed > 0 {
-        println!("{renamed} numbers in {} now belong to {}", numbers::LOCK, upgraded.manifest.id);
+    println!("{}: {} files", shown(&packed.path), packed.members);
+    Ok(ExitCode::SUCCESS)
+}
+
+fn run_mod_install(file: &Path, mods_dir: &ModsDir) -> Result<ExitCode> {
+    let installed = package::install(file, mods_dir.path())?;
+    let own = &installed.manifest;
+    println!(
+        "{}: {} {}{}",
+        shown(&installed.path),
+        own.id,
+        own.version,
+        if own.name.is_empty() { String::new() } else { format!(" ({})", own.name) }
+    );
+    println!(
+        "  {}",
+        if installed.native_code {
+            "holds engine or port code: it runs native code on this machine when built"
+        } else {
+            "scripts and assets only: it runs inside the game"
+        }
+    );
+    if !own.dependencies.is_empty() {
+        let listed: Vec<String> = own.dependencies.iter().map(|(id, range)| format!("{id} {range}")).collect();
+        println!("  needs {}", listed.join(", "));
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -335,7 +368,8 @@ fn run_mod_slim(source: &Path, name: &str, mods_dir: &ModsDir, common: &Common) 
 
 fn run_mod_test(source: &Path, name: &str, mods_dir: &ModsDir, common: &Common) -> Result<ExitCode> {
     let tools = common.tools()?;
-    let results = mods::run_tests(&mods_dir.folder(name)?, source, &tools.toolchain(), &default_constants(source)?)?;
+    let results =
+        mods::run_tests(&mods::by_id(mods_dir.path(), name)?, source, &tools.toolchain(), &default_constants(source)?)?;
     for result in &results {
         println!("{:<5} {}", if result.passed { "ok" } else { "FAIL" }, result.name);
         if !result.passed {
@@ -450,7 +484,7 @@ fn run_mod_asset(
         }
     }
     for path in discfiles::copy_out(iso, &mod_dir, &paths, form)? {
-        let place = paths::join_relative(&mod_dir.join(discfiles::DISC), &path);
+        let place = paths::join_relative(&mod_dir, &path);
         println!("{}: replace it there, and build puts it on the disc", shown(&place));
     }
     Ok(ExitCode::SUCCESS)
@@ -501,10 +535,8 @@ fn mod_folders(mods_dir: &Path, names: &[String]) -> Result<Vec<PathBuf>> {
     for (added, by) in &found.added {
         println!("mod {by} needs {added}, so it is built in too");
     }
-    let order: Vec<String> = found.dirs.iter().map(|dir| mods::name(dir)).collect();
-    let given: Vec<String> =
-        names.iter().map(|name| mods::folder(mods_dir, name).map(|dir| mods::name(&dir))).collect::<Result<_, _>>()?;
-    if order != given {
+    let order: Vec<String> = found.dirs.iter().map(|dir| mods::name(dir)).collect::<Result<_, _>>()?;
+    if order != names {
         println!("mods applied in this order: {}", order.join(", "));
     }
     Ok(found.dirs)

@@ -1,6 +1,6 @@
 # Creating Mods
 
-A mod is a folder inside `mods/` (for example, `mods/castle/`) with a `mod.json` that gives it an **id** such as `andrew.castle`. Storing changes in `mods/` keeps `extracted/` unmodified so you can combine multiple mods at build time, choosing each by its id (or its folder's name):
+A mod is a folder inside `mods/` (for example, `mods/castle/`) with a `mod.json` that gives it an **id** such as `andrew.castle`. Storing changes in `mods/` keeps `extracted/` unmodified so you can combine multiple mods at build time, choosing each by its id:
 
 ```sh
 dc2tk build extracted/scripts dc2.iso -o modded.iso --mod andrew.castle --mod someone.another-mod
@@ -22,9 +22,13 @@ mods/my-mod/
 ├── s51.c               # Script patch (optional)
 ├── data/
 │   └── items.json      # Edited item stats (optional)
-└── art/
-    └── soldier.png     # Replacement texture (optional)
+├── art/
+│   └── soldier.png     # Replacement texture (optional)
+├── files/              # Whole script files the mod copied (optional; see Whole files)
+└── raw/                # Game files copied off the disc to edit (optional; see Game files)
 ```
+
+Only `mod.json` has a fixed name. Every other file is found through it: the paths its lines name, and the script sources (every `.c` and `.h` outside `files/`, or the ones `"scripts": {"sources"}` picks).
 
 Example `mod.json`:
 
@@ -38,12 +42,9 @@ Example `mod.json`:
   "authors": ["Andrew"],
   "dependencies": {"someone.other-mod": "^1.2"},
   "replace": {
-    "data:items": "data/items.json",
-    "data:monsters": "data/monsters.json",
     "texture:e254a1": "art/soldier.png",
     "sound:SE_CURSOR_MOVE": "sounds/click.wav",
     "music:BG_000_000": "music/title.mid",
-    "text:en/shopname": "text/en/shopname.txt",
     "model:e33a": "models/e33a",
     "map:s17": "maps/s17/s17.gltf"
   },
@@ -51,6 +52,19 @@ Example `mod.json`:
     "sound:SE_MY_BEEP": {"bank": "SP_042", "file": "sounds/beep.wav"},
     "music:BG_201": {"file": "music/theme.mid", "like": "BG_193"},
     "map:fishroom": {"file": "maps/fishroom/fishroom.gltf", "like": "m07", "title": "Fish Room", "script": "fishroom.c"}
+  },
+  "data": {
+    "items": "data/items.json",
+    "monsters": "data/monsters.json"
+  },
+  "text": {
+    "en/shopname": "text/en/shopname.txt"
+  },
+  "files": {
+    "mod:banner.img": {"file": "art/banner", "like": "texture:logo_d00"}
+  },
+  "settings": {
+    "hard": {"type": "bool", "default": false, "label": "Tougher soldiers"}
   },
   "dev": {"start_at": "s51:story_50"}
 }
@@ -60,7 +74,7 @@ Example `mod.json`:
 
 | Key | Meaning |
 | --- | --- |
-| `"format"` | Always `2`. A mod without it is an older mod: convert it with `dc2tk mod upgrade <folder> --id author.name`. |
+| `"format"` | Always `2`. |
 | `"id"` | The mod's name everywhere: `author.name`, lowercase letters, digits and `-`. It never changes, even if the folder is renamed. |
 | `"version"` | `MAJOR.MINOR.PATCH`, as `1.0.0`. |
 | `"name"`, `"description"`, `"authors"`, `"license"`, `"homepage"` | For people; `dc2tk mod list` shows the name and version. |
@@ -68,9 +82,14 @@ Example `mod.json`:
 | `"tool"` | The dc2tk versions the mod needs, as a range (`">=0.1"`). |
 | `"targets"` | Where the mod runs: `["iso", "native"]` (the default) promises it works the same on a PS2 or PCSX2 image and on the native port. `["native"]` marks a mod that uses port-only features; it can't go into an image. |
 | `"dependencies"`, `"after"`, `"conflicts"` | Mods this one builds on, is applied after, or can't be built with (see [Mods that build on mods](#mods-that-build-on-mods)). |
-| `"replace"` | Game assets and data tables the mod changes, by id. A line is a file path, or an object with `"file"` and options. |
-| `"add"` | New assets: sound effects, music files, maps, and game files. |
-| `"additions"` | Programs, includes and wrappers added to scripts the mod does not copy. |
+| `"replace"` | Game assets the mod changes, by id. A line is a file path, or an object with `"file"` and options. |
+| `"add"` | New assets: sound effects, music files and maps. |
+| `"data"` | Data tables the mod changes, by table name (`"items"`): a JSON file, or the changed records written in place as a list (see [Game Data](data.md)). |
+| `"text"` | Text files the mod changes, by id (`"en/shopname"`): a `.txt` file, or the changed messages in place as `{"12": "New text"}`. |
+| `"files"` | Game files by their path on the disc, and the mod's own new files as `mod:NAME` (see [Game files](#game-files)). |
+| `"scripts"` | `"sources"`: the patches and headers to use, as patterns (`["patches/*.c"]`); every `.c` and `.h` outside `files/` when left out. `"whole"`: whole script files (see [Whole files](#whole-files)). `"additions"`: programs, includes and wrappers added to scripts the mod does not copy. |
+| `"settings"` | Choices a player makes when building the mod (see [Settings](#settings)). |
+| `"port"` | Code and settings for the native port (see [Native port mods](#native-port-mods)). |
 | `"dev"` | Settings for making the mod, never for players: `"start_at"`, where **New Game** starts in a `--dev` build (see [Trying a change quickly](#trying-a-change-quickly)). |
 
 Options a line can take, besides `"file"`:
@@ -81,9 +100,10 @@ Options a line can take, besides `"file"`:
 | `"volume"` | `sound:` | The sound's volume |
 | `"bank"` | `sound:` under `"add"` | The bank to add the sound to |
 | `"instruments"` | `music:` | WAV files as new instruments (see [Music](music.md)) |
-| `"like"` | `music:`, `map:`, `file:` under `"add"` | The existing asset to copy as a template |
+| `"like"` | `music:`, `map:` under `"add"`; `"files"` | The existing asset to copy as a template |
 | `"title"`, `"script"`, `"compact"` | `map:` under `"add"` | The new map's title, its C script, and whether deleted placements are dropped (see [Maps](maps.md)) |
 | `"programs"` | `map:` | Script programs for the map's event points, by point name (see [Maps](maps.md)) |
+| `"when"` | every line | Use the line only when a true/false setting is on (`"hard"`), or off (`"!hard"`) |
 
 ## Game assets by id
 
@@ -167,7 +187,7 @@ Do not hardcode save flag numbers or event program IDs. Declare them with these 
 | `NEW_PROGRAM(NAME)` | `9000`–`9999` | Allocate an unused map event program number |
 | `NEW_MONSTER_VAR(NAME)` | `8`–`135` | Allocate an unused floor-wide monster variable |
 
-`dc2tk build` stores assigned numbers in `mods/numbers.json`, keyed by each mod's id, so they stay stable from build to build and never collide across mods. A save made with a set of mods reads the same flags after you add another mod.
+`dc2tk build` stores assigned numbers in `mods/mods.lock` (or a mod set's lock file, see [Mod sets](#mod-sets)), keyed by each mod's id, so they stay stable from build to build and never collide across mods. A save made with a set of mods reads the same flags after you add another mod.
 
 ## Text in each language
 
@@ -193,17 +213,147 @@ Version ranges are `*` (any), `^1.2` (1.2.0 up to, not including, 2.0.0), `~1.2.
 
 ## Whole files
 
-To replace an entire script file instead of using a patch, place it under `mods/<name>/files/` at its path in the tree (or run `dc2tk mod new extracted/scripts <name> map/s/s51_raybrandt_castle/s51_1.c`). Run `dc2tk mod slim extracted/scripts <name>` to convert full-file copies into function patches.
+To replace an entire script file instead of using a patch, run `dc2tk mod new extracted/scripts <name> map/s/s51_raybrandt_castle/s51_1.c`. It copies the file to `files/map/s/s51_raybrandt_castle/s51_1.c` and lists it in `mod.json`:
 
-To replace or add a raw disc file (such as a `.chr` or `.img` archive built from a template), use `"file:<disc-path>"` in `mod.json`:
+```json
+"scripts": {
+  "whole": {"map/s/s51_raybrandt_castle/s51_1.c": "files/map/s/s51_raybrandt_castle/s51_1.c"}
+}
+```
+
+The key is the file's path in the tree and the value is the copy in the mod. `dc2tk mod save` lists the files it copies the same way. Run `dc2tk mod slim extracted/scripts <name>` to turn whole files into function patches where it can: it drops each copy it no longer needs from `"whole"`.
+
+## Game files
+
+`"files"` replaces a game file by its path on the disc, or adds one. Run `dc2tk mod asset dc2.iso my-mod chara/c02a.chr --as gltf` to copy a game file into the mod's `raw/` folder (here as glTF) and add its line:
+
+```json
+"files": {
+  "chara/c02a.chr": "raw/chara/c02a.chr.gltf"
+}
+```
+
+A mod's own new files are named `mod:NAME`. On the disc they go in the mod's own folder, `mods/<id>/NAME`, so two mods never pick the same path. Give the file to copy as a template with `"like"`:
+
+```json
+"files": {
+  "mod:calc_ui.img": {"file": "ui", "like": "texture:logo_d00"},
+  "mod:calc.chr": {"file": "model/calc.gltf", "like": "model:uki"}
+}
+```
+
+Scripts load them through `MOD_DIR`, the mod's folder on the disc (`"mods/<id>/"`):
+
+```c
+load_chara(MEMORY_STACK_EVENT, MOD_DIR "calc.chr", "info.cfg", KIOSK_SLOT);
+```
+
+A line without `mod:` and with `"like"` adds a file at a path of the game's (`"item/gyros.chr"`).
+
+## Settings
+
+`"settings"` declares choices a player makes when they build the mod. Each has a `"type"`: `"bool"`, `"int"` (with `"min"` and `"max"`), `"enum"` (with `"values"`) or `"string"`, a `"default"`, and a `"label"` for people:
+
+```json
+"settings": {
+  "hard": {"type": "bool", "default": false, "label": "Tougher soldiers"},
+  "lives": {"type": "int", "default": 3, "min": 1, "max": 9}
+}
+```
+
+Patches and the mod's map scripts see each one as `SETTING_<name>`: `1` or `0` for a bool, the number for an int, the index in `"values"` for an enum, and the text for a string:
+
+```c
+#if SETTING_hard
+    modkit_say("No mercy this time.");
+#endif
+    int lives = SETTING_lives;
+```
+
+A line with `"when": "hard"` is used only when `hard` is on, and `"when": "!hard"` only when it is off. A `--mod` build uses every default; a [mod set](#mod-sets) chooses other values.
+
+## Sharing a mod
+
+Pack a mod into a single file to share it:
+
+```sh
+dc2tk mod pack andrew.my-mod
+```
+
+This writes `andrew.my-mod-1.0.0.dc2mod`, a zip of the files `mod.json` names, the script sources, `engine/` and `port/`, `mod.lock`, and any `README`, `LICENSE` or `CHANGELOG`. The `"dev"` section is left out. Packing the same mod twice gives the same bytes. Pass `--disc dc2.iso` to refuse any file that is one of the disc's own, so a zip never ships the game's data.
+
+Install a `.dc2mod` into the mods folder with:
+
+```sh
+dc2tk mod install andrew.my-mod-1.0.0.dc2mod
+```
+
+An installed zip is used where it is, by its id, like a folder: `dc2tk mod list` shows both. Installing a newer version replaces the older zip. A zip can't be installed over a folder mod with the same id.
+
+## Mod sets
+
+A mod set is a JSON file that chooses mods, their versions and their settings:
 
 ```json
 {
-  "add": {
-    "file:mods/calculator/calc_ui.img": {"file": "ui", "like": "texture:logo_d00"}
-  }
+  "format": 2,
+  "mods": [
+    {"id": "andrew.my-mod", "version": "^1.0", "settings": {"hard": true}},
+    {"id": "someone.other-mod"}
+  ]
 }
 ```
+
+Build it with `--set` in place of `--mod`:
+
+```sh
+dc2tk build extracted/scripts dc2.iso -o modded.iso --set my-game.json
+```
+
+The set's numbers and the versions it was built with are kept in `my-game.lock` beside it, so a set keeps its save flags apart from every other set's. A version outside the set's range, or a setting the mod does not have, is refused.
+
+Play a set on the native port without writing an image:
+
+```sh
+dc2tk play dc2.iso --native --set my-game.json
+```
+
+This writes the set's game files into `build/sets/my-game/overrides/` and starts the port over the retail disc with them. A set with engine or port code builds its own port binary in that folder first. Add `--build-only` to build and print the command instead of starting the game.
+
+## Native port mods
+
+A mod with `"targets": ["native"]` may use features only the native port has. Such a mod can't go into a disc image.
+
+**HD textures.** An `hd:` line draws a texture at a higher resolution on the port, from a PNG a whole multiple of its size:
+
+```json
+"replace": {
+  "hd:texture:i01h0101": "hd/i01h0101.png"
+}
+```
+
+**Port settings.** `"port": {"settings"}` sets the port's own options, such as `"render.scale"` (internal resolution multiplier) and `"render.msaa"` (samples):
+
+```json
+"port": {"settings": {"render.scale": 2, "render.msaa": 4}}
+```
+
+The port's `--scale` and `--msaa` options win over these.
+
+**Port code.** `"port": {"sources", "api"}` adds C or C++ files to the port. `"sources"` picks them with patterns and `"api"` is the range of `port_mod.h` they are written for (`"^1.0"`). Each file includes `port_mod.h` and registers a table of hooks:
+
+```c
+#include "port_mod.h"
+
+static void every_field_frame(void)
+{
+}
+
+static const PortMod hello = {.id = "andrew.hello", .field = every_field_frame};
+PORT_MOD(hello)
+```
+
+The hooks are `start`, `event`, `field`, `frame_enter`, `frame_drawn`, `frame_exit`, `overlay`, `present`, `input`, `audio` and `host`. `port_setting("andrew.hello.speed")` reads a setting's value as text. In the debug build, `port_mod_command` adds a command to the debug API and `port_mod_panel` adds a panel to the debug window's **Mods** tab. The debug tools are themselves a port mod, `dc2tk.debug-tools`, in `port/debug/`. Build the port with another mod's code using `python3 -I tools/port.py --mod mods/hello`.
 
 ## Trying a change quickly
 
@@ -224,7 +374,7 @@ The native port's debug build (`python3 -I tools/port.py --movies --debug`) can 
 changes while the game runs. Start the game, then watch the mod:
 
 ```sh
-dc2tk mod watch extracted/scripts dc2.iso my-mod
+dc2tk mod watch extracted/scripts dc2.iso local.my-mod
 ```
 
 `mod watch` builds the mod as `dc2tk build` would, but instead of an image it writes the game
@@ -247,14 +397,14 @@ the disc as it is.
 
 ## The mod commands
 
-See [CLI Reference: Creating and managing mods](commands.md#creating-and-managing-mods) for all `dc2tk mod` subcommands (`make`, `asset`, `override`, `new`, `save`, `check`, `test`, `list`, `slim`, `apply`, `header`, `watch`).
+See [CLI Reference: Creating and managing mods](commands.md#creating-and-managing-mods) for all `dc2tk mod` subcommands (`make`, `asset`, `override`, `new`, `save`, `check`, `test`, `list`, `slim`, `apply`, `header`, `watch`, `pack`, `install`).
 
 ## Tests
 
 Create `mods/<name>/tests.c` to test C helper functions without starting PCSX2. Natives do nothing in the test VM and return `0`, so test your own functions rather than the game's:
 
 ```sh
-dc2tk mod test extracted/scripts <name>
+dc2tk mod test extracted/scripts local.my-mod
 ```
 
 ### A first test
@@ -292,8 +442,8 @@ symbols; fixed RAM addresses and hardware access will prevent the same mod runni
 native port.
 
 ```sh
-dc2tk mod check extracted/scripts my-mod --disc dc2.iso
-dc2tk build extracted/scripts dc2.iso -o modded.iso --mod my-mod
+dc2tk mod check extracted/scripts local.my-mod --disc dc2.iso
+dc2tk build extracted/scripts dc2.iso -o modded.iso --mod local.my-mod
 ```
 
 Both commands build the engine in Docker or Podman. The disc supplies retail's libraries;

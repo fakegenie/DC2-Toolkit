@@ -2,7 +2,7 @@
 #include "input.h"
 #include "port_graphics.h"
 #include "render.h"
-#include "port_debug.h"
+#include "port_mod.h"
 #include <SDL3/SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,14 +36,14 @@ void port_present_frame(void) {
     if (!started) return;
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
-        if (debug_event(&event)) continue;
+        if (port_mods_event(&event)) continue;
         if (event.type == SDL_EVENT_QUIT) exit(0);
         if (event.type == SDL_EVENT_DID_ENTER_BACKGROUND) wait_for_foreground();
         if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(render_window()))
             exit(0);
     }
     port_input_poll();
-    debug_field();
+    port_mods_field();
 }
 
 void port_present_close(void) {
@@ -105,6 +105,6 @@ void port_present_show(int target, int width, int height) {
         height = (int)movie_height;
     }
     save_frame(target, width, height);
-    debug_present(target, width, height);
+    port_mods_present(target, width, height);
     render_present(target, width, height);
 }

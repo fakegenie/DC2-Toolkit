@@ -11,6 +11,7 @@ from bpy.props import EnumProperty
 from . import budgets, c2data, export_mod, import_map, prefs, runner, schema, scripts, tools
 
 TEST_MOD = "test-here"
+TEST_MOD_ID = "local.test-here"
 TEST_PROGRAM = "TEST_HERE"
 PREVIEW_TEXT = budgets.PREVIEW_TEXT
 
@@ -246,7 +247,7 @@ class DC2TK_OT_preview_changes(bpy.types.Operator):
         if not export_checked(self, context, mod_dir):
             return None
         command = dc2tk + [
-            "build", source, disc, "--dry-run", "--mods", os.path.dirname(mod_dir), "--mod", os.path.basename(mod_dir),
+            "build", source, disc, "--dry-run", "--mods", os.path.dirname(mod_dir), "--mod", export_mod.mod_id(mod_dir),
         ]
         return ("dc2tk build --dry-run", command, prefs.working_dir(prefs.get(context)))
 
@@ -304,7 +305,8 @@ def write_test_mod(mods_dir, map_name, world):
     folder = os.path.join(mods_dir, TEST_MOD)
     os.makedirs(folder, exist_ok=True)
     with open(os.path.join(folder, "mod.json"), "w", encoding="utf-8", newline="\n") as handle:
-        json.dump({"title": "Test here (made by the Blender add-on)", "version": "1.0.0"}, handle, indent=2)
+        body = {"format": 2, "id": TEST_MOD_ID, "version": "1.0.0", "name": "Test here (made by the Blender add-on)"}
+        json.dump(body, handle, indent=2)
         handle.write("\n")
     for old in os.listdir(folder):
         if old.endswith(".c"):
@@ -370,7 +372,7 @@ class DC2TK_OT_test_here(bpy.types.Operator):
         obj = context.active_object
         world = obj.matrix_world.copy() if self.source == "ACTIVE" and obj is not None else context.scene.cursor.matrix.copy()
         mods_dir = os.path.dirname(mod_dir)
-        command = dc2tk + ["build", source, disc, "-o", output, "--mods", mods_dir, "--mod", os.path.basename(mod_dir)]
+        command = dc2tk + ["build", source, disc, "-o", output, "--mods", mods_dir, "--mod", export_mod.mod_id(mod_dir)]
         report = scripts.info(root)
         has_script = bool(report.get("scripts")) if report else True
         if name in new_maps(mod_dir) or not has_script:
@@ -380,7 +382,7 @@ class DC2TK_OT_test_here(bpy.types.Operator):
             self.report({"WARNING"}, "%s starts where its map_start puts the player" % name)
         else:
             write_test_mod(mods_dir, name, world)
-            command += ["--mod", TEST_MOD, "--start-at", "%s:%s" % (name, TEST_PROGRAM)]
+            command += ["--mod", TEST_MOD_ID, "--start-at", "%s:%s" % (name, TEST_PROGRAM)]
         if context.window_manager.dc2tk_maps.test_play:
             command.append("--play")
         self._output = output

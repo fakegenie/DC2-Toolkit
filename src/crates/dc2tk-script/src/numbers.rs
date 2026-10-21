@@ -20,7 +20,7 @@ use regex::Regex;
 use crate::index::{self, Folded};
 use crate::{flags, Error, Result};
 
-pub const LOCK: &str = "numbers.json";
+pub const LOCK: &str = "mods.lock";
 
 /// A kind of number a mod asks for by name. They are declared in the order of their names, which
 /// is the order requests and reports list them in.
@@ -191,7 +191,7 @@ pub fn read_lock(path: Option<&Path>) -> Result<Lock> {
     let wrong = |what: String| Error::invalid(format!("{}: {what}", path.display()));
     let value: serde_json::Value =
         serde_json::from_str(&dc2tk_disc::textfile::read_text(path)?).map_err(|error| wrong(error.to_string()))?;
-    lock_of(&value).map_err(wrong)
+    lock_of(&value["numbers"]).map_err(wrong)
 }
 
 /// The lock a lock file's JSON holds, or what is wrong with it.
@@ -219,45 +219,15 @@ fn lock_of(value: &serde_json::Value) -> std::result::Result<Lock, String> {
     Ok(lock)
 }
 
-pub fn rename_module(path: &Path, from: &str, to: &str) -> Result<usize> {
-    if !path.is_file() {
-        return Ok(0);
-    }
-    let mut lock = read_lock(Some(path))?;
-    let prefix = format!("{from}/");
-    let mut renamed = 0;
-    for held in lock.values_mut() {
-        *held = std::mem::take(held)
-            .into_iter()
-            .map(|(key, number)| match key.strip_prefix(&prefix) {
-                Some(name) => {
-                    renamed += 1;
-                    (format!("{to}/{name}"), number)
-                }
-                None => (key, number),
-            })
-            .collect();
-    }
-    if renamed > 0 {
-        write_lock(path, &lock)?;
-    }
-    Ok(renamed)
-}
-
 pub fn write_lock(path: &Path, lock: &Lock) -> Result<()> {
-    let note = "Numbers build gave mods' NEW_FLAG, NEW_COUNTER, NEW_PROGRAM and NEW_MONSTER_VAR names, kept so a name keeps its number and \
-                saves stay valid. Delete a line to free its number.";
-    let mut body = serde_json::Map::new();
+    let mut numbers = serde_json::Map::new();
     for kind in NumberKind::ALL {
         if !lock[&kind].is_empty() {
             let sorted: BTreeMap<&String, &i64> = lock[&kind].iter().collect();
-            body.insert(kind.key().to_string(), serde_json::to_value(sorted).unwrap());
+            numbers.insert(kind.key().to_string(), serde_json::to_value(sorted).unwrap());
         }
     }
-    body.insert("note".into(), note.into());
-    let text = dc2tk_disc::textfile::json_text(&serde_json::Value::Object(body));
-    dc2tk_disc::textfile::write_text(path, &text)?;
-    Ok(())
+    crate::sets::write_section(path, "numbers", serde_json::Value::Object(numbers))
 }
 
 /// {mod: {name: number}}: what each mod was given.

@@ -9,7 +9,7 @@
 #                    bone, and the action "spin" (4 s, looping): the rotor spins twelve turns, the
 #                    outer ring makes one, the middle and inner rings rock on their pivots. About
 #                    7 units tall and 5 across (Max is 26 tall). mod.json makes it
-#                    mods/gyros/gyros.chr.
+#                    mod:gyros.chr.
 #   gyros_item.gltf  the item's model (item 429's "gyros"): the same gyroscope standing still, coarser
 #                    and without bones, as the game's item models are (one mesh and the eyes', no
 #                    motion: the menus that show an item's model never start a motion). mod.json

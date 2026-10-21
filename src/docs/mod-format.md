@@ -1,12 +1,13 @@
 # Mod format 2: a review and a proposal
 
-A proposal, not yet built. It reviews how mods are made, built and shared today, then
-proposes one `mod.json` per mod, a zip to share it in, and a format that can grow without
-breaking: everything from engine code to scripts, maps, textures, models and sounds, and
-the native port itself. It does not keep format 1 working; `dc2tk mod upgrade` converts a
-format 1 folder once.
+Built, apart from the parts section 9 lists as left out. It reviews how mods were made, built
+and shared before format 2, then proposes one `mod.json` per mod, a zip to share it in, and a
+format that can grow without breaking: everything from engine code to scripts, maps, textures,
+models and sounds, and the native port itself. Nothing is public yet, so format 1 was dropped
+outright: no conversion, and no code kept for older mods. Section 9 says how each part was built
+and where it differs from the proposal; the user guide is `docs/guide/mods.md`.
 
-## 1. How it works today
+## 1. How it worked before format 2
 
 A mod is a folder under `mods/`, named by the folder. `mod.json` maps asset ids to files
 (`replace`, `add`), and the rest of the mod sits beside it in several other forms:
@@ -232,7 +233,7 @@ copies a zip in, `mod list` shows both kinds, and nothing needs unpacking.
   today. A string instead is a path to such a file, for big tables. `text` does the same for
   message edits by message number, with files for whole languages.
 - **`disc/`, `raw/` and `files/`** go away. Raw files are `files` lines, and whole script copies
-  become patches (`mod upgrade` runs `mod slim`).
+  become patches (`mod slim`).
 
 ### Scripts
 
@@ -377,28 +378,29 @@ key, once the port API is stable enough to keep a binary interface.
 | `mod check` | reads and validates `mod.json` and `mod.lock`, then everything `check` does now |
 | `mod pack MOD` | writes `<id>-<version>.dc2mod` deterministically after the checks in section 3 |
 | `mod install FILE` | copies a `.dc2mod` into the mods folder and reports its id, version, kind and dependencies |
-| `mod upgrade MOD` | converts a format 1 folder: an id from the folder name, `file:` lines into `files`, data files inline, `disc/` and `raw/` into `files`, `files/` slimmed into patches, `start_at` into `dev` |
-| `set upgrade MODS` | turns a format 1 mods folder into a mod set, moving `mods/numbers.json` into its `set.lock` so existing saves keep their flags |
 | `build SET` | builds a mod set for both targets (`-o x.iso` for an image) |
 | `play SET DISC` | builds the set for the native target if needed and runs it |
 
 ## 9. Order of work
 
 1. **Done.** Typed `mod.json` (serde, `deny_unknown_fields`) and the schema; `format`, `id`,
-   `version`, `game`, `tool`, `targets`, `dependencies`, `conflicts`, `dev`; `mod.lock`;
-   `mod upgrade`. Names stay in `mods/numbers.json`, keyed by id instead of folder, until step 4.
+   `version`, `game`, `tool`, `targets`, `dependencies`, `conflicts`, `dev`; `mod.lock`. Names
+   stay in `mods/numbers.json`, keyed by id instead of folder, until step 4.
    The rest of the build stays as it is. How it was built:
    - `dc2tk-script`'s `manifest` holds the types, `mod.lock` (the whole files a mod copied, which
-     `mod.json` held as `files` and `includes`), `mod upgrade` and the index of mods by id;
+     `mod.json` held as `files` and `includes`) and the index of mods by id;
      `semver` is a small range parser of its own (`*`, `^`, `~`, `=`, comparisons joined by commas),
      since the workspace has no semver crate.
    - The schema, `definitions/mod.schema.json`, is written by hand: there is no schemars here. A
      unit test checks its keys against the types. `"$schema"` is accepted in `mod.json` so editors
      find it.
    - The id is the mod's name everywhere the folder name was: dependencies, numbers, clash and
-     build messages, `mod list`, generated wrapper names. `--mod` and the other commands take an id
-     or a folder name. A patch includes another mod's file as `#include "<id>/x.h"` (the folder
-     name still works too).
+     build messages, `mod list`, generated wrapper names. Commands that choose mods (`build --mod`,
+     `mod check`, `mod apply`, `mod test`, `mod watch`) take ids; commands that make or edit a mod's
+     folder (`mod new`, `mod save`, `mod slim`, `mod override`, `mod asset`, `mod make`) take the
+     folder's name. A patch includes another mod's file as `#include "<id>/x.h"`.
+   - A folder without a `mod.json` is not a mod, and a `mod.json` that does not read is an error
+     naming it.
    - `build --dev` replaces `--no-start-at`: without it a build is a normal New Game. `mod watch`
      never used `start_at` and still doesn't.
    - `targets` is checked: an image (`-o`, `--dry-run`) refuses mods without `iso`, `--native` and
@@ -406,14 +408,67 @@ key, once the port API is stable enough to keep a binary interface.
    - `mod new`, `mod save`, `mod override` and `mod asset` start a missing `mod.json`, with the id
      `local.<folder>` (`mod new` and `mod save` take `--id` for another).
    - The golden snapshot builds every disc image identically; only the logs name mods by id.
-2. `files` with the `mod:` namespace, inline `data` and `text`, `scripts.sources`; drop `disc/`,
-   `raw/` and `files/`.
-3. Zips: reading a mod from a `.dc2mod`, `mod pack`, `mod install`.
-4. Mod sets with `set.lock` (numbers move there; `set upgrade`) and the native target's overlay
-   as a normal feature; `play`.
-5. `port_mod.h` and the `port` section, with the debug build moved into `dc2tk.debug-tools` as
-   its first user; render settings as data.
-6. `settings`, and `hd:texture:`.
+2. **Done.** `files` with the `mod:` namespace, inline `data` and `text`, `scripts.sources`.
+   - `replace` and `add` hold ids only; a `data:`, `text:` or `file:` key there is refused with
+     the section it belongs in. The lines stay `data:`, `text:` and `file:` lines inside the build,
+     so nothing past `replace::lines` changed.
+   - `"files": {"mod:NAME": ...}` is `mods/<id>/NAME` on the disc. A `files` line adds when it is
+     `mod:` or has `like`, and replaces otherwise. Scripts and patches get `MOD_DIR`
+     (`"mods/<id>/"`), a text macro, so `MOD_DIR "gill.chr"` is one string; the proposal's
+     `MOD_FILE("gill.chr")` became that. To make it work, a define given to the parser that is
+     not a number now expands as text in code; numbers stay named constants as before.
+   - `data` and `text` take a file, or the records (a list) and the messages (`{"12": "..."}`)
+     in place.
+   - `disc/` is gone. `raw/` stays as the folder `mod asset --as` writes game files into, each
+     with its `files` line. Whole files stay (a decision taken while building it, section 10):
+     `mod new` and `mod save` copy them into `files/` and list them in `scripts.whole`
+     (tree path to mod path), and `mod slim` takes them out of it.
+   - `scripts.sources` picks the patches and headers by pattern; without it every `.c` and `.h`
+     outside `files/` and the whole files is a source. `additions` moved under `scripts`.
+3. **Done.** Zips: `package.rs`. `mod pack ID` writes `<id>-<version>.dc2mod`: members sorted,
+   fixed 1980 timestamps, deflate (or stored when that is smaller), `mod.json` without `dev`. It
+   packs the files `mod.json` names (with glTF buffers and images), the sources and whole files,
+   `engine/`, `port/`, `mod.lock`, and README, LICENSE and CHANGELOG. `--disc` refuses a file
+   whose bytes are one of the disc's. Reading checks every name (absolute, `..`, `\`, `:`,
+   symbolic links, names differing only in case) and every CRC. A zip in the mods folder is a
+   mod like a folder: it is unpacked once into `<mods>/.unpacked/<stem>-<sha>/`, keyed by its
+   hash, rather than read in place, because every reader of a mod takes a folder. `mod install`
+   copies a zip in, replaces an older zip of the same id and its unpacked copy, and refuses an id
+   a folder mod has.
+4. **Done.** Mod sets: `sets.rs`. A set is `{"format", "game", "mods": [{"id", "version",
+   "settings"}]}`; `build --set FILE` builds it, and its lock is the set file with `.lock`.
+   Locks hold `numbers` and `versions`; `--mod` builds use `mods/mods.lock`, so `numbers.json`
+   is gone. `build` records the versions it built with, and a set refuses a mod outside its
+   range. `play DISC --native --set FILE` writes the set's game files to
+   `build/sets/<set>/overrides/`, builds a port binary there when the set has engine or port
+   code, and runs it with `DC2TK_OVERRIDES` (`--build-only` prints the command instead).
+5. **Done.** `port/include/port_mod.h` (API 1.0.0): a `PortMod` table of hooks registered with
+   `PORT_MOD(table)`, `port_setting`, `port_mod_command` and `port_mod_panel`; `port/src/mods.c`
+   runs them. `port_debug.h` and its weak hooks are gone. The debug build is the mod
+   `dc2tk.debug-tools` (`port/debug/mod.json`); `port.py --debug` adds it, `port.py --mod DIR`
+   adds any other. The debug API runs mods' commands and `/help` lists them, and the debug
+   window has a Mods tab for their panels. The build compiles a chosen mod's `port.sources` as
+   `mod_<id>_<file>` units. `port.settings` and the mods' setting values go to
+   `<overrides>/dc2tk-port.cfg` (`name=value`, settings as `<id>.<name>`); `render.scale` and
+   `render.msaa` are read from it when the command line does not give them.
+6. **Done.** `settings` (`bool`, `int` with `min` and `max`, `enum`, `string`), checked
+   against their types. A set chooses values; a `--mod` build takes the defaults. Patches and
+   the mod's map scripts see `SETTING_<name>` (the proposal's `SETTING(name)`), and a line
+   with `"when": "name"` or `"!name"` is used only when a bool setting is on or off.
+   `hd:texture:<id>` under `replace` (native-only mods) writes
+   `<overrides>/dc2tk-hd/<picture>_<w>x<h>.rgba` from a PNG a whole multiple of the picture's
+   size; the port matches by the picture's name and size, not a hash, when it caches the
+   texture, and uploads the larger picture in its place.
+
+Left out, for later:
+
+- New asset ids under `add` (`model:gill`, reached as `model:andrew.spinning-cult/gill`);
+  `files` with `mod:` and `like` does the job for now.
+- A top-level `engine` section: engine code is still the `engine/` folder.
+- `"sha256"` pins on dependencies.
+- Building a set without the decompiled tree (decompiling only the scripts its patches target).
+- `mod watch` relinking and restarting the port for engine or port code.
+- The port's file-read hook, a quit hook, and a named store in the save for native-only mods.
 
 ## 10. Decisions
 
@@ -421,8 +476,10 @@ key, once the port API is stable enough to keep a binary interface.
   Prebuilt per-platform libraries can come later as their own key, once the port API is stable.
 - **Mods name their numbers; the build assigns them.** No mod picks a flag, counter, program or
   monster variable. Numbers are given per mod set and kept in its `set.lock` (section 4).
-- **Patches may hold whole decompiled functions**, as `mod override` writes them. Whole script
-  files are still not shipped, because they cannot be combined with other mods' patches.
+- **Patches may hold whole decompiled functions**, as `mod override` writes them.
+- **Whole script files stay.** They are listed in `scripts.whole` and shipped in a zip like
+  any other source. Two mods can't both replace one script, and the build says so; `mod slim`
+  turns a whole file into patches where it can.
 - **Parity by default.** Mods run the same on the ISO and the native port unless they declare
   `"targets": ["native"]`, which unlocks port code, port settings and port-only assets and
   keeps the mod out of ISO builds.

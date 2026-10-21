@@ -27,7 +27,7 @@ pub struct WatchArgs {
     source: PathBuf,
     /// The retail disc the source came from: its image, or an extracted disc.
     disc: PathBuf,
-    /// Mods to build and watch, with the mods each requires.
+    /// The ids of the mods to build and watch, with the mods each depends on.
     #[arg(required = true)]
     names: Vec<String>,
     /// Folder the native port reads files from before the disc; $DC2TK_OVERRIDES, else
@@ -89,38 +89,12 @@ fn joined_paths(paths: &[PathBuf]) -> String {
 /// ones written, ones a previous run wrote and this build no longer changes removed.
 fn rebuild(args: &WatchArgs, folder: &Path) -> Result<()> {
     let started = Instant::now();
-    let (built, executable) = build::built_game_files(&args.source, &args.disc, &args.names, &args.mods, &args.common)?;
+    let (built, executable) =
+        build::built_game_files(&args.source, &args.disc, &args.names, None, &args.mods, &args.common)?;
     if executable {
         println!("note: the mods change the executable (engine files or executable tables): rebuild the port for that");
     }
-    fs::create_dir_all(folder).with_context(|| format!("cannot create {}", folder.display()))?;
-    let list = folder.join(LIST);
-    let before: BTreeSet<String> = match fs::read_to_string(&list) {
-        Ok(text) => text.lines().map(str::to_string).collect(),
-        Err(_) => BTreeSet::new(),
-    };
-    let mut written = 0;
-    for (path, data) in &built {
-        let target = folder.join(path);
-        if fs::read(&target).is_ok_and(|old| old == *data) {
-            continue;
-        }
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(&target, data).with_context(|| format!("cannot write {}", target.display()))?;
-        println!("override: {path} ({} bytes)", data.len());
-        written += 1;
-    }
-    let mut removed = 0;
-    for path in before.iter().filter(|path| !built.contains_key(*path)) {
-        if fs::remove_file(folder.join(path)).is_ok() {
-            println!("removed: {path}");
-            removed += 1;
-        }
-    }
-    let names: Vec<&str> = built.keys().map(String::as_str).collect();
-    fs::write(&list, names.join("\n")).with_context(|| format!("cannot write {}", list.display()))?;
+    let (written, removed) = write_overlay(folder, &built)?;
     println!(
         "{} game files in {} ({written} written, {removed} removed) in {:.1} s",
         built.len(),
@@ -194,4 +168,38 @@ fn ask(port: u16, request: &str) -> String {
         Some((_, body)) => format!("the game refused: {body}"),
         None => "the game did not answer".to_string(),
     }
+}
+
+/// Makes the folder hold exactly the built files: new and edited ones written, ones a previous run
+/// wrote and this build no longer changes removed. Returns (written, removed).
+pub fn write_overlay(folder: &Path, built: &dc2tk_script::discfiles::Files) -> Result<(usize, usize)> {
+    fs::create_dir_all(folder).with_context(|| format!("cannot create {}", folder.display()))?;
+    let list = folder.join(LIST);
+    let before: BTreeSet<String> = match fs::read_to_string(&list) {
+        Ok(text) => text.lines().map(str::to_string).collect(),
+        Err(_) => BTreeSet::new(),
+    };
+    let mut written = 0;
+    for (path, data) in built {
+        let target = folder.join(path);
+        if fs::read(&target).is_ok_and(|old| old == *data) {
+            continue;
+        }
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&target, data).with_context(|| format!("cannot write {}", target.display()))?;
+        println!("override: {path} ({} bytes)", data.len());
+        written += 1;
+    }
+    let mut removed = 0;
+    for path in before.iter().filter(|path| !built.contains_key(*path)) {
+        if fs::remove_file(folder.join(path)).is_ok() {
+            println!("removed: {path}");
+            removed += 1;
+        }
+    }
+    let names: Vec<&str> = built.keys().map(String::as_str).collect();
+    fs::write(&list, names.join("\n")).with_context(|| format!("cannot write {}", list.display()))?;
+    Ok((written, removed))
 }

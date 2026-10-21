@@ -1,4 +1,5 @@
 #include "debug.h"
+#include "port_mod.h"
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_sdlgpu3.h"
@@ -470,6 +471,11 @@ void debug_window_draw(void) {
         }
         if (tab("Log")) {
             log_tab();
+            ImGui::EndTabItem();
+        }
+        if (port_mods_panel_count() && tab("Mods")) {
+            for (int i = 0; i < port_mods_panel_count(); ++i)
+                if (ImGui::CollapsingHeader(port_mods_panel_name(i), ImGuiTreeNodeFlags_DefaultOpen)) port_mods_panel_draw(i);
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();

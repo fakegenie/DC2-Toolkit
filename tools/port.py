@@ -7,7 +7,8 @@ aborts, and build/port/missing.txt lists them by library.
 
     python3 -I tools/port.py            build
     python3 -I tools/port.py --run      build, then run it
-    python3 -I tools/port.py --debug    also link build/port/darkchronicle-debug with port/debug and Dear ImGui
+    python3 -I tools/port.py --debug    also link build/port/darkchronicle-debug with the debug tools mod (port/debug) and Dear ImGui
+    python3 -I tools/port.py --mod DIR  link a mod's port code (its mod.json's "port" sources) into the binaries
     python3 -I tools/port.py --ios simulator
                                         build build/port/ios-simulator/DarkChronicle.app with dc2.iso inside
     python3 -I tools/port.py --ios device
@@ -193,7 +194,7 @@ def compile_one(source, name):
         return compile_command(source, target, depfile, command_file,
                                ["clang++", *TARGET, "-std=c++17", "-c", "-O2", "-g", "-w", "-MMD", "-MF", str(depfile),
                                 f"-I{IMGUI}", *SDL_CFLAGS, str(source), "-o", str(target)], [])
-    debug = [f"-I{IMGUI}", f"-I{PORT / 'debug'}"] if name.startswith("debug_") else []
+    debug = [f"-I{IMGUI}", f"-I{source.parent}"] if name.startswith("mod_") else []
     compiler = LINKER.replace("clang++", "clang") if source.suffix == ".m" else "clang" if c else "clang++"
     objc = ["-fobjc-arc"] if source.suffix == ".m" else []
     command = [compiler, *TARGET, *objc, "-std=c11" if c else "-std=c++26", "-c", *FLAGS, *debug,
@@ -209,7 +210,7 @@ def compile_one(source, name):
     if name == "main":
         changes.append(f"--redefine-sym={PREFIX}main={PREFIX}port_game_main")
     return compile_command(source, target, depfile, command_file, command, changes,
-                           operators=not c and not name.startswith(("debug_", "port_")))
+                           operators=not c and not name.startswith(("mod_", "port_")))
 
 
 def compile_command(source, target, depfile, command_file, command, changes, operators=False):
@@ -231,7 +232,15 @@ def compile_command(source, target, depfile, command_file, command, changes, ope
     return name, None
 
 
-def compile_all(units, debug=False):
+def port_mod_jobs(mod_dir):
+    manifest = json.loads((mod_dir / "mod.json").read_text(encoding="utf-8"))
+    port = manifest.get("port", {})
+    prefix = "mod_" + "".join(c if c.isalnum() else "_" for c in manifest["id"]) + "_"
+    sources = sorted({source for pattern in port.get("sources", []) for source in mod_dir.glob(pattern)})
+    return [(source, prefix + source.stem) for source in sources]
+
+
+def compile_all(units, debug=False, mods=()):
     jobs = [(source, source.stem) for source in units]
     jobs += [(ENGINE / "port" / "src" / name, "upstream_" + Path(name).stem) for name in UPSTREAM_ASM]
     jobs.append((ENGINE / "tools" / "kazarov" / "src" / "cpp" / "sce" / "libvu0.cpp", "kazarov_vu0"))
@@ -239,8 +248,10 @@ def compile_all(units, debug=False):
     if TARGET:
         jobs += [(source, "port_" + source.stem) for source in sorted((PORT / "src").glob("*.m"))]
     if debug:
-        jobs += [(source, "debug_" + source.stem) for source in sorted((PORT / "debug").glob("*.c*"))]
+        jobs += port_mod_jobs(PORT / "debug")
         jobs += [(IMGUI / name, "imgui_" + Path(name).stem) for name in IMGUI_SOURCES]
+    for mod_dir in mods:
+        jobs += port_mod_jobs(mod_dir)
     OBJ.mkdir(parents=True, exist_ok=True)
     workers = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count() or 1
     with concurrent.futures.ThreadPoolExecutor(min(workers, len(jobs))) as pool:
@@ -455,6 +466,7 @@ def main():
     parser.add_argument("--graphics", action="store_true", help="accepted for compatibility; the port always opens a window")
     parser.add_argument("--movies", action="store_true", help="enable MPEG-2 movies with the local FFmpeg SDK")
     parser.add_argument("--debug", action="store_true", help="also link the debug build with its window and API")
+    parser.add_argument("--mod", type=Path, action="append", default=[], help="a mod folder whose port code goes into the binaries")
     parser.add_argument("--sdl", type=Path, default=OUT / "sdk", help="local SDL3 installation prefix")
     parser.add_argument("--ios", choices=sorted(IOS), help="build DarkChronicle.app for the iOS simulator or an iPhone")
     parser.add_argument("--disc", type=Path, default=ROOT / "dc2.iso", help="the disc image bundled into the iOS app")
@@ -485,8 +497,8 @@ def main():
         sys.exit("no engine source in engine/: run `dc2tk engine fetch`")
     if options.debug and not (IMGUI / "imgui.h").exists():
         sys.exit("Dear ImGui missing: run python3 -I tools/imgui_sdk.py")
-    every, units, others = compile_all(copy_engine(), options.debug)
-    debug_objects = [path for path in every if path.stem.startswith(("debug_", "imgui_"))]
+    every, units, others = compile_all(copy_engine(), options.debug, [mod.resolve() for mod in options.mod])
+    debug_objects = [path for path in every if path.stem.startswith(("mod_dc2tk_debug_tools_", "imgui_"))]
     objects = [path for path in every if path not in debug_objects]
     first = link(objects, [], BINARY)
     names = undefined(first.stderr, objects)

@@ -10,33 +10,38 @@
 //!   "sound:EV_000_130/13": {"file": "sounds/chime.wav", "volume": 90},
 //!   "bank:SP_003": "sounds/SP_003",                         a folder of WAVs by entry number
 //!   "texture:a01ia_01": {"file": "art/floor.png", "only": ["map/a"]},
-//!   "text:en/shopname": "text/en/shopname.txt",             a message file's text, by message
 //!   "music:BG_000_000": "music/BG_000_000.mid",             a sequence (music, an ambient loop) as MIDI
 //!   "music:BG_001_000": {"file": "music/tune.mid", "instruments": {"100": "music/pulse.wav"}},
 //!                                                           with WAVs as new programs of its bank
-//!   "file:snd2/event/EV_000_130.snd": "raw/bank.snd"        a disc file or pack member by path
+//!   "hd:texture:i01h0101": "hd/i01h0101.png"                a larger picture, native-only mods
 //! },
 //! "add": {
 //!   "sound:SE_MOD_BEEP": {"file": "sounds/beep.wav", "bank": "SP_004"},
-//!   "file:mods/calc/ui.img": {"file": "ui", "like": "texture:logo_d00"},     a new texture file of PNGs
-//!   "file:mods/calc/calc.chr": {"file": "calc/calc.gltf", "like": "model:uki"} a new pack from a glTF
 //!   "map:m05x": {"file": "maps/m05x/m05x.gltf", "like": "m05", "title": "Park"} a new map from a map's scene
 //!   "music:BG_200": {"file": "music/fish.mid", "like": "BG_193"}   a new music file, load_bgm(200)
+//! },
+//! "data": {"items": "data/items.json"},                     a table of game data, or its records
+//! "text": {"en/shopname": "text/en/shopname.txt"},          a message file's text, or its messages
+//! "files": {
+//!   "snd2/event/EV_000_130.snd": "raw/bank.snd",            a disc file or pack member by path
+//!   "mod:ui.img": {"file": "ui", "like": "texture:logo_d00"},       a new texture file of PNGs
+//!   "mod:calc.chr": {"file": "calc/calc.gltf", "like": "model:uki"} a new pack from a glTF
 //! }
 //! ```
 //!
-//! `"data:items": "data/items.json"` (also data:shops, data:monsters, data:inventions, ...) edits a
-//! table of game data as JSON (docs/modding/data.md); datatables.rs builds those, merging several
-//! mods' tables.
+//! `lines` reads every section into lines keyed as data:, text:, file: and the ids, so the rest of
+//! the build sees one list; a `mod:` path is the mod's own folder on the disc, mods/<id>/. A line
+//! with "when" is kept or left out by a true/false setting. datatables.rs builds the data: lines,
+//! merging several mods' tables (docs/guide/data.md).
 //!
 //! A replacement reaches every place the disc has the asset (ids::Index lists them); "only" keeps
 //! the places under the given disc paths. A model is a glTF file with its buffer beside it (its
 //! textures change through their own ids), or a folder as `mod asset` writes it (the
 //! export's glTF and buffer, with textures/ whose edited PNGs go into the pack). A pattern (* and
-//! ?) replaces every id it matches with one file; an id given exactly wins over a pattern. "file:"
-//! lines are game files by path, as the old disc/ layout gives them (discfiles), and a folder there
-//! converts by the game file's suffix. "add" appends a sound entry to every place of a bank; the
-//! mod's patches see its name as a constant holding the entry's number. A file: line with "like"
+//! ?) replaces every id it matches with one file; an id given exactly wins over a pattern. "files"
+//! lines are game files by path (discfiles), and a folder there converts by the game file's
+//! suffix. "add" appends a sound entry to every place of a bank; the
+//! mod's patches see its name as a constant holding the entry's number. A files line with "like"
 //! makes its game file whole from a common format, with the asset or disc file "like" names as the
 //! template (a texture file of PNGs, or a character pack of a glTF): a new file the disc does not
 //! have, with pictures or meshes of its own. A text (dc2tk_assets::text) changes, at every place of
@@ -48,7 +53,7 @@
 //! Each change is built with the disc's own file as the template, as discfiles does. Models are
 //! built first, then banks, then pictures, so a texture goes into a pack whose model another line
 //! rebuilt. Two chosen mods may not replace one id, one picture or sound entry, or one model, nor
-//! change a game file another's file: line or disc/ file covers.
+//! change a game file another's files line covers.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
@@ -73,13 +78,23 @@ use crate::{mods, names, paths, Error, Result};
 pub const REPLACE: &str = "replace";
 pub const ADD: &str = "add";
 pub const FILE: &str = "file:";
+/// A message file's text, by the text id (text:en/shopname); mod.json gives them under "text".
+pub const TEXT: &str = "text:";
+/// A picture the native port draws in place of a texture's, at any whole multiple of its size
+/// (hd:texture:wall): a native-only line, built into the override folder, never onto the disc.
+pub const HD: &str = "hd:";
+/// Where the native port finds the pictures of hd: lines, in its override folder.
+pub const HD_FOLDER: &str = "dc2tk-hd";
+/// A new game file in the mod's own folder on the disc, in mod.json's "files": mod:gill.chr is
+/// mods/<id>/gill.chr.
+pub const MOD_FILE: &str = "mod:";
 /// A map edited as a glTF scene (docs/modding/maps.md, "The glTF scene"): `"map:s17": "maps/s17/s17.gltf"`;
 /// under "add", a new map made from another's scene (`{"file": ..., "like": "m05"}`, section 9).
 pub const MAP: &str = "map:";
 /// The longest name a new map may have: its files are `<name>_<language>.stb` and the like in the
 /// engine's 32-byte file names.
 pub const MAP_NAME_MOST: usize = 12;
-/// A table of game data edited as JSON (docs/modding/data.md): `"data:items": "data/items.json"`.
+/// A table of game data edited as JSON (docs/guide/data.md): `"data": {"items": "data/items.json"}`.
 pub const DATA: &str = "data:";
 /// What a music: line's MIDI file may be called.
 const MIDI_SUFFIXES: [&str; 3] = [".mid", ".midi", ".rmi"];
@@ -116,6 +131,24 @@ pub struct Line {
     pub add: bool,
     /// What the line edits, with the options of that kind of line.
     pub kind: LineKind,
+    /// The text mod.json gives in place of a file: a data table's records, or a text's messages.
+    pub inline: Option<String>,
+}
+
+/// Where a line's text comes from: a file of the mod, or mod.json itself.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Source {
+    File(PathBuf),
+    Inline(String),
+}
+
+impl Source {
+    pub fn read(&self) -> Result<String> {
+        match self {
+            Source::File(path) => Ok(dc2tk_disc::textfile::read_text(path)?),
+            Source::Inline(text) => Ok(text.clone()),
+        }
+    }
 }
 
 /// What a line edits (its key's prefix), with the options only that kind of line takes.
@@ -160,11 +193,16 @@ pub enum LineKind {
     },
     /// A table of game data (data:items).
     Data,
+    /// A higher-resolution picture of a texture for the native port (hd:texture:wall).
+    Hd,
 }
 
 impl LineKind {
     /// The kind of line a key makes, with no options yet; None for a key of no kind.
     fn of_key(key: &str) -> Option<LineKind> {
+        if key.get(..HD.len()).is_some_and(|prefix| prefix.eq_ignore_ascii_case(HD)) {
+            return (ids::kind_of(&key[HD.len()..]) == Some(Kind::Texture)).then_some(LineKind::Hd);
+        }
         if key.starts_with(FILE) {
             return Some(LineKind::File { like: None });
         }
@@ -183,6 +221,13 @@ impl LineKind {
 }
 
 impl Line {
+    pub fn source(&self) -> Source {
+        match &self.inline {
+            Some(text) => Source::Inline(text.clone()),
+            None => Source::File(self.file.clone()),
+        }
+    }
+
     pub fn is_file(&self) -> bool {
         matches!(self.kind, LineKind::File { .. })
     }
@@ -193,6 +238,15 @@ impl Line {
 
     pub fn is_data(&self) -> bool {
         matches!(self.kind, LineKind::Data)
+    }
+
+    pub fn is_hd(&self) -> bool {
+        matches!(self.kind, LineKind::Hd)
+    }
+
+    /// The texture id or pattern an hd: line draws over (texture:wall).
+    pub fn hd_id(&self) -> &str {
+        &self.key[HD.len()..]
     }
 
     /// Whether the line names assets of the disc's index by id (or pattern), to replace or add.
@@ -263,18 +317,132 @@ fn suffix_is(path: &Path, suffix: &str) -> bool {
     paths::file_name(path).to_lowercase().ends_with(suffix)
 }
 
-/// A mod's replace and add lines, in the order mod.json gives them, each file checked to be in
-/// the mod.
+/// A mod's lines, in the order mod.json gives them: its replace and add lines, then its data
+/// tables, texts and game files, each file checked to be in the mod.
 pub fn lines(mod_dir: &Path) -> Result<Vec<Line>> {
     let found = crate::manifest::read(mod_dir)?;
     let module = found.id.clone();
+    let settings = crate::manifest::settings_of(&found)?;
     let mut out = Vec::new();
     for (listed, add) in [(&found.replace, false), (&found.add, true)] {
         for (key, value) in listed {
-            out.push(line(mod_dir, &module, key, value, add)?);
+            let Some(value) = switched(key, &module, value, &settings)? else { continue };
+            let value = &value;
+            let lower = key.to_lowercase();
+            let moved = [(DATA, "data"), (FILE, "files"), (TEXT, "text")]
+                .into_iter()
+                .find(|(prefix, _)| lower.starts_with(prefix));
+            if let Some((prefix, section)) = moved {
+                return Err(line_error(
+                    key,
+                    &module,
+                    format!("{prefix} lines go in mod.json's \"{section}\", keyed by what follows {prefix}"),
+                ));
+            }
+            let made = line(mod_dir, &module, key, value, add)?;
+            if made.is_hd() && found.targets != [crate::manifest::Target::Native] {
+                return Err(made.fail("hd: lines work only on the native port: declare \"targets\": [\"native\"]"));
+            }
+            out.push(made);
         }
     }
+    for (table, value) in &found.data {
+        let key = format!("{DATA}{table}");
+        let Some(value) = switched(&key, &module, value, &settings)? else { continue };
+        let value = &value;
+        out.push(match value {
+            Value::Array(records) => {
+                let inline = serde_json::json!({ table.as_str(): records }).to_string();
+                inline_line(&module, &key, LineKind::Data, inline, check_data_line)?
+            }
+            _ => line(mod_dir, &module, &key, value, false)?,
+        });
+    }
+    for (id, value) in &found.text {
+        let key = format!("{TEXT}{id}");
+        let Some(value) = switched(&key, &module, value, &settings)? else { continue };
+        let value = &value;
+        out.push(match value {
+            Value::Object(messages) => {
+                let kind = LineKind::Asset { kind: Kind::Text, only: Vec::new() };
+                inline_line(&module, &key, kind, inline_messages(&key, &module, messages)?, |_| Ok(()))?
+            }
+            _ => line(mod_dir, &module, &key, value, false)?,
+        });
+    }
+    for (path, value) in &found.files {
+        let Some(value) = switched(path, &module, value, &settings)? else { continue };
+        let value = &value;
+        let made = value.get("like").is_some();
+        let (disc_path, add) = match path.strip_prefix(MOD_FILE) {
+            Some(rest) => (format!("{}/{rest}", mod_folder(&module)), true),
+            None => (path.clone(), made),
+        };
+        out.push(line(mod_dir, &module, &format!("{FILE}{disc_path}"), value, add)?);
+    }
     Ok(out)
+}
+
+/// A line's value without its "when", or None when the setting it names (a true/false one;
+/// "!name" for false) leaves the line out.
+fn switched(key: &str, module: &str, value: &Value, settings: &IndexMap<String, Value>) -> Result<Option<Value>> {
+    let Some(when) = value.get("when") else { return Ok(Some(value.clone())) };
+    let when = when.as_str().ok_or_else(|| line_error(key, module, "\"when\" names a true/false setting"))?;
+    let (name, wanted) = match when.strip_prefix('!') {
+        Some(name) => (name, false),
+        None => (when, true),
+    };
+    let Some(on) = settings.get(name).and_then(Value::as_bool) else {
+        return Err(line_error(key, module, format!("\"when\": {name} is not a true/false setting of the mod")));
+    };
+    if on != wanted {
+        return Ok(None);
+    }
+    let mut kept = value.clone();
+    if let Some(fields) = kept.as_object_mut() {
+        fields.shift_remove("when");
+    }
+    Ok(Some(kept))
+}
+
+/// The disc folder a mod's own new files go in: mods/<id>.
+pub fn mod_folder(module: &str) -> String {
+    format!("mods/{module}")
+}
+
+/// A line whose text mod.json gives in place of a file.
+fn inline_line(
+    module: &str,
+    key: &str,
+    kind: LineKind,
+    inline: String,
+    check: fn(&Line) -> Result<()>,
+) -> Result<Line> {
+    let line = Line {
+        module: module.to_string(),
+        key: key.to_string(),
+        shown: crate::manifest::MANIFEST.to_string(),
+        file: PathBuf::new(),
+        add: false,
+        kind,
+        inline: Some(inline),
+    };
+    check(&line)?;
+    Ok(line)
+}
+
+/// A text's messages as mod.json gives them ({"12": "text"}), as a text file's lines.
+fn inline_messages(key: &str, module: &str, messages: &serde_json::Map<String, Value>) -> Result<String> {
+    let mut numbered = Vec::new();
+    for (number, text) in messages {
+        let number: u16 = number
+            .parse()
+            .map_err(|_| line_error(key, module, format!("{number:?} is not a message number (0 to 65535)")))?;
+        let text = text.as_str().ok_or_else(|| line_error(key, module, format!("message {number} is not text")))?;
+        numbered.push((number, text));
+    }
+    numbered.sort();
+    Ok(numbered.iter().map(|(number, text)| format!("@{number}\n{text}\n")).collect())
 }
 
 /// A music: line's "instruments": {program: a WAV, or a sample {"file", "keys": [low, high],
@@ -376,7 +544,8 @@ fn line(mod_dir: &Path, module: &str, key: &str, value: &Value, add: bool) -> Re
             return Err(fail(&format!("unknown option \"{option}\"")));
         }
     }
-    let mut line = Line { module: module.to_string(), key: key.to_string(), shown, file: PathBuf::new(), add, kind };
+    let mut line =
+        Line { module: module.to_string(), key: key.to_string(), shown, file: PathBuf::new(), add, kind, inline: None };
     if line.shown.is_empty() {
         return Err(line.fail("no \"file\""));
     }
@@ -388,6 +557,7 @@ fn line(mod_dir: &Path, module: &str, key: &str, value: &Value, add: bool) -> Re
     match &line.kind {
         LineKind::Data => check_data_line(&line)?,
         LineKind::Map { .. } => check_map_line(&line)?,
+        LineKind::Hd => check_hd_line(&line)?,
         _ => check_asset_line(&line)?,
     }
     Ok(line)
@@ -480,10 +650,21 @@ fn check_data_line(line: &Line) -> Result<()> {
             DATA_TABLES.map(|table| format!("data:{table}")).join(", ")
         )));
     }
-    if !(line.file.is_file() && suffix_is(&line.file, ".json")) {
+    if line.inline.is_none() && !(line.file.is_file() && suffix_is(&line.file, ".json")) {
         return Err(
             line.fail(format!("{} is not a .json file (mod asset ISO NAME {} writes one)", line.shown, line.key))
         );
+    }
+    Ok(())
+}
+
+/// An hd: line replaces a texture's picture with a PNG, for the native port only.
+fn check_hd_line(line: &Line) -> Result<()> {
+    if line.add {
+        return Err(line.fail("an hd: line goes under \"replace\": it draws over a texture the disc has"));
+    }
+    if !(line.file.is_file() && suffix_is(&line.file, ".png")) {
+        return Err(line.fail(format!("{} is not a PNG file", line.shown)));
     }
     Ok(())
 }
@@ -684,8 +865,8 @@ pub enum Change {
     Picture(usize, PathBuf),
     /// An entry of the bank, replaced or added.
     Entry(Given),
-    /// The messages of a text file, with the place its text was exported from (the id's first).
-    Text(PathBuf, Place),
+    /// The messages of a text, with the place its text was exported from (the id's first).
+    Text(Source, Place),
     /// A sequence (.sq member of a bank) built from a MIDI file, with instruments it adds to the
     /// bank.
     Sequence(PathBuf, Vec<music::Instrument>),
@@ -858,7 +1039,7 @@ fn replaced_edits(
         Kind::Text => {
             let reference = asset.places[0].0.clone();
             for (place, _) in places {
-                edits.push(edit(place, Change::Text(line.file.clone(), reference.clone())));
+                edits.push(edit(place, Change::Text(line.source(), reference.clone())));
             }
         }
         Kind::Music => {
@@ -1123,7 +1304,7 @@ pub fn english_letters(
             let fail = |error: String| {
                 Error::invalid(format!("{} (mod {}) at {}: {error}", edit.key, edit.module, edit.place.display()))
             };
-            let written = dc2tk_disc::textfile::read_text(source)?;
+            let written = source.read()?;
             let original = disc
                 .member(&reference.path, &reference.members)?
                 .ok_or_else(|| fail(format!("{} is not on the disc", reference.display())))?;
@@ -1196,13 +1377,13 @@ impl Applying<'_> {
     fn text(
         &mut self,
         place: &Place,
-        source: &Path,
+        source: &Source,
         reference: &Place,
         old: &[u8],
         shown: &str,
         fail: &Fail,
     ) -> Result<Vec<u8>> {
-        let written = dc2tk_disc::textfile::read_text(source)?;
+        let written = source.read()?;
         let original = self
             .disc
             .member(&reference.path, &reference.members)?
@@ -1473,32 +1654,35 @@ pub fn add_music(iso_path: &Path, lines: &[Line], files: &Files) -> Result<(File
     Ok((files, out))
 }
 
-/// Adds lines to the mod's replace, keeping the rest of mod.json as it is. A key it has already
-/// (ignoring case) is refused.
+/// Adds lines to the mod's mod.json, each in its section (data: lines to "data", text: lines to
+/// "text", file: lines to "files", the rest to "replace"), keeping the rest of mod.json as it is.
+/// A key a section has already (ignoring case) is refused.
 pub fn add_lines(mod_dir: &Path, new: &[(String, Value)]) -> Result<()> {
-    let path = mod_dir.join(mods::INDEX);
-    crate::manifest::create(mod_dir, None)?;
-    let mut body: serde_json::Map<String, Value> = match serde_json::from_str(&dc2tk_disc::textfile::read_text(&path)?)
-    {
-        Ok(Value::Object(body)) => body,
-        _ => return Err(Error::invalid(format!("{} is not a JSON object", path.display()))),
-    };
-    let mut listed = match body.remove(REPLACE) {
-        Some(Value::Object(listed)) => listed,
-        None => serde_json::Map::new(),
-        Some(_) => return Err(Error::invalid(format!("\"{REPLACE}\" in {} is not an object", path.display()))),
-    };
+    let module = crate::manifest::create(mod_dir, None)?.id;
+    let mut body = crate::manifest::read_body(mod_dir)?;
+    let own = format!("{}/", mod_folder(&module));
     for (key, value) in new {
-        if listed.keys().any(|known| known.to_lowercase() == key.to_lowercase()) {
+        let lower = key.to_lowercase();
+        let (section, name) = if lower.starts_with(DATA) {
+            ("data", key[DATA.len()..].to_string())
+        } else if lower.starts_with(TEXT) {
+            ("text", key[TEXT.len()..].to_string())
+        } else if lower.starts_with(FILE) {
+            let disc_path = &key[FILE.len()..];
+            (
+                "files",
+                disc_path.strip_prefix(&own).map_or_else(|| disc_path.to_string(), |rest| format!("{MOD_FILE}{rest}")),
+            )
+        } else {
+            (REPLACE, key.clone())
+        };
+        let listed = crate::manifest::section(&mut body, section)?;
+        if listed.keys().any(|known| known.to_lowercase() == name.to_lowercase()) {
             return Err(Error::invalid(format!("{} has a line for {key} already", mods::INDEX)));
         }
-        listed.insert(key.clone(), value.clone());
+        listed.insert(name, value.clone());
     }
-    body.insert(REPLACE.to_string(), Value::Object(listed));
-    files::create_dir_all(mod_dir)?;
-    let text = dc2tk_disc::textfile::json_text(&Value::Object(body));
-    dc2tk_disc::textfile::write_text(&path, &text)?;
-    Ok(())
+    crate::manifest::write_body(mod_dir, &body)
 }
 
 /// Copies assets off the disc into the mod by id (or pattern), each in its common format where
@@ -1679,7 +1863,7 @@ pub fn wav_constants(mod_dir: &Path) -> Result<IndexMap<String, i64>> {
                 Some(&known) if known != number as i64 => {
                     return Err(Error::invalid(format!(
                         "{}: {} names entry {number} {name}, which another WAV gives entry {known}",
-                        mods::name(mod_dir),
+                        mods::name(mod_dir)?,
                         paths::file_name(&path)
                     )));
                 }
@@ -1714,7 +1898,7 @@ pub fn sound_constants(
 ) -> Result<BTreeMap<String, IndexMap<String, i64>>> {
     let mut out = added.clone();
     for mod_dir in mod_dirs {
-        let module = mods::name(mod_dir);
+        let module = mods::name(mod_dir)?;
         for (name, number) in wav_constants(mod_dir)? {
             match consts.get(&name) {
                 Some(&known) if known == number => continue,
@@ -1736,6 +1920,49 @@ pub fn sound_constants(
                     mine.insert(name, number);
                 }
             }
+        }
+    }
+    Ok(out)
+}
+
+/// The files of the native port's override folder for the hd: lines: HD_FOLDER/<picture>_<w>x<h>.rgba
+/// for each texture the lines draw over, named by the picture's name and size as the engine loads
+/// it, holding "DC2HD1", the picture's width and height (little-endian u32) and its RGBA pixels.
+pub fn hd_textures(lines: &[Line], disc: &DiscSource, index: &Index) -> Result<Vec<(String, Vec<u8>)>> {
+    let mut out = Vec::new();
+    for line in lines.iter().filter(|line| line.is_hd()) {
+        let id = line.hd_id();
+        let assets: Vec<&ids::Asset> =
+            if ids::is_pattern(id) { index.matching(id) } else { index.get(id).into_iter().collect() };
+        if assets.is_empty() {
+            return Err(line.fail(format!("the disc has no {id}")));
+        }
+        let png = dc2tk_assets::png::read_png(&files::read(&line.file)?).map_err(|error| line.fail(error))?;
+        let rgba = png.rgba();
+        for asset in assets {
+            let Some((place, entry)) = asset.places.first() else { continue };
+            let data = disc
+                .member(&place.path, &place.members)?
+                .ok_or_else(|| line.fail(format!("{} is not on the disc", place.display())))?;
+            let pictures = im3::read(&data).map_err(|error| line.fail(error))?;
+            let picture = pictures
+                .iter()
+                .find(|picture| picture.index == *entry)
+                .or(pictures.first())
+                .ok_or_else(|| line.fail(format!("{} holds no picture", place.display())))?;
+            let scale = png.width / picture.width.max(1);
+            if scale == 0 || png.width != scale * picture.width || png.height != scale * picture.height {
+                return Err(line.fail(format!(
+                    "{} is {}x{}, which is not a whole multiple of {}'s {}x{}",
+                    line.shown, png.width, png.height, asset.id, picture.width, picture.height
+                )));
+            }
+            let mut bytes = b"DC2HD1".to_vec();
+            bytes.extend((png.width as u32).to_le_bytes());
+            bytes.extend((png.height as u32).to_le_bytes());
+            bytes.extend(&rgba);
+            let name = format!("{HD_FOLDER}/{}_{}x{}.rgba", picture.name.to_lowercase(), picture.width, picture.height);
+            out.push((name, bytes));
         }
     }
     Ok(out)

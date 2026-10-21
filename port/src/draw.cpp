@@ -3,6 +3,7 @@
 #include "mg_texture.hpp"
 #include "mglib.hpp"
 #include "port_graphics.h"
+#include "port_overrides.h"
 #include "sce/libgraph.h"
 #include <cmath>
 #include <cstdio>
@@ -32,6 +33,7 @@ struct CachedTexture {
     u_int checked;
     u_int used;
     char name[32];
+    int hd;
 };
 
 struct TargetCopy {
@@ -212,6 +214,31 @@ static void decode(const mgCTexture *texture, std::vector<u_int> &pixels) {
     }
 }
 
+static int hd_picture(const char *name, int width, int height, std::vector<u_int> &pixels) {
+    char lower[32];
+    size_t length = 0;
+    for (; name[length] && length + 1 < sizeof lower; ++length)
+        lower[length] = (char)((name[length] >= 'A' && name[length] <= 'Z') ? name[length] + 32 : name[length]);
+    lower[length] = 0;
+    char path[1400];
+    snprintf(path, sizeof path, "%s/dc2tk-hd/%s_%dx%d.rgba", port_overrides_folder(), lower, width, height);
+    FILE *file = fopen(path, "rb");
+    if (!file) return 0;
+    unsigned char header[14];
+    int scale = 0;
+    if (fread(header, 1, sizeof header, file) == sizeof header && !memcmp(header, "DC2HD1", 6)) {
+        u_int hd_width = header[6] | header[7] << 8 | header[8] << 16 | (u_int)header[9] << 24;
+        u_int hd_height = header[10] | header[11] << 8 | header[12] << 16 | (u_int)header[13] << 24;
+        int found = width > 0 ? (int)(hd_width / (u_int)width) : 0;
+        if (found > 0 && hd_width == (u_int)(found * width) && hd_height == (u_int)(found * height)) {
+            pixels.resize((size_t)hd_width * hd_height);
+            if (fread(pixels.data(), 4, pixels.size(), file) == pixels.size()) scale = found;
+        }
+    }
+    fclose(file);
+    return scale;
+}
+
 static CachedTexture *cached(const mgCTexture *texture) {
     size_t start = ((size_t)texture->image[0] >> 4) % CACHE_LIMIT;
     CachedTexture *empty = NULL;
@@ -237,7 +264,12 @@ static CachedTexture *cached(const mgCTexture *texture) {
     empty->checksum = 0;
     empty->checked = 0;
     snprintf(empty->name, sizeof empty->name, "%s", texture->name);
-    empty->render = render_texture(texture->width, texture->height);
+    std::vector<u_int> hd;
+    int scale = hd_picture(texture->name, texture->width, texture->height, hd);
+    empty->hd = scale > 0;
+    empty->render = scale > 0 ? render_texture_at_scale(texture->width, texture->height, scale)
+                              : render_texture(texture->width, texture->height);
+    if (scale > 0) render_upload_full(empty->render, (const uint32_t *)hd.data());
     port_stats.cached_textures++;
     return empty;
 }
@@ -324,6 +356,7 @@ int gs_texture_for(const mgCTexture *texture) {
     CachedTexture *entry = cached(texture);
     if (!entry) return 0;
     entry->used = frame_number;
+    if (entry->hd) return entry->render;
     if (entry->checked == frame_number) return entry->render;
     entry->checked = frame_number;
     u_long hash = texture_checksum(texture);

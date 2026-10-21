@@ -12,10 +12,10 @@ and Fournet (p01_22a). Each is exported from your own disc into the mod as glTF:
 
     dc2tk mod asset pal.iso spinning-cult chara/p01_19a.chr --as gltf
 
-which writes mods/spinning-cult/disc/chara/p01_19a.chr.gltf/ (p01_19a.gltf, .bin, textures/), a game
-file in the mod's disc/ folder, so mod.json needs no line for it (mod asset writes `"replace": {}`
-when the mod has no mod.json yet and keeps the lines of one it has, refusing to run while one of
-them names a file the mod's folder does not have yet). This script opens each export in
+which writes mods/spinning-cult/raw/chara/p01_19a.chr.gltf/ (p01_19a.gltf, .bin, textures/) and
+adds its line to mod.json's "files" (`"chara/p01_19a.chr": "raw/chara/p01_19a.chr.gltf"`), keeping
+the lines the mod has, and refusing to run while one of them names a file the mod's folder does not
+have yet. This script opens each export in
 Blender, finds the bones by looking at the skeleton (their names differ from pack to pack), adds
 the two actions and exports glTF Separate over the export, so `dc2tk build` adds KEYs `spin` and
 `stare` after the pack's last and changes nothing else in the pack.
@@ -87,10 +87,10 @@ def arguments():
 
 
 def export_packs(dc2tk, iso, mods):
-    """Each pack as glTF into the mod's disc/ folder, fresh from the disc."""
+    """Each pack as glTF into the mod's raw/ folder, fresh from the disc."""
     paths = ["chara/%s.chr" % name for name, _ in PACKS]
     subprocess.run([dc2tk, "mod", "asset", iso, MOD] + paths + ["--as", "gltf", "--mods", mods], check=True)
-    return {name: os.path.join(mods, MOD, "disc", "chara", name + ".chr.gltf", name + ".gltf") for name, _ in PACKS}
+    return {name: os.path.join(mods, MOD, "raw", "chara", name + ".chr.gltf", name + ".gltf") for name, _ in PACKS}
 
 
 # --- the skeleton ------------------------------------------------------------------------------

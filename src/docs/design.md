@@ -69,7 +69,7 @@ stores it swizzled; a pack or bank is its bytes.
   `info.cfg`, so they are models.
 - 6 texture files hold only render targets (no pixels) and give no texture.
 - These are listed in the manifest's `unconverted`, with the reason, so
-  `file:` replacements can still reach them.
+  `files` lines can still reach them.
 - A member a pack holds twice under one name is reached by the first, as a
   build finds members by name; the second (one texture file on the PAL
   disc) is left out. A path `DATA.HD4` lists twice is read once, the first.
@@ -233,13 +233,15 @@ in `dc2tk-assets`' `ids`).
     "sound:SE_EV_000_130_GRIFFON_BREAK_WINDOW": "sounds/boom.wav",
     "sound:SE_EV_000_130_MONICA_SWING_SWORD": { "file": "sounds/chime.wav", "volume": 90 },
     "bank:SP_003": "sounds/SP_003",
-    "texture:a01ia_01@a01ic": { "file": "art/floor.png", "only": ["map/a/a01"] },
-    "file:snd2/event/EV_000_130.snd": "raw/bank.snd"
+    "texture:a01ia_01@a01ic": { "file": "art/floor.png", "only": ["map/a/a01"] }
   },
   "add": {
-    "sound:SE_MOD_BEEP": { "file": "sounds/beep.wav", "bank": "SP_004" },
-    "file:mods/calculator/ui.img": { "file": "ui", "like": "texture:logo_d00" },
-    "file:mods/calculator/calc.chr": { "file": "model/calc.gltf", "like": "model:uki" }
+    "sound:SE_MOD_BEEP": { "file": "sounds/beep.wav", "bank": "SP_004" }
+  },
+  "files": {
+    "snd2/event/EV_000_130.snd": "raw/bank.snd",
+    "mod:ui.img": { "file": "ui", "like": "texture:logo_d00" },
+    "mod:calc.chr": { "file": "model/calc.gltf", "like": "model:uki" }
   }
 }
 ```
@@ -251,7 +253,7 @@ in `dc2tk-assets`' `ids`).
   (replace), `volume` (sounds, 0 to 127; set even when the WAV is the
   bank's own) and `bank` (add). An unknown option, a file the mod does not
   have or of the wrong kind, is refused when `mod.json` is read. A
-  `file:` line also takes `like` (below).
+  `files` line also takes `like` (below).
 - **What each kind takes.** A texture: a PNG, built into the picture at
   each place with the disc's picture as the template (palette, mip levels),
   as a texture folder's PNG is. A model: a `.gltf` file with its buffer
@@ -259,7 +261,7 @@ in `dc2tk-assets`' `ids`).
   `models/.../<id>.gltf`), whose images are not read: the model's
   textures change through their own ids. Or a folder as `mod asset` writes
   it, the export's `c02b.gltf`, buffer and `textures/` (PNGs edited there
-  go into the pack, as the `--as gltf` folders under `disc/` do); a folder holding
+  go into the pack, as the `--as gltf` folders under `raw/` do); a folder holding
   one other `.gltf` is that file. A sound: a WAV for that entry. A bank: a
   folder of WAVs named by entry number (`004.wav`, or `004_NAME.wav` as the
   tree names them), for entries the bank has; new entries are `add`'s. A
@@ -277,31 +279,31 @@ in `dc2tk-assets`' `ids`).
   from it with its own pack as the template). An id given exactly wins
   over a pattern; two patterns giving one id are refused, as is a pattern
   matching nothing.
-- **`file:`** replaces a disc file or pack member by path, as `extract`
+- **`files`** replaces a disc file or pack member by path, as `extract`
   lays the disc out (`a.pac.d/b.chr.d/c.img`): the escape hatch for
   anything without an id (the 340 game files of the manifest's
-  `unconverted`, scripts' packs, anything else). It is the `disc/`
-  layout by line: the same code builds both, a file is the game file
+  `unconverted`, scripts' packs, anything else). A file is the game file
   itself, a folder converts by the game file's suffix (PNGs for a `.img`,
   WAVs for a `.snd`, a glTF folder for a `.chr`) whatever it is named, and
-  a path the disc lacks is a new file or member. One path in both `disc/`
-  and a `file:` line is refused.
+  a line with `like` (or a `mod:NAME` path, the mod's own
+  `mods/<id>/NAME`) adds a new file.
 - **`add`** appends a sound entry to every place of a bank, numbered on
   from the bank's last entry (in build order, when several mods add to one
   bank). Its name is a constant in the mod's patches, as `NEW_FLAG` names
   are (`play_se(SE_MOD_BEEP)`); `build` prints the number. `mod check`
   without a disc compiles with 0 for it. Other new assets (a model or
   picture under a new name) need a script or model to ask for that name,
-  so they are `file:` lines, by the path the script loads; the design's
+  so they are `files` lines, by the path the script loads (`mod:` ones as
+  `MOD_DIR "NAME"`); the design's
   "mod's generated header" is not needed while patches see the names.
   A `music:BG_NNN` line under `add` (`{"file": "x.mid", "like": "BG_193"}`)
   makes a new music file `snd2/bgm/BG_NNN.snd`, the like bank playing the
   MIDI file, for `load_bgm(NNN)`; the number is the mod's choice, one the
   disc lacks ([music](../../docs/guide/music.md#add-a-new-music-file)).
-- **New files from common formats.** A `file:` line with `like` makes its
+- **New files from common formats.** A `files` line with `like` makes its
   game file whole, from PNGs or a glTF, with the disc's file `like` names
   as the template, so a mod can have a picture file or model pack of its
-  own (under `add`, for a path the disc lacks; on a path the disc has it
+  own (at a `mod:` path or one the disc lacks; on a path the disc has it
   replaces the file whole). `like` is an asset id (`texture:logo_d00`, the
   texture file holding that picture; `model:uki`, that model's pack, at
   its first place) or a disc path (`dungeon/sphida/sphida_bar.img`,
@@ -358,16 +360,17 @@ in `dc2tk-assets`' `ids`).
   (above). `"map:s17": "maps/s17/s17.gltf"` builds an edited map scene
   back into the map's files, and under `add` makes a new map from a map's
   scene (`"like": "m05"`, with `"script"` for an event script of its own;
-  [editing maps](../../docs/guide/maps.md)). `"data:items":
-  "data/items.json"` (and `data:shops`, `data:monsters` and the other
-  tables `mod asset` lists) edits a table of game data as JSON, merged with
-  other mods' tables ([data](../../docs/guide/data.md)).
+  [editing maps](../../docs/guide/maps.md)). `"data": {"items":
+  "data/items.json"}` (and `shops`, `monsters` and the other tables `mod
+  asset` lists) edits a table of game data as JSON, merged with other
+  mods' tables ([data](../../docs/guide/data.md)).
 - **Scripts** stay as they were: `.c` patches with `#pragma target`,
-  anywhere in the folder; `additions` and `start_at` keep their meaning,
-  and the `files`/`includes` index of whole-file mods is kept as is.
-  `title` and `version` are shown by `mod list`; `authors`, `description`
-  and the rest are for people. (The design's `name` and `game` were
-  dropped: the folder names the mod, and the build's disc decides the ids.)
+  anywhere in the folder (or where `"scripts": {"sources"}` says);
+  `"scripts": {"additions"}` adds to scripts the mod does not copy, and
+  `"scripts": {"whole"}` lists whole-file copies. The mod's `id` names it,
+  never its folder; `name` and `version` are shown by `mod list`, and
+  `authors`, `description` and the rest are for people
+  ([mod format 2](mod-format.md)).
 
 ### How a build finds the places
 
@@ -384,13 +387,13 @@ sets (`--defs`) name the sound entries, as for `dc2tk assets`. (The index
 counts as models the packs whose cfg names a model; the tree, the ones its
 export converts: on the PAL disc the same.)
 
-Then, on top of the scripts and the `disc/` and `file:` files, it builds
+Then, on top of the scripts and the `files` lines' files, it builds
 models, then banks (every entry a mod changes at one place in one go),
 then pictures (every picture of one texture file in one go), outer places
 first, so a texture goes into a pack another line's model rebuilt; then
 texts and music. New music files, the `map:` lines and the data tables
 follow, each step over the files the steps before wrote. Each
-changed place is read back from the new image, as `disc/` files are, and
+changed place is read back from the new image, as `files` lines' files are, and
 printed with its ids:
 
 ```
@@ -409,7 +412,7 @@ Refused at build (and by `mod check --disc`), naming the mods:
 - one picture, sound entry or model place changed by two mods through
   different ids (a bank's folder in one and a sound's id in another);
 - a change inside, or around, a game file another mod replaces whole by
-  `file:` or `disc/`.
+  a `files` line.
 
 A model in one mod and pictures of its pack in another go together: the
 model is built first and the pictures go into the built pack. (The design
@@ -428,7 +431,8 @@ ISO here, and `--disc`, is the disc image or an extracted disc
   each in its common format (`textures/<name>.png`, `models/<name>/` as
   the export writes it, `sounds/<bank>/<NNN_NAME>.wav`, `sounds/<bank>/`)
   and adds its `replace` line; an id the mod has a line for is left alone.
-  Paths (`chara/c02a.chr.d/c02a.img --as png`) still copy into `disc/`.
+  Paths (`chara/c02a.chr.d/c02a.img --as png`) copy into `raw/`, each
+  with its `files` line.
   It reads the disc, not `extracted/assets/`: the files are the same as the tree's,
   and a mod should not need a tree.
 - `mod check SOURCE NAME... --disc ISO` resolves every line, shows what

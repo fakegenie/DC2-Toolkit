@@ -13,7 +13,7 @@ use dc2tk_disc::rebuild;
 use dc2tk_script::discfiles::{self, Files};
 use dc2tk_script::mapedit::{self, MapChange};
 use dc2tk_script::{
-    build, datatables, disc, index, mapscript, maptable, memory, mods, patches, replace, startat, tree,
+    build, datatables, disc, index, mapscript, maptable, memory, mods, numbers, patches, replace, sets, startat, tree,
 };
 
 use super::{
@@ -41,11 +41,15 @@ pub struct BuildArgs {
     /// m05.
     #[arg(long, value_name = "MAP[/SCRIPT][:PROGRAM]")]
     start_at: Option<String>,
-    /// Layer this mod over the tree, by id (or folder); repeat for several, which may not change the
-    /// same file. The mods each depends on are layered in too, and "dependencies" and "after" set
-    /// the order.
-    #[arg(long = "mod", value_name = "NAME")]
+    /// Layer the mod with this id over the tree; repeat for several, which may not change the same
+    /// file. The mods each depends on are layered in too, and "dependencies" and "after" set the
+    /// order.
+    #[arg(long = "mod", value_name = "ID", conflicts_with = "set")]
     mod_names: Vec<String>,
+    /// Build the mods a mod set file chooses, with its settings; their numbers are kept in the
+    /// set's lock file beside it (the mods folder's mods.lock for --mod).
+    #[arg(long, value_name = "FILE")]
+    set: Option<PathBuf>,
     #[command(flatten)]
     mods: ModsDir,
     /// Use what the chosen mods' "dev" section asks for: a new game starts at its start_at.
@@ -106,7 +110,7 @@ pub fn run_build(args: &BuildArgs) -> Result<ExitCode> {
         crate::native::validate_output(output, &args.disc, args.output.as_deref(), &args.source)?;
     }
     let mut tools = args.common.tools()?;
-    let mod_dirs = mod_folders(args.mods.path(), &args.mod_names)?;
+    let mod_dirs = chosen_mods(args)?;
     if args.native.is_some() {
         require_target(&mod_dirs, Target::Native)?;
     }
@@ -158,9 +162,9 @@ pub fn run_build(args: &BuildArgs) -> Result<ExitCode> {
             &args.disc,
             native_tables.as_deref(),
             &expected,
-            output,
-            args.dry_run,
+            (!args.dry_run).then_some(output.as_path()),
             args.movies,
+            &mod_dirs,
         )?;
     }
     let over_budget = memory_check(args, &made.data.files)?;
@@ -171,6 +175,7 @@ pub fn run_build(args: &BuildArgs) -> Result<ExitCode> {
         made.replaced.len() + made.changed.len() + made.new_music.len() + made.map_changes.len() + data_files,
         made.data.files.len()
     );
+    sets::record_versions(&lock_file(args), &mod_dirs)?;
     let Some(output) = &args.output else {
         println!("{counts}; no image written");
         return Ok(if over_budget { ExitCode::from(1) } else { ExitCode::SUCCESS });
@@ -206,13 +211,50 @@ pub fn run_build(args: &BuildArgs) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// Every game file a build of the tree with these mods writes, by its path on the disc, and whether
-/// the build also changes the executable, which no file can carry: what `mod watch` puts into the
-/// native port's override folder. Nothing is written.
+/// Builds the native port with a set's engine and port code into output; no game files are
+/// written (play puts those in the override folder).
+pub fn build_native_binary(
+    source: &Path,
+    disc: &Path,
+    set: &Path,
+    mods: &ModsDir,
+    common: &Common,
+    output: &Path,
+) -> Result<()> {
+    let args = BuildArgs {
+        source: source.to_path_buf(),
+        disc: disc.to_path_buf(),
+        output: None,
+        dry_run: false,
+        start_at: None,
+        mod_names: Vec::new(),
+        set: Some(set.to_path_buf()),
+        mods: mods.clone(),
+        dev: false,
+        play: false,
+        pcsx2: None,
+        full: false,
+        executable: None,
+        native: Some(output.to_path_buf()),
+        movies: true,
+        common: common.clone(),
+    };
+    run_build(&args).map(|_| ())
+}
+
+/// The file in the native port's override folder that holds the chosen mods' port settings, one
+/// name=value a line, read by port_setting.
+pub const PORT_SETTINGS: &str = "dc2tk-port.cfg";
+
+/// Every game file a build of the tree with these mods writes, by its path on the disc (with the
+/// mods' port settings in PORT_SETTINGS), and whether the native port needs a binary of its own
+/// for them: they change the executable, which no file can carry, or bring port code. What `mod
+/// watch` and `play --native` put into the native port's override folder. Nothing is written.
 pub fn built_game_files(
     source: &Path,
     disc: &Path,
     mod_names: &[String],
+    set: Option<&Path>,
     mods: &ModsDir,
     common: &Common,
 ) -> Result<(Files, bool)> {
@@ -223,6 +265,7 @@ pub fn built_game_files(
         dry_run: true,
         start_at: None,
         mod_names: mod_names.to_vec(),
+        set: set.map(Path::to_path_buf),
         mods: mods.clone(),
         dev: false,
         play: false,
@@ -234,7 +277,7 @@ pub fn built_game_files(
         common: common.clone(),
     };
     let mut tools = args.common.tools()?;
-    let mod_dirs = mod_folders(args.mods.path(), &args.mod_names)?;
+    let mod_dirs = chosen_mods(&args)?;
     require_target(&mod_dirs, Target::Native)?;
     let prepared = crate::engine::prepare_mods(&args.disc, &mod_dirs)?;
     if let Some(prepared) = &prepared {
@@ -245,13 +288,28 @@ pub fn built_game_files(
     let found = compile(&args, &tools, &mut planned)?;
     let made = game_files(&args, &tools, &planned, &found)?;
     memory_check(&args, &made.data.files)?;
-    Ok((made.data.files, prepared.is_some() || made.data.executable.is_some()))
+    let mut files = made.data.files;
+    let settings = dc2tk_script::manifest::port_settings_text(&mod_dirs)?;
+    if !settings.is_empty() {
+        files.insert(PORT_SETTINGS.to_string(), settings.into_bytes());
+    }
+    let lines = replace::all_lines(&mod_dirs)?;
+    if lines.iter().any(replace::Line::is_hd) {
+        let index = crate::asset_tree::index_of(&args.disc, &args.common.def_sets())?;
+        let disc = dc2tk_disc::DiscSource::open(&args.disc)?;
+        files.extend(replace::hd_textures(&lines, &disc, &index)?);
+    }
+    let port_code =
+        mod_dirs.iter().map(|dir| dc2tk_script::manifest::port_sources(dir)).collect::<Result<Vec<_>, _>>()?;
+    let binary =
+        prepared.is_some() || made.data.executable.is_some() || port_code.iter().any(|found| !found.is_empty());
+    Ok((files, binary))
 }
 
 /// The chosen mods, what they change and the numbers they are given; mods that change one thing
 /// two ways are an error.
 fn plan(args: &BuildArgs, tools: &Tools) -> Result<Planned> {
-    let mod_dirs = mod_folders(args.mods.path(), &args.mod_names)?;
+    let mod_dirs = chosen_mods(args)?;
     let (overrides, clashes) = mods::overlay(&mod_dirs, &args.source, &default_constants(&args.source)?)?;
     if !clashes.is_empty() {
         bail!(mods::clash_text(&clashes));
@@ -266,7 +324,7 @@ fn plan(args: &BuildArgs, tools: &Tools) -> Result<Planned> {
         bail!("the chosen mods cannot be built together:\n  {}", id_clashes.join("\n  "));
     }
     let consts = index::constants(index::tree_headers(&args.source, &tools.defs, &tools.sdk_dir)?.values());
-    let mut plan = mods::patch_plan(&mod_dirs, &args.source, &consts, true)?;
+    let mut plan = mods::patch_plan(&mod_dirs, &args.source, &consts, Some(&lock_file(args)))?;
     plan.with_constants(&replace::sound_constants(&mod_dirs, &consts, &resolved.added)?);
     let language = disc::language_code(&tools.defs);
     // the chosen mods' new maps, numbered after the disc's; every mod's scripts see MAP_<NAME>
@@ -274,7 +332,7 @@ fn plan(args: &BuildArgs, tools: &Tools) -> Result<Planned> {
     let new_maps = maptable::new_maps(&lines)?;
     if !new_maps.is_empty() {
         let numbers = maptable::disc_numbers_with(&args.disc, language, &new_maps)?;
-        plan.with_constants(&patches::for_every_mod(&mapscript::map_constants(&new_maps, &numbers), &mod_dirs));
+        plan.with_constants(&patches::for_every_mod(&mapscript::map_constants(&new_maps, &numbers), &mod_dirs)?);
     }
     Ok(Planned { mod_dirs, overrides, disc_files, resolved, templates, consts, plan, lines, new_maps, language })
 }
@@ -283,7 +341,7 @@ fn plan(args: &BuildArgs, tools: &Tools) -> Result<Planned> {
 /// it was given, and its files the decompiler has written differently since.
 fn print_mods(args: &BuildArgs, planned: &Planned) -> Result<()> {
     for mod_dir in &planned.mod_dirs {
-        let name = mods::name(mod_dir);
+        let name = mods::name(mod_dir)?;
         let mine: Vec<&patches::Patch> = planned.plan.patches.iter().filter(|patch| patch.module == name).collect();
         println!(
             "mod {}: {} patches, {} files, {} game files",
@@ -311,6 +369,29 @@ fn print_mods(args: &BuildArgs, planned: &Planned) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The mods the build chooses, by --set or --mod, with the mods they depend on, in the order they
+/// are applied; a set's version ranges are checked.
+fn chosen_mods(args: &BuildArgs) -> Result<Vec<PathBuf>> {
+    let Some(set_file) = &args.set else {
+        dc2tk_script::manifest::choose_settings(Default::default());
+        return mod_folders(args.mods.path(), &args.mod_names);
+    };
+    let set = sets::read(set_file)?;
+    sets::choose_settings(&set);
+    let mod_dirs = mod_folders(args.mods.path(), &set.ids())?;
+    sets::check_versions(&set, &mod_dirs)?;
+    Ok(mod_dirs)
+}
+
+/// Where the build keeps the numbers it gives and the versions it built: the set's lock file, or
+/// the mods folder's.
+fn lock_file(args: &BuildArgs) -> PathBuf {
+    match &args.set {
+        Some(set_file) => sets::lock_path(set_file),
+        None => args.mods.path().join(numbers::LOCK),
+    }
 }
 
 /// The scene a test image's new game starts at (--start-at, else a chosen mod's start_at), with

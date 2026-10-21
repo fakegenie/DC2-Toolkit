@@ -387,7 +387,7 @@ fn collect_mod_files(mod_dirs: &[PathBuf], engine: &Path) -> Result<Vec<EngineFi
         if !directory.exists() {
             continue;
         }
-        let module = dc2tk_script::mods::name(folder);
+        let module = dc2tk_script::mods::name(folder)?;
         let mut entries = source_files(&directory, Path::new(""))?;
         entries.sort();
         for relative in entries {
@@ -617,6 +617,7 @@ mod tests {
         let module = root.join("example");
         fs::create_dir_all(engine.join("ps2/src")).unwrap();
         fs::create_dir_all(module.join("engine")).unwrap();
+        dc2tk_script::manifest::create(&module, Some("test.example")).unwrap();
         fs::write(engine.join("ps2/src/test.cpp"), "").unwrap();
         fs::write(module.join("engine/test.cpp"), "PORT_OVERRIDE int Test() { return 1; }").unwrap();
         let mut files = collect_mod_files(std::slice::from_ref(&module), &engine).unwrap();

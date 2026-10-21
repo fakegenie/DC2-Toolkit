@@ -130,11 +130,14 @@ description.
   `pathnames` (readable names and the `UNNAMED` record), `tree` (the record
   of what the decompiler wrote, which tells edits from its output).
 - Mods and building: `mods` (mod folders, whole files, choosing mods by
-  id), `manifest` (`mod.json` and `mod.lock` as typed records, `mod
-  upgrade`), `semver` (versions and ranges), `patches` (`#pragma target`), `additions`, `numbers` (`NEW_FLAG` and its
-  kin, kept in the lock file), `slim`, `capture`
-  (`diff`, `mod make`), `editor`, `replace` (assets by id), `discfiles`
-  (`disc/` and `file:`), `datatables` and `itemtext`, `mapedit`,
+  id), `manifest` (`mod.json` and `mod.lock` as typed records, the mods
+  folder's index by id, settings), `semver` (versions and ranges),
+  `package` (`.dc2mod` zips: `mod pack`, `mod install`, unpacking),
+  `sets` (mod sets and their lock files), `patches` (`#pragma target`),
+  `additions`, `numbers` (`NEW_FLAG` and its kin, kept in the lock file),
+  `slim`, `capture` (`diff`, `mod make`), `editor`, `replace` (assets by
+  id, and every line of `mod.json`), `discfiles` (the `files` lines' game
+  files, and `raw/`), `datatables` and `itemtext`, `mapedit`,
   `mapscript`, `maptable`, `startat`, `build` (which scripts can have
   changed), `memory/` (the memory budgets).
 - `paths`: paths as the tools write them, and walking folders.
@@ -155,8 +158,10 @@ options commands share (`Common`: definition sets, `--no-defs`, native
 tables; `ModsDir`; `Tools`, what compiling needs, loaded once); `files.rs`
 where the data folders are. Then one module per group of commands:
 `setup.rs` (`setup`, `natives`), `modding/` (`build.rs`, `check.rs` for
-`mod check`, `pcsx2.rs` for `play` and `--play`, the other mod commands in
-`mod.rs`), `verify.rs`, `defs.rs`, `xref.rs` (`xref`, `maps`, `map`),
+`mod check`, `pcsx2.rs` for `play` and `--play`, `play.rs` for `play
+--native`, `watch.rs` for `mod watch` and the override folder, the other
+mod commands in `mod.rs`), `native.rs` (`build --native`, with the mods'
+port sources), `verify.rs`, `defs.rs`, `xref.rs` (`xref`, `maps`, `map`),
 `asset_tree.rs` (`assets` and the hidden `assets-check`), `map_cmd.rs`
 (`map-export`). The binary's errors are `anyhow`'s, printed whole with
 their causes; any error exits with 1.
@@ -181,18 +186,18 @@ their causes; any error exits with 1.
    `map-export NAME`), and `datatables::export_all` every data table as
    JSON into `extracted/data/` (`setup`; `mod asset ... data:items` copies
    one into a mod).
-4. **Mods** are folders over the tree: patches, whole files, and
-   `mod.json`'s lines by asset id, path, map and table.
+4. **Mods** are folders (or `.dc2mod` zips) over the tree: patches, whole
+   files, and `mod.json`'s lines by asset id, path, map and table.
 5. **Build** (`dc2tk/src/modding/build.rs`, each step a library call):
    - plan: the mods' files overlaid on the tree (`mods::overlay`), their
-     `disc/` files (`discfiles::collect`), their ids resolved against the
+     `files` lines' game files (`discfiles::collect`), their ids resolved against the
      disc's index (`replace`, `ids::Index::from_disc`), clashes refused, the
      patches planned and their numbers given (`patches`, `numbers`);
      `--start-at`'s patch of the new-game script (`startat`);
    - compile: every script that can differ from the disc compiled and
      compared with it (`build::changes`);
-   - game files, each step over the files the steps before wrote: `disc/`
-     and `file:` files (`discfiles::replaced`); the id lines
+   - game files, each step over the files the steps before wrote: the
+     `files` lines' files (`discfiles::replaced`); the id lines
      (`replace::apply_with`: models, then banks, then pictures, then texts
      and music); new music files (`replace::add_music`); maps
      (`mapedit::apply_maps`, new maps' scripts by `mapscript`, their rows by

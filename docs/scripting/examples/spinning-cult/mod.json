@@ -10,8 +10,6 @@
     "door_fish": "ENTER_FISH_ROOM"
    }
   },
-  "data:items": "data/items.json",
-  "data:inventions": "data/inventions.json",
   "texture:itemicon": "textures/itemicon.png"
  },
  "add": {
@@ -50,19 +48,25 @@
      "root": 60
     }
    }
-  },
-  "file:mods/gill/gill.chr": {
+  }
+ },
+ "files": {
+  "mod:gill.chr": {
    "file": "model/gill.gltf",
    "like": "model:p01_01a"
   },
-  "file:mods/gyros/gyros.chr": {
+  "mod:gyros.chr": {
    "file": "model/gyros.gltf",
    "like": "model:p01_01a"
   },
-  "file:item/gyros.chr": {
+  "item/gyros.chr": {
    "file": "model/gyros_item.gltf",
    "like": "model:takaraky"
   }
+ },
+ "data": {
+  "items": "data/items.json",
+  "inventions": "data/inventions.json"
  },
  "dev": {
   "start_at": "m01"

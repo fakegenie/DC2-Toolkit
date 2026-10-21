@@ -1,4 +1,4 @@
-#include "port_debug.h"
+#include "port_mod.h"
 #include "render.h"
 #include <stdlib.h>
 #include <string.h>
@@ -45,7 +45,7 @@ void port_input_report(const struct port_input_state *state, unsigned char data[
 
 void port_input_read(unsigned char data[32]) {
     struct port_input_state state = input;
-    debug_input(&state);
+    port_mods_input(&state);
     port_input_report(&state, data);
 }
 

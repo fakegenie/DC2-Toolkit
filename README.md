@@ -31,7 +31,7 @@ The goal of this project is to support converting from and to the original game 
 - Run `dc2tk setup dc2.iso`. This will extract all the assets on the disc to `extracted/`
 - Optionally install the Blender plugin from the releases page.
 - Make a mod in `mods/`, or edit the scripts and assets in `extracted/` and package them with `dc2tk mod make dc2.iso my-mod`. See the documentation for how-tos.
-- Run `dc2tk build extracted/scripts dc2.iso -o modded.iso --mod my-mod` to build a new iso with your changes.
+- Run `dc2tk build extracted/scripts dc2.iso -o modded.iso --mod local.my-mod` (the id `mod make` gave it) to build a new iso with your changes.
 
 ## Notes
 

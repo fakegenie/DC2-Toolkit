@@ -322,6 +322,9 @@ fn compile(source: &Path, name: &str, copy: &Path, out: &Path, cflags: &[String]
     if family == "upstream" {
         command.arg("-I").arg(root.join("engine/port/include"));
     }
+    if name.starts_with("mod_") {
+        command.arg("-I").arg(source.parent().context("source has no folder")?);
+    }
     command.arg(source).arg("-o").arg(&object);
     let mut changes = Vec::new();
     match if family == "engine" { name } else { "" } {
@@ -347,7 +350,7 @@ fn compile(source: &Path, name: &str, copy: &Path, out: &Path, cflags: &[String]
     if !changes.is_empty() {
         run(Command::new(objcopy()).args(&changes).arg(&object))?;
     }
-    if !c {
+    if !c && !name.starts_with("mod_") {
         let listing = run(Command::new(nm()).arg("-u").arg(&object))?;
         let used = String::from_utf8(listing.stdout)?;
         for (old, new) in operators() {
@@ -504,9 +507,9 @@ pub fn build(
     disc: &Path,
     edited: Option<&[u8]>,
     executable: &[u8],
-    output: &Path,
-    checking: bool,
+    output: Option<&Path>,
     movies: bool,
+    mod_dirs: &[PathBuf],
 ) -> Result<()> {
     if !DARWIN && std::env::consts::OS != "linux" {
         bail!("--native requires Linux or macOS");
@@ -587,6 +590,13 @@ pub fn build(
         let name = format!("port_{}", path.file_stem().context("source has no name")?.to_string_lossy());
         jobs.push((path, name));
     }
+    for mod_dir in mod_dirs {
+        let prefix = dc2tk_script::manifest::object_prefix(&dc2tk_script::mods::name(mod_dir)?);
+        for path in dc2tk_script::manifest::port_sources(mod_dir)? {
+            let name = format!("{prefix}{}", path.file_stem().context("source has no name")?.to_string_lossy());
+            jobs.push((path, name));
+        }
+    }
     let results: Vec<Result<PathBuf>> =
         jobs.par_iter().map(|(path, name)| compile(path, name, &copy, &out, &cflags)).collect();
     let mut objects = Vec::new();
@@ -594,7 +604,7 @@ pub fn build(
         objects.push(result?);
     }
 
-    let output = std::path::absolute(if checking { out.join("checked-native") } else { output.to_path_buf() })?;
+    let output = std::path::absolute(output.map_or(out.join("checked-native"), Path::to_path_buf))?;
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent)?;
     }

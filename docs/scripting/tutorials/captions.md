@@ -120,6 +120,6 @@ Create `mods/captions/mod.json` with `"dev": {"start_at": "s51:story_50"}`:
 Validate and build:
 
 ```sh
-dc2tk mod check extracted/scripts captions
-dc2tk build extracted/scripts dc2.iso -o test.iso --mod captions --dev --play
+dc2tk mod check extracted/scripts you.captions
+dc2tk build extracted/scripts dc2.iso -o test.iso --mod you.captions --dev --play
 ```

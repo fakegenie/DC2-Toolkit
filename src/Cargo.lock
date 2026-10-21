@@ -244,8 +244,10 @@ dependencies = [
 name = "dc2tk-script"
 version = "0.1.0"
 dependencies = [
+ "crc32fast",
  "dc2tk-assets",
  "dc2tk-disc",
+ "flate2",
  "indexmap",
  "rayon",
  "regex",

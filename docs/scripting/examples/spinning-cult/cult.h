@@ -3,7 +3,7 @@
 // The cult's whole state is one save counter (NEW_COUNTER: 16 bits the save keeps), read and
 // written through a union with a struct of bit-fields, so each part has a name.
 
-// Program numbers build gives the mod (kept in the mods folder's numbers.json).
+// Program numbers build gives the mod (kept in the mods folder's mods.lock).
 NEW_PROGRAM(ENTER_FISH_ROOM);     // m01: the new door's program (mod.json gives it to point door_fish)
 NEW_PROGRAM(BACK_FROM_FISH_ROOM); // m01: arriving from the Fish Room, in front of that door
 NEW_PROGRAM(LEAVE_FISH_ROOM);     // fishroom: the room's door (point door_out, by "programs")

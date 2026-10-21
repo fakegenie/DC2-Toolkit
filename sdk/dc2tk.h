@@ -23,6 +23,11 @@ typedef int any;
 #define MAIN(function) extern int dc2tk_main_##function
 #define AT(base)
 #define DIRECT
+// The folder of the mod's own new files on the disc ("mods/<id>/"), for paths such as
+// MOD_DIR "calc.chr"; build defines it for each mod's patches and map scripts.
+#ifndef MOD_DIR
+#define MOD_DIR "mods/mod.id/"
+#endif
 
 // The VM's statements and instructions.
 void dc2tk_wait(void);

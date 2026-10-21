@@ -279,8 +279,8 @@ def main():
                 kept = json.load(file)
             with open(os.path.join(HERE, name), encoding="utf-8") as file:
                 made = json.load(file)
-            for key, value in kept.get("replace", {}).items():
-                made.setdefault("replace", {}).setdefault(key, value)
+            for key, value in kept.get("files", {}).items():
+                made.setdefault("files", {}).setdefault(key, value)
             with open(target, "w", encoding="utf-8") as file:
                 json.dump(made, file, ensure_ascii=False, indent=1)
                 file.write("\n")

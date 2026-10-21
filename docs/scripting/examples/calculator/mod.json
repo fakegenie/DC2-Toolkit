@@ -4,14 +4,6 @@
  "version": "2.0.0",
  "name": "Calculator",
  "add": {
-  "file:mods/calculator/calc_ui.img": {
-   "file": "ui",
-   "like": "texture:logo_d00"
-  },
-  "file:mods/calculator/calc.chr": {
-   "file": "model/calc.gltf",
-   "like": "model:uki"
-  },
   "sound:SE_MOD_CALC_KEY": {
    "file": "sounds/key.wav",
    "bank": "SP_042"
@@ -35,6 +27,16 @@
   "sound:SE_MOD_CALC_CLOSE": {
    "file": "sounds/close.wav",
    "bank": "SP_042"
+  }
+ },
+ "files": {
+  "mod:calc_ui.img": {
+   "file": "ui",
+   "like": "texture:logo_d00"
+  },
+  "mod:calc.chr": {
+   "file": "model/calc.gltf",
+   "like": "model:uki"
   }
  },
  "dev": {

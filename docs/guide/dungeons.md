@@ -8,7 +8,7 @@ Random dungeon floors in *Dark Chronicle* are built at runtime from room layouts
    ```sh
    dc2tk mod asset dc2.iso my-mod data:floors
    ```
-   This writes `mods/my-mod/data/floors.json` and adds `"data:floors": "data/floors.json"` under `"replace"` in `mod.json`.
+   This writes `mods/my-mod/data/floors.json` and adds `"floors": "data/floors.json"` under `"data"` in `mod.json`.
 2. Open `mods/my-mod/data/floors.json` and keep only the floors you change.
 3. Build the ISO with `dc2tk build`.
 

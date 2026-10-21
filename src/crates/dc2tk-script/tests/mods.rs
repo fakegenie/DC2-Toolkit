@@ -166,6 +166,7 @@ fn a_mods_editor_flags_put_its_own_files_before_the_trees() {
     let folder = TempDir::new("mods-flags");
     let root = recorded(folder.path());
     let module = folder.path().join("mods").join("faster");
+    build_common::write_manifest(&module, serde_json::json!({}));
     mods::write_editor_flags(&module, &root, &sdk_dir(), &[]).unwrap();
     let text = read(&module.join(mods::FILES).join(source::EDITOR_FLAGS));
     let lines: Vec<&str> = text.lines().collect();
@@ -210,12 +211,11 @@ fn a_header_change_makes_build_compile_everything_and_say_why() {
 }
 
 #[test]
-fn a_mod_name_is_one_folder_inside_the_mods_folder() {
+fn a_mod_folder_is_one_folder_inside_the_mods_folder() {
     let mods_dir = Path::new("mods");
     assert_eq!(mods::folder(mods_dir, "fish-room_2.1").unwrap(), mods_dir.join("fish-room_2.1"));
     for wrong in ["..", ".", "a/b", "a\nb", "fish\n", ""] {
         assert!(mods::folder(mods_dir, wrong).is_err(), "{wrong:?}");
     }
-    assert_eq!(mods::name(&mods_dir.join("fish-room")), "fish-room");
-    assert_eq!(mods::name(Path::new("/")), "");
+    assert!(mods::name(&mods_dir.join("fish-room")).is_err(), "a folder without a mod.json has no id");
 }

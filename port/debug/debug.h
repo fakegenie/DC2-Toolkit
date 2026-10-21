@@ -98,6 +98,17 @@ void debug_replay_panel(void);
 void debug_savestate_panel(void);
 void debug_reload_bar(void);
 void debug_helpers_panel(void);
+void debug_start(void);
+int debug_event(const void *event);
+void debug_field(void);
+void debug_frame_enter(void);
+void debug_frame_drawn(void);
+void debug_frame_exit(void);
+void debug_overlay(void);
+void debug_present(int target, int width, int height);
+void debug_input(struct port_input_state *state);
+void debug_audio(const short *samples, int frames);
+void debug_host(void);
 
 void debug_scenario_status(DebugReply *reply);
 void debug_capture_frame(void);

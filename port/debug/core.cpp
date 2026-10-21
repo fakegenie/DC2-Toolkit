@@ -4,7 +4,7 @@ extern "C" {
 #include "cdvd.h"
 }
 #include "mainloop.hpp"
-#include "port_debug.h"
+#include "port_mod.h"
 #include "port_graphics.h"
 #include "port_present.h"
 #include "render.h"
@@ -220,7 +220,19 @@ void debug_dispatch(const char *name, const DebugArgs *args, int client) {
         DebugReply reply;
         memset(&reply, 0, sizeof reply);
         reply.client = client;
-        debug_fail(&reply, "no command %s; try /help", name);
+        reply.status = 200;
+        const char *keys[DEBUG_ARG_LIMIT];
+        const char *values[DEBUG_ARG_LIMIT];
+        for (int i = 0; i < args->count; ++i) {
+            keys[i] = args->keys[i];
+            values[i] = args->values[i];
+        }
+        static char answer[16384];
+        answer[0] = 0;
+        int result = port_mods_command(name, keys, values, args->count, answer, sizeof answer);
+        if (result < 0) debug_fail(&reply, "no command %s; try /help", name);
+        else if (result > 0) debug_fail(&reply, "%s", answer);
+        else debug_print(&reply, "%s", answer[0] ? answer : "{}");
         debug_finish(&reply);
         return;
     }
@@ -466,6 +478,14 @@ static int command_help(const DebugArgs *args, DebugReply *reply) {
             debug_print(reply, "}");
             first = 0;
         }
+    for (int i = 0; i < port_mods_command_count(); ++i) {
+        debug_print(reply, "%s{\"name\": ", first ? "" : ", ");
+        debug_print_string(reply, port_mods_command_name(i));
+        debug_print(reply, ", \"help\": ");
+        debug_print_string(reply, port_mods_command_help(i));
+        debug_print(reply, "}");
+        first = 0;
+    }
     debug_print(reply, "]}");
     return 0;
 }
@@ -729,7 +749,6 @@ extern const DebugCommand debug_core_commands[] = {
     {NULL, NULL, 0, NULL},
 };
 
-extern "C" int debug_build(void) { return 1; }
 
 static FILE *sound_dump;
 
@@ -849,3 +868,10 @@ extern "C" void debug_frame_exit(void) {
     time_exit = now_ns();
     wait_exit = port_stats.wait_ns;
 }
+
+static const PortMod debug_tools = {
+    "dc2tk.debug-tools", debug_start,   debug_event,   debug_field, debug_frame_enter, debug_frame_drawn,
+    debug_frame_exit,    debug_overlay, debug_present, debug_input, debug_audio,       debug_host,
+};
+
+PORT_MOD(debug_tools)

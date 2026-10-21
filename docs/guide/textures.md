@@ -27,16 +27,16 @@ To export all textures from one `.img` archive as a folder of PNGs:
 dc2tk mod asset dc2.iso my-mod chara/c02a.chr.d/c02a.img --as png
 ```
 
-This writes one PNG per texture into `mods/my-mod/disc/chara/c02a.chr.d/c02a.img.png/`. Delete the PNGs you do not change, edit the rest, and run `dc2tk build`.
+This writes one PNG per texture into `mods/my-mod/raw/chara/c02a.chr.d/c02a.img.png/` and adds the folder's line to the mod's `"files"`. Delete the PNGs you do not change, edit the rest, and run `dc2tk build`.
 
 ## Add a new texture archive (`.img`)
 
-Create a new `.img` archive from a folder of PNGs using `"add"` in `mod.json`. Scripts load it with `load_image` and show its textures as sprites by name:
+Create a new `.img` archive from a folder of PNGs with a `"mod:NAME"` line in `"files"`. Scripts load it with `load_image` (as `MOD_DIR "calc_ui.img"`) and show its textures as sprites by name:
 
 ```json
 {
-  "add": {
-    "file:mods/calculator/calc_ui.img": {
+  "files": {
+    "mod:calc_ui.img": {
       "file": "ui",
       "like": "texture:logo_d00"
     }

@@ -2,7 +2,7 @@
 #include "spu2.h"
 #include "midi.h"
 #include "cdvd.h"
-#include "port_debug.h"
+#include "port_mod.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -196,7 +196,7 @@ int audio_init(int enabled) {
 void audio_frame(void) {
     int16_t samples[960 * 2];
     audio_render(samples, 960);
-    debug_audio(samples, 960);
+    port_mods_audio(samples, 960);
 #ifdef PORT_GRAPHICS
     if (audio && SDL_GetAudioStreamQueued(audio) < (int)sizeof(samples) * 5 && !SDL_PutAudioStreamData(audio, samples, sizeof(samples))) fprintf(stderr, "sound: %s\n", SDL_GetError());
 #endif

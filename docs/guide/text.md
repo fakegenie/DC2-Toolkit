@@ -11,11 +11,12 @@
    This writes `mods/my-mod/text/en/shopname.txt` and adds its line to `mod.json`:
    ```json
    {
-     "replace": {
-       "text:en/shopname": "text/en/shopname.txt"
+     "text": {
+       "en/shopname": "text/en/shopname.txt"
      }
    }
    ```
+   A few messages can go in `mod.json` itself, by message number: `"text": {"en/shopname": {"3": "Wrench World"}}`.
 2. Edit the messages you want to change. You can delete the `@<id>` blocks you leave unchanged, and add a new message with a new `@<id>`.
 3. Build the ISO with `dc2tk build`. A `text:` id updates every copy of that file for that language on the disc (English `allmenu.mes` is in 20 menu packs).
 

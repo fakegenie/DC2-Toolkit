@@ -24,15 +24,15 @@ blender --background --python docs/scripting/examples/spinning-cult/make_gill.py
 blender --background --python docs/scripting/examples/spinning-cult/make_gyros.py
 blender --background --python docs/scripting/examples/spinning-cult/make_mod.py
 blender --background --python docs/scripting/examples/spinning-cult/make_villagers.py
-dc2tk build extracted/scripts dc2.iso -o spinning-cult.iso --mod spinning-cult --dev
+dc2tk build extracted/scripts dc2.iso -o spinning-cult.iso --mod dc2tk.spinning-cult --dev
 ```
 
 ### Asset generation scripts
 
-- **`make_gill.py`**: Generates Brother Gill (`model/gill.gltf`), a 34-unit-tall robed character with an 18-bone armature and six animations: `idle`, `beckon`, `raise`, `spin`, `turn_head`, and `vanish` (a material alpha fade). `mod.json` packages this model as `mods/gill/gill.chr`.
+- **`make_gill.py`**: Generates Brother Gill (`model/gill.gltf`), a 34-unit-tall robed character with an 18-bone armature and six animations: `idle`, `beckon`, `raise`, `spin`, `turn_head`, and `vanish` (a material alpha fade). `mod.json` packages this model as `mod:gill.chr` (on the disc, `mods/dc2tk.spinning-cult/gill.chr`), which `fishroom.c` loads as `MOD_DIR "gill.chr"`.
 - **`make_gyros.py`**: Generates the gyroscope (~7 units tall, compared to Max at 26 units) as three assets under `model/`:
   - `gyros_item.gltf`: The static item model for item ID `429`. `mod.json` packages it as `item/gyros.chr` (matching `model:takaraky`), and `data/items.json` sets `"model": "gyros"`.
-  - `gyros.gltf`: The animated character pack (`mods/gyros/gyros.chr`) with five bones (`stand`, `outer`, `middle`, `inner`, `rotor`) and a 4-second looping `spin` animation. Map scripts load and animate it in cutscenes with `load_chara(MEMORY_STACK_EVENT, "mods/gyros/gyros.chr", "info.cfg", slot)` and `set_chara_motion(slot, "spin")`.
+  - `gyros.gltf`: The animated character pack (`mod:gyros.chr`) with five bones (`stand`, `outer`, `middle`, `inner`, `rotor`) and a 4-second looping `spin` animation. Map scripts load and animate it in cutscenes with `load_chara(MEMORY_STACK_EVENT, MOD_DIR "gyros.chr", "info.cfg", slot)` and `set_chara_motion(slot, "spin")`.
   - `gyros_icon.png`: The 32×32 menu icon.
 - **`fish_room.py`**: Builds the Fish Room map in Blender from your export of `m07` (nighttime Palm Brinks): clears existing placements, builds a tiled room with floor, wall, and camera collision, places a 420-unit floating fish rotated 1.5 degrees per frame by a Piece animation point, adds an exit door trigger, and places the entrance trigger `door_fish` in Palm Brinks (`m01`) at `door10`.
 - **`make_mod.py`**: Runs `fish_room.py` and adds:

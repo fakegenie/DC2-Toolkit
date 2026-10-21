@@ -950,7 +950,7 @@
   {
     "file": "ps2/src/event_func.cpp",
     "find": "void EdEventDraw() {\n    int hit_no;\n    int sprite_no;\n",
-    "replace": "#include \"port_debug.h\"\n\nvoid EdEventDraw() {\n    int hit_no;\n    int sprite_no;\n\n    debug_overlay();\n"
+    "replace": "#include \"port_mod.h\"\n\nvoid EdEventDraw() {\n    int hit_no;\n    int sprite_no;\n\n    port_mods_overlay();\n"
   },
   {
     "file": "ps2/src/menuchr.cpp",

@@ -11,13 +11,14 @@
    This writes `mods/my-mod/data/items.json` and adds its line to `mods/my-mod/mod.json`:
    ```json
    {
-     "replace": {
-       "data:items": "data/items.json"
+     "data": {
+       "items": "data/items.json"
      }
    }
    ```
+   A small change can go in `mod.json` itself, as the table's records in place of the file name: `"data": {"items": [{"item": 1, "weapon": {"attack": 12}}]}`. This works for the tables whose records are all in a section named after the table (`items`, `monsters`, `floors`, and so on).
 2. Edit `mods/my-mod/data/items.json` and keep only the records and fields you change. Each record keeps its key fields (`item` for items; see the table below) so `dc2tk build` knows which record you mean.
-3. Check the mod with `dc2tk mod check extracted/scripts my-mod --disc dc2.iso`. It lists every value your tables change.
+3. Check the mod with `dc2tk mod check extracted/scripts local.my-mod --disc dc2.iso`. It lists every value your tables change.
 4. Build the ISO with `dc2tk build`.
 
 ## Available data tables

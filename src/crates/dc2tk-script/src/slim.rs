@@ -297,7 +297,7 @@ fn compiled(
     if !clashes.is_empty() {
         return refused(mods::clash_text(&clashes));
     }
-    let plan = mods::patch_plan(mod_dirs, tree, consts, false)?;
+    let plan = mods::patch_plan(mod_dirs, tree, consts, None)?;
     Ok(scripts
         .par_iter()
         .map(|script| {
@@ -340,7 +340,7 @@ pub fn slim(
     consts: &IndexMap<String, i64>,
 ) -> Result<Outcome> {
     let mod_dir = mods::folder(mods_dir, name)?;
-    let dirs = mods::chosen(mods_dir, &[name.to_string()])?.dirs;
+    let dirs = mods::chosen(mods_dir, &[mods::name(&mod_dir)?])?.dirs;
     let mut outcome = Outcome::default();
     let mut users: Option<BTreeMap<String, Vec<String>>> = None;
     for (file, tree_path) in mods::targets(&mod_dir, tree)? {
@@ -391,8 +391,20 @@ pub fn slim(
         if let Some(patch) = &patch {
             dc2tk_disc::textfile::write_text(patch, &draft.text)?;
         }
-        let place = paths::join_relative(&mod_dir.join(mods::FILES), &file);
+        let whole = crate::manifest::read(&mod_dir)?.scripts.whole;
+        let place = paths::join_relative(&mod_dir, &whole[&file]);
         let held = files::read(&place)?;
+        let kept_body = crate::manifest::read_body(&mod_dir)?;
+        let mut body = kept_body.clone();
+        let listed = crate::manifest::section(&mut body, "scripts")?;
+        crate::manifest::section(listed, "whole")?.shift_remove(&file);
+        if listed.get("whole").and_then(|whole| whole.as_object()).is_some_and(|whole| whole.is_empty()) {
+            listed.shift_remove("whole");
+        }
+        if listed.is_empty() {
+            body.shift_remove("scripts");
+        }
+        crate::manifest::write_body(&mod_dir, &body)?;
         files::remove_file(&place)?;
         let after = compiled(&dirs, tree, tools, consts, &scripts);
         let differs = match &after {
@@ -401,6 +413,7 @@ pub fn slim(
         };
         if after.is_err() || differs.is_some() {
             files::write(&place, &held)?;
+            crate::manifest::write_body(&mod_dir, &kept_body)?;
             if let Some(patch) = &patch {
                 files::remove_file(patch)?;
             }

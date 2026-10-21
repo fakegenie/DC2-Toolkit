@@ -4,7 +4,7 @@
 #include "port_present.h"
 #include "executable.h"
 #include "audio.h"
-#include "port_debug.h"
+#include "port_mod.h"
 #include "render.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,7 +39,7 @@ static void port_ios_saves(void) {}
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     int first = 1;
-    int scale = 1, samples = 1, mute = 0, background = 0;
+    int scale = 0, samples = 0, mute = 0, background = 0;
     for (; first < argc - 1; ++first) {
         if (!strcmp(argv[first], "--debug")) port_debug = 1;
         else if (!strcmp(argv[first], "--mute")) mute = 1;
@@ -49,11 +49,15 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[first], "--graphics")) break;
     }
     const char *disc = first == argc - 1 ? argv[first] : first == argc ? bundled_disc() : NULL;
-    if (first == argc && debug_build()) port_debug = 1;
+    if (first == argc && port_mod_loaded("dc2tk.debug-tools")) port_debug = 1;
     if (!disc) {
         fprintf(stderr, "usage: %s [--debug] [--mute] [--background] [--scale 1-4] [--msaa 1|2|4|8] DISC.iso\n", argv[0]);
         return 1;
     }
+    const char *set_scale = port_setting("render.scale");
+    const char *set_samples = port_setting("render.msaa");
+    if (!scale) scale = set_scale ? atoi(set_scale) : 1;
+    if (!samples) samples = set_samples ? atoi(set_samples) : 1;
     render_set_quality(scale, samples);
     render_set_background(background);
     if (!port_cdvd_init(disc) || !port_executable_check() || !port_split_data_init()) return 1;
@@ -62,6 +66,6 @@ int main(int argc, char **argv) {
     atexit(port_present_close);
     if (!audio_init(!mute)) return 1;
     atexit(audio_shutdown);
-    debug_start();
+    port_mods_start();
     return port_kernel_run(port_game_main);
 }

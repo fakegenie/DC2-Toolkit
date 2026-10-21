@@ -16,7 +16,7 @@
 # hashed and deleted for each build. Settings, by environment variable:
 #   DC2TK        the binary (default build/release/dc2tk, .exe on Windows)
 #   GOLDEN_DIR   where the retail image and the mods copy live (default golden/)
-#   GOLDEN_MODS  the mods to build (default: every folder of $GOLDEN_DIR/mods with a mod.json)
+#   GOLDEN_MODS  the mod folders to build (default: every folder of $GOLDEN_DIR/mods with a mod.json)
 #
 # The retail image builds start from is $GOLDEN_DIR/packed.iso, which the first run packs from
 # extracted/disc (an unedited extracted disc packs to the retail bytes). The mods are a copy in
@@ -74,9 +74,10 @@ run xref_map "$B" xref "$OUT/decompiled" map s51
 run xref_monster "$B" xref "$OUT/decompiled" monster 1
 run mod_list "$B" mod list "$OUT/decompiled" --mods "$MODS"
 for m in "${MOD_NAMES[@]}"; do
-  run "check_$m" "$B" mod check "$OUT/decompiled" "$m" --mods "$MODS"
-  run "test_$m" "$B" mod test "$OUT/decompiled" "$m" --mods "$MODS"
-  run "build_$m" "$B" build "$OUT/decompiled" "$ISO" -o "$OUT/$m.iso" --mod "$m" --mods "$MODS"
+  id=$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["id"])' "$MODS/$m/mod.json")
+  run "check_$m" "$B" mod check "$OUT/decompiled" "$id" --mods "$MODS"
+  run "test_$m" "$B" mod test "$OUT/decompiled" "$id" --mods "$MODS"
+  run "build_$m" "$B" build "$OUT/decompiled" "$ISO" -o "$OUT/$m.iso" --mod "$id" --mods "$MODS"
   hash_iso "$OUT/$m.iso" "build_$m"
 done
 run build_full "$B" build "$OUT/decompiled" "$ISO" -o "$OUT/full.iso" --full

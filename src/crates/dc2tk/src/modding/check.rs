@@ -63,9 +63,9 @@ pub fn run_mod_check(
                 disc.unwrap(),
                 edited_executable.as_deref(),
                 &executable,
-                &crate::files::root().join("build/port/darkchronicle"),
-                true,
+                None,
                 false,
+                &mod_dirs,
             )?;
         }
     }
@@ -125,7 +125,7 @@ fn assets_on_disc(
     let given = raw.keys().map(|path| (path.clone(), Vec::new())).collect();
     let (_, new_music) = replace::add_music(disc, lines, &given)?;
     for mod_dir in mod_dirs {
-        let name = mods::name(mod_dir);
+        let name = mods::name(mod_dir)?;
         for line in reached_lines(&resolved, &name) {
             println!("{name}: {line}");
         }
@@ -196,7 +196,7 @@ fn mod_constants(
         for (constant, number) in &maps {
             println!("new map {constant} = {number}");
         }
-        patches::merge_constants(&mut constants, &patches::for_every_mod(&maps, mod_dirs));
+        patches::merge_constants(&mut constants, &patches::for_every_mod(&maps, mod_dirs)?);
     }
     Ok(constants)
 }
@@ -219,12 +219,12 @@ fn missing_loads(
     };
     // (mod, file shown, text, the tree's scripts it stands for)
     let mut texts: Vec<(String, String, String, Vec<String>)> = Vec::new();
-    let plan = mods::patch_plan(mod_dirs, tree_dir, consts, false)?;
+    let plan = mods::patch_plan(mod_dirs, tree_dir, consts, None)?;
     for patch in &plan.patches {
         texts.push((patch.module.clone(), patch.file_name(), patch.text.clone(), patch.scripts.clone()));
     }
     for mod_dir in mod_dirs {
-        let module = mods::name(mod_dir);
+        let module = mods::name(mod_dir)?;
         for (path, text) in mods::contents(mod_dir, tree_dir)? {
             texts.push((module.clone(), path.clone(), text, vec![path]));
         }

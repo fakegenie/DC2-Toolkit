@@ -27,7 +27,62 @@
     "conflicts": {"$ref": "#/$defs/ranges"},
     "replace": {"$ref": "#/$defs/lines"},
     "add": {"$ref": "#/$defs/lines"},
-    "additions": {"type": "array", "items": {"$ref": "#/$defs/addition"}},
+    "files": {"$ref": "#/$defs/lines"},
+    "data": {
+      "type": "object",
+      "additionalProperties": {
+        "oneOf": [
+          {"type": "string"},
+          {"type": "array", "items": {"type": "object"}},
+          {
+            "type": "object",
+            "required": ["file"],
+            "additionalProperties": false,
+            "properties": {"file": {"type": "string"}, "when": {"type": "string"}}
+          }
+        ]
+      }
+    },
+    "text": {
+      "type": "object",
+      "additionalProperties": {
+        "oneOf": [
+          {"type": "string"},
+          {
+            "type": "object",
+            "properties": {"when": {"type": "string"}},
+            "patternProperties": {"^[0-9]+$": {"type": "string"}},
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "scripts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sources": {"type": "array", "items": {"type": "string"}},
+        "whole": {"type": "object", "additionalProperties": {"type": "string"}},
+        "additions": {"type": "array", "items": {"$ref": "#/$defs/addition"}}
+      }
+    },
+    "port": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sources": {"type": "array", "items": {"type": "string"}},
+        "api": {"$ref": "#/$defs/range"},
+        "settings": {
+          "type": "object",
+          "additionalProperties": {"type": ["string", "number", "boolean"]}
+        }
+      }
+    },
+    "settings": {
+      "type": "object",
+      "propertyNames": {"pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+      "additionalProperties": {"$ref": "#/$defs/setting"}
+    },
     "dev": {
       "type": "object",
       "additionalProperties": false,
@@ -36,7 +91,10 @@
   },
   "$defs": {
     "id": {"type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*\\.[a-z0-9]+(-[a-z0-9]+)*$"},
-    "version": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
     "range": {"type": "string", "minLength": 1},
     "ranges": {
       "type": "object",
@@ -54,7 +112,9 @@
             "additionalProperties": false,
             "properties": {
               "file": {"type": "string"},
-              "only": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]},
+              "only": {
+                "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]
+              },
               "volume": {"type": "integer", "minimum": 0, "maximum": 127},
               "bank": {"type": "string"},
               "like": {"type": "string"},
@@ -62,10 +122,27 @@
               "title": {"type": "string"},
               "script": {"type": "string"},
               "compact": {"type": "boolean"},
-              "programs": {"type": "object", "additionalProperties": {"type": ["string", "integer"]}}
+              "programs": {
+                "type": "object",
+                "additionalProperties": {"type": ["string", "integer"]}
+              },
+              "when": {"type": "string"}
             }
           }
         ]
+      }
+    },
+    "setting": {
+      "type": "object",
+      "required": ["type", "default"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"enum": ["bool", "int", "enum", "string"]},
+        "default": {},
+        "label": {"type": "string"},
+        "min": {"type": "integer"},
+        "max": {"type": "integer"},
+        "values": {"type": "array", "items": {"type": "string"}}
       }
     },
     "addition": {

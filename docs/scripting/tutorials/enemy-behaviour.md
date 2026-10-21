@@ -112,8 +112,8 @@ Create `mods/stronger-golem/mod.json`. To test your Golem immediately on **New G
 Validate and build:
 
 ```sh
-dc2tk mod check extracted/scripts stronger-golem
-dc2tk build extracted/scripts dc2.iso -o test.iso --mod castle --mod stronger-golem --dev --play
+dc2tk mod check extracted/scripts you.stronger-golem
+dc2tk build extracted/scripts dc2.iso -o test.iso --mod you.castle --mod you.stronger-golem --dev --play
 ```
 
 > **Note: Modifying base monster stats (HP, attack, defense, ABS, Gilda, and drops)**

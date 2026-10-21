@@ -253,6 +253,7 @@ pub struct Patch {
     pub plain: HashMap<String, String>,
     pub numbers: IndexMap<String, i64>,
     pub includes: IndexMap<String, String>,
+    pub defines: HashMap<String, String>,
 }
 
 impl Patch {
@@ -297,8 +298,8 @@ pub fn merge_constants(into: &mut ModConstants, more: &ModConstants) {
 }
 
 /// Constants every chosen mod sees (the new maps' MAP_ constants), as ModConstants.
-pub fn for_every_mod(constants: &IndexMap<String, i64>, mod_dirs: &[PathBuf]) -> ModConstants {
-    mod_dirs.iter().map(|dir| (crate::mods::name(dir), constants.clone())).collect()
+pub fn for_every_mod(constants: &IndexMap<String, i64>, mod_dirs: &[PathBuf]) -> Result<ModConstants> {
+    mod_dirs.iter().map(|dir| Ok((crate::mods::name(dir)?, constants.clone()))).collect()
 }
 
 /// Which scripts each patch of the chosen mods changes, and the numbers the mods ask for. written
@@ -354,6 +355,15 @@ pub fn plan(
         let reached: Vec<&str> = std::iter::once(patch.module.as_str())
             .chain(requires.get(patch.module.as_str()).copied().unwrap_or_default().iter().map(String::as_str))
             .collect();
+        if let Some(own) = mod_list.iter().find(|module| module.name == patch.module) {
+            if crate::manifest::has_manifest(&own.dir) {
+                let manifest = crate::manifest::read(&own.dir)?;
+                for (name, value) in crate::manifest::settings_of(&manifest)? {
+                    let define = crate::manifest::setting_define(&manifest.settings[&name], &value);
+                    patch.defines.insert(format!("SETTING_{name}"), define);
+                }
+            }
+        }
         for module in mod_list.iter().filter(|module| reached.contains(&module.name.as_str())) {
             for (path, text) in &module.texts {
                 if let Ok(relative) = path.strip_prefix(&module.dir) {
@@ -409,6 +419,7 @@ pub fn located(mod_list: &[ModTexts], tree: &Path) -> Result<(ByScript, Vec<Patc
                 scripts: chosen.into_iter().collect(),
                 numbers: IndexMap::new(),
                 includes: IndexMap::new(),
+                defines: HashMap::new(),
             });
         }
     }
@@ -434,6 +445,8 @@ pub fn prepared(
     let mut defines: HashMap<String, String> =
         LANGUAGES.iter().map(|(name, value)| (name.to_string(), value.to_string())).collect();
     defines.insert("LANGUAGE".into(), language.to_string());
+    defines.insert("MOD_DIR".into(), format!("\"{}/\"", crate::replace::mod_folder(&patch.module)));
+    defines.extend(patch.defines.iter().map(|(name, value)| (name.clone(), value.clone())));
     let file = patch.path.to_string_lossy();
     let extra = [tree.to_path_buf()];
     let merged: Option<IndexMap<String, String>> = (!patch.includes.is_empty()).then(|| {
@@ -491,6 +504,11 @@ pub fn prepared(
     consts.insert("LANGUAGE".into(), int_node(language));
     for (name, value) in &patch.numbers {
         consts.insert(name.clone(), int_node(*value));
+    }
+    for (name, value) in &patch.defines {
+        if let Ok(value) = value.parse::<i64>() {
+            consts.insert(name.clone(), int_node(value));
+        }
     }
     Ok((expanded.with("globals", own_globals), consts))
 }

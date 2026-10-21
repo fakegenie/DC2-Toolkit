@@ -66,7 +66,7 @@ pub fn parse_target(text: &str) -> Result<Target> {
     })
 }
 
-/// A --start-at or mod.json "start_at" target: what parse_target takes, or MAP (or MAP/SCRIPT)
+/// A --start-at or mod.json "dev": {"start_at"} target: what parse_target takes, or MAP (or MAP/SCRIPT)
 /// alone, which starts at DEFAULT_PROGRAM.
 pub fn parse_start(text: &str) -> Result<Target> {
     static BARE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^([A-Za-z0-9_]+(?:/[A-Za-z0-9_]+)?)$").unwrap());

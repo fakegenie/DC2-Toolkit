@@ -101,6 +101,6 @@ Create `mods/gordon-line/mod.json` with `"dev": {"start_at": "m01"}` so **New Ga
 Validate and build the mod:
 
 ```sh
-dc2tk mod check extracted/scripts gordon-line
-dc2tk build extracted/scripts dc2.iso -o test.iso --mod gordon-line --dev --play
+dc2tk mod check extracted/scripts you.gordon-line
+dc2tk build extracted/scripts dc2.iso -o test.iso --mod you.gordon-line --dev --play
 ```

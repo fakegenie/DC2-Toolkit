@@ -1,5 +1,5 @@
-//! Game data tables a mod edits as JSON (`"data:items": "data/items.json"` in mod.json; see
-//! docs/modding/data.md): `mod asset ISO NAME data:items` writes a table, and `build` turns the
+//! Game data tables a mod edits as JSON (`"data": {"items": "data/items.json"}` in mod.json; see
+//! docs/guide/data.md): `mod asset ISO NAME data:items` writes a table, and `build` turns the
 //! chosen mods' tables into the disc files they come from. Most are cfg scripts in DATA.DAT (some
 //! kept in several copies, some inside packs); monsters, spectrumising, Donny's shop, the
 //! character tables and parts of the inventions and fishing tables are in the boot executable,
@@ -318,7 +318,10 @@ pub struct DataChange {
 }
 
 fn read_table(line: &Line) -> Result<Value> {
-    let text = fs::read_to_string(&line.file).with_context(|| line.file.display().to_string())?;
+    let text = match &line.inline {
+        Some(text) => text.clone(),
+        None => fs::read_to_string(&line.file).with_context(|| line.file.display().to_string())?,
+    };
     serde_json::from_str(&text)
         .map_err(|error| Error::invalid(format!("{} (mod {}): {}: {error}", line.key, line.module, line.shown)))
 }

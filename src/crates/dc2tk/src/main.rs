@@ -176,10 +176,27 @@ enum Command {
         #[arg(required = true)]
         scripts: Vec<String>,
     },
-    /// Boot a disc image in PCSX2.
+    /// Boot a disc image in PCSX2, or with --native run the native port over the retail disc, with a
+    /// mod set's game files when --set names one.
     Play {
-        /// The disc image.
+        /// The disc image (for --native, the retail disc).
         image: PathBuf,
+        /// Run the native port instead of PCSX2.
+        #[arg(long)]
+        native: bool,
+        /// A mod set file whose mods the native port plays with.
+        #[arg(long, value_name = "FILE", requires = "native")]
+        set: Option<PathBuf>,
+        /// The decompiled source tree the set's mods are built over.
+        #[arg(long, value_name = "DIR", default_value = "extracted/scripts")]
+        source: PathBuf,
+        /// Build the set's override folder (and port) and print the command, without running it.
+        #[arg(long, requires = "native")]
+        build_only: bool,
+        #[command(flatten)]
+        mods: options::ModsDir,
+        #[command(flatten)]
+        common: Common,
         /// PCSX2's executable; else $PCSX2, the PATH or the usual install folder.
         #[arg(long)]
         pcsx2: Option<PathBuf>,
@@ -406,7 +423,10 @@ fn run(command: &Command) -> Result<ExitCode> {
         }
         Command::Build(args) => modding::run_build(args),
         Command::Mod { command } => modding::run_mod(command),
-        Command::Play { image, pcsx2, full_boot } => {
+        Command::Play { image, native: true, set, source, build_only, mods, common, .. } => {
+            modding::run_native(image, set.as_deref(), source, *build_only, mods, common)
+        }
+        Command::Play { image, pcsx2, full_boot, .. } => {
             let found = modding::launch(image, pcsx2.as_deref(), !*full_boot)?;
             println!("started {} with {}", image.display(), found.display());
             Ok(ExitCode::SUCCESS)

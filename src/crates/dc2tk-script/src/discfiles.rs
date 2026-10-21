@@ -1,6 +1,6 @@
-//! Game files a mod replaces: models, textures, sounds and anything else on the disc. A mod keeps
-//! them under disc/, laid out as extract lays the disc out: a file at its path in DATA.DAT
-//! (snd2/sp/sp_000.snd), or a member of a pack under the pack's name plus ".d"
+//! Game files a mod replaces or adds by disc path: models, textures, sounds and anything else on
+//! the disc, named in mod.json's "files" as extract lays the disc out: a file at its path in
+//! DATA.DAT (snd2/sp/sp_000.snd), or a member of a pack under the pack's name plus ".d"
 //! (chara/c01_base.chr.d/c01b.img for the texture inside Max's character pack). build writes each
 //! over the disc's own; members of packs inside packs work the same way (a.pac.d/b.chr.d/c.img).
 //!
@@ -13,10 +13,10 @@
 //! (c02a.chr.gltf/c02a.gltf) and message files a text file (shopname.mes.txt); dc2tk_assets converts
 //! them.
 //!
-//! mod.json's file: lines (replace) give game files the same way, by disc path, with the file
-//! anywhere in the mod; a folder there converts by the game file's suffix, whatever it is named.
-//! A line with "like" makes its game file whole, from PNGs (a texture file) or a glTF (a character
-//! pack), with the disc's file at another place as the template: new files of the mod's own.
+//! The file can be anywhere in the mod; a folder there converts by the game file's suffix,
+//! whatever it is named. A mod:NAME line is a new file of the mod's own, mods/<id>/NAME on the
+//! disc; with "like" it is made whole, from PNGs (a texture file) or a glTF (a character pack),
+//! with the disc's file at another place as the template.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -29,8 +29,9 @@ use indexmap::IndexMap;
 
 use crate::{paths, Error, Result};
 
-pub const DISC: &str = "disc";
 pub const PACK: &str = ".d/";
+/// Where mod asset puts the game files it copies off the disc by path, in the mod's folder.
+pub const RAW: &str = "raw";
 
 /// A converter between a game format and a common one: the common format's suffix, the suffix of
 /// the game files it converts, and whether the common form is a folder of files.
@@ -170,35 +171,6 @@ pub fn files_in(root: &Path) -> Result<Vec<String>> {
     Ok(found)
 }
 
-/// {disc path: file or folder} for the game files a mod holds; a file or folder in a common format
-/// is keyed by the game file it stands for.
-pub fn mod_files(mod_dir: &Path) -> Result<IndexMap<String, PathBuf>> {
-    let root = mod_dir.join(DISC);
-    let mut found: IndexMap<String, PathBuf> = IndexMap::new();
-    if !root.is_dir() {
-        return Ok(found);
-    }
-    for relative in files_in(&root)? {
-        let folder = converter_folder(&relative);
-        let source = paths::join_relative(&root, folder.as_deref().unwrap_or(&relative));
-        let (target, _) = match &folder {
-            Some(folder) => converter_for(folder, true),
-            None => converter_for(&relative, false),
-        };
-        if let Some(existing) = found.get(&target).filter(|existing| **existing != source) {
-            return Err(Error::invalid(format!(
-                "{}: {} is given twice, as {} and {}",
-                crate::mods::name(mod_dir),
-                target,
-                paths::file_name(existing),
-                paths::file_name(&source)
-            )));
-        }
-        found.insert(target, source);
-    }
-    Ok(found)
-}
-
 pub fn converter_of(source: &Path) -> Option<Converter> {
     converter_for(&source.to_string_lossy().replace('\\', "/"), source.is_dir()).1
 }
@@ -228,20 +200,10 @@ fn game_bytes_for(target: &str, source: &Path, original: &[u8], fonts: &Fonts, d
     }
 }
 
-/// The game files a mod replaces or adds by path: its disc/ folder's and its mod.json's file:
-/// lines, {disc path: file or folder}.
+/// The game files a mod replaces or adds by path, from mod.json's "files": {disc path: file or
+/// folder}.
 pub fn game_files(mod_dir: &Path) -> Result<IndexMap<String, PathBuf>> {
-    let mut found = mod_files(mod_dir)?;
-    for (path, file) in crate::replace::raw_files(mod_dir)? {
-        if found.keys().any(|known| lower(known) == lower(&path)) {
-            return Err(Error::invalid(format!(
-                "{}: {path} is given twice, in {DISC}/ and as file:{path}",
-                crate::mods::name(mod_dir)
-            )));
-        }
-        found.insert(path, file);
-    }
-    Ok(found)
+    Ok(crate::replace::raw_files(mod_dir)?.into_iter().collect())
 }
 
 /// The file of DATA.DAT a disc path is in, and the members down to it: chara/c01_base.chr.d/c01b.img
@@ -301,9 +263,9 @@ pub fn collect(mod_dirs: &[PathBuf]) -> Result<(Wanted, Clashes)> {
     for mod_dir in mod_dirs {
         for (path, file) in game_files(mod_dir)? {
             if let Some((owner, _)) = found.get(&path) {
-                clashes.entry(path).or_insert_with(|| vec![owner.clone()]).push(crate::mods::name(mod_dir));
+                clashes.entry(path).or_insert_with(|| vec![owner.clone()]).push(crate::mods::name(mod_dir)?);
             } else {
-                found.insert(path, (crate::mods::name(mod_dir), file));
+                found.insert(path, (crate::mods::name(mod_dir)?, file));
             }
         }
     }
@@ -455,10 +417,12 @@ pub fn replaced(
     Ok((files, report))
 }
 
-/// Copies files and pack members off the disc into a mod's disc/ folder, to edit or replace there,
-/// in a common format when form names one (png). Returns the paths written.
+/// Copies files and pack members off the disc into a mod's raw/ folder, to edit or replace there,
+/// in a common format when form names one (png), and adds each one's line to mod.json's "files".
+/// Returns the files written, by path in the mod.
 pub fn copy_out(iso_path: &Path, mod_dir: &Path, paths: &[String], form: Option<&str>) -> Result<Vec<String>> {
     let mut written = Vec::new();
+    let mut lines = Vec::new();
     let disc = DiscSource::open(iso_path)?;
     let fonts = disc_fonts(&disc);
     let read = |path: &str| disc_file(&disc, path);
@@ -472,7 +436,7 @@ pub fn copy_out(iso_path: &Path, mod_dir: &Path, paths: &[String], form: Option<
         let Some(data) = disc.member(&top, &members)? else {
             return Err(Error::invalid(format!("{} has no member {}", top, members.join("/"))));
         };
-        let target = paths::join_relative(&mod_dir.join(DISC), &path);
+        let target = paths::join_relative(&mod_dir.join(RAW), &path);
         if let Some(form) = form.filter(|form| !form.is_empty()) {
             let suffix = format!(".{}", lower(form).trim_start_matches('.'));
             let converter = CONVERTERS.iter().find(|converter| converter.suffix == suffix);
@@ -481,11 +445,12 @@ pub fn copy_out(iso_path: &Path, mod_dir: &Path, paths: &[String], form: Option<
             };
             let exported = converter.export(&data, &path, &fonts, &others)?;
             let folder = target.with_file_name(format!("{}{}", paths::file_name(&target), suffix));
+            lines.push((format!("{}{path}", crate::replace::FILE), serde_json::json!(format!("{RAW}/{path}{suffix}"))));
             if !converter.folder {
                 files::create_dir_all(target.parent().unwrap())?;
                 for (_, content) in exported {
                     files::write(&folder, content)?;
-                    written.push(format!("{path}{suffix}"));
+                    written.push(format!("{RAW}/{path}{suffix}"));
                 }
                 continue;
             }
@@ -494,14 +459,16 @@ pub fn copy_out(iso_path: &Path, mod_dir: &Path, paths: &[String], form: Option<
                 let file = paths::join_relative(&folder, &name);
                 files::create_dir_all(file.parent().unwrap())?;
                 files::write(&file, content)?;
-                written.push(format!("{path}{suffix}/{name}"));
+                written.push(format!("{RAW}/{path}{suffix}/{name}"));
             }
             continue;
         }
         files::create_dir_all(target.parent().unwrap())?;
         files::write(&target, &data)?;
-        written.push(path);
+        lines.push((format!("{}{path}", crate::replace::FILE), serde_json::json!(format!("{RAW}/{path}"))));
+        written.push(format!("{RAW}/{path}"));
     }
+    crate::replace::add_lines(mod_dir, &lines)?;
     Ok(written)
 }
 
