@@ -63,13 +63,11 @@ static int outside(const float c[4]) {
     return c[0] > w || c[0] < -w || c[1] > w || c[1] < -w || c[2] > w || c[2] < -w;
 }
 
-static void project(RenderVertex *vertex, const ShadowSetup &setup, const float *clip) {
+static void project(RenderVertex *vertex, const ShadowSetup &setup, const float *clip, const float screen[4],
+                    float depth) {
     float p[4];
     transform(p, setup.screen, clip);
     float q = p[3] != 0.0f ? 1.0f / p[3] : 0.0f;
-    float screen[4];
-    float depth;
-    gs_screen_mapping(screen, &depth);
     float x = p[0] * q, y = p[1] * q, z = p[2] * q;
     vertex->x = (x * screen[0] + screen[1] + 1.0f) / screen[0];
     vertex->y = (y * screen[2] + screen[3] - 1.0f) / screen[2];
@@ -85,12 +83,20 @@ static int is_back(const RenderVertex v[4]) {
     return (v[2].x - v[0].x) * (v[1].y - v[0].y) - (v[2].y - v[0].y) * (v[1].x - v[0].x) < 0.0f;
 }
 
-static void draw_quad(const ShadowSetup &setup, const RenderVertex v[4], int back) {
-    RenderVertex out[6] = {v[0], v[1], v[2], v[0], v[2], v[3]};
+static void draw_quads(const ShadowSetup &setup, const RenderVertex *vertices, int quads, int back) {
     RenderState state = setup.state;
     state.alpha = back ? 0x8000000062ull : 0x8000000068ull;
     render_source = RENDER_SOURCE_SHADOW;
-    render_draw(&state, RENDER_TRIANGLES, out, 6);
+    render_draw(&state, RENDER_TRIANGLES, vertices, quads * 6);
+}
+
+static void add_quad(RenderVertex *out, const RenderVertex *const v[4]) {
+    out[0] = *v[0];
+    out[1] = *v[1];
+    out[2] = *v[2];
+    out[3] = *v[0];
+    out[4] = *v[2];
+    out[5] = *v[3];
 }
 
 static void draw_triangle(const ShadowSetup &setup, const float *v0, const float *v1, const float *v2) {
@@ -109,29 +115,36 @@ static void draw_triangle(const ShadowSetup &setup, const float *v0, const float
     float n[3] = {e2[1] * e1[2] - e2[2] * e1[1], e2[2] * e1[0] - e2[0] * e1[2], e2[0] * e1[1] - e2[1] * e1[0]};
     float q = n[0] * setup.light[0] + n[1] * setup.light[1] + n[2] * setup.light[2];
     if (fabsf(q) <= 1e-4f) return;
-    const float *quads[5][4];
+    float screen[4];
+    float depth;
+    gs_screen_mapping(screen, &depth);
+    RenderVertex model[3] = {}, cast[3] = {};
+    for (int j = 0; j < 3; j++) {
+        project(&model[j], setup, c[j], screen, depth);
+        project(&cast[j], setup, t[j], screen, depth);
+    }
+    const RenderVertex *mc[3] = {&model[0], &model[1], &model[2]};
+    const RenderVertex *mt[3] = {&cast[0], &cast[1], &cast[2]};
+    const RenderVertex *quads[5][4];
     if (q < 0.0f) {
-        const float *b[5][4] = {{c[0], c[1], t[1], t[0]}, {c[1], c[2], t[2], t[1]}, {c[2], c[0], t[0], t[2]},
-                                {t[0], t[1], t[2], t[2]}, {c[2], c[1], c[0], c[0]}};
+        const RenderVertex *b[5][4] = {{mc[0], mc[1], mt[1], mt[0]}, {mc[1], mc[2], mt[2], mt[1]}, {mc[2], mc[0], mt[0], mt[2]},
+                                       {mt[0], mt[1], mt[2], mt[2]}, {mc[2], mc[1], mc[0], mc[0]}};
         memcpy(quads, b, sizeof quads);
     } else {
-        const float *a[5][4] = {{c[0], t[0], t[1], c[1]}, {c[1], t[1], t[2], c[2]}, {c[2], t[2], t[0], c[0]},
-                                {t[2], t[1], t[0], t[0]}, {c[0], c[1], c[2], c[2]}};
+        const RenderVertex *a[5][4] = {{mc[0], mt[0], mt[1], mc[1]}, {mc[1], mt[1], mt[2], mc[2]}, {mc[2], mt[2], mt[0], mc[0]},
+                                       {mt[2], mt[1], mt[0], mt[0]}, {mc[0], mc[1], mc[2], mc[2]}};
         memcpy(quads, a, sizeof quads);
     }
-    RenderVertex projected[5][4] = {};
-    int back[5];
-    int fronts = 0;
+    RenderVertex fronts[5 * 6], backs[5 * 6];
+    int front_count = 0, back_count = 0;
     for (int g = 0; g < 5; g++) {
-        for (int i = 0; i < 4; i++) project(&projected[g][i], setup, quads[g][i]);
-        back[g] = is_back(projected[g]);
-        if (back[g]) continue;
-        draw_quad(setup, projected[g], 0);
-        fronts++;
+        RenderVertex corners[4] = {*quads[g][0], *quads[g][1], *quads[g][2], *quads[g][3]};
+        if (is_back(corners)) add_quad(&backs[6 * back_count++], quads[g]);
+        else add_quad(&fronts[6 * front_count++], quads[g]);
     }
-    if (!fronts) return;
-    for (int g = 0; g < 5; g++)
-        if (back[g]) draw_quad(setup, projected[g], 1);
+    if (!front_count) return;
+    draw_quads(setup, fronts, front_count, 0);
+    if (back_count) draw_quads(setup, backs, back_count, 1);
 }
 
 void shadow_draw(const mgCVisualMDT *visual, const ShadowSetup &setup, const mgFACE_GROUP *group) {

@@ -19,7 +19,7 @@ static struct {
     uint16_t params[32];
     unsigned end, begin, length, cursor, mode, enabled, phase;
     int depth[2];
-    int16_t down[2][39], up[2][39];
+    int16_t down[2][78], up[2][78];
     unsigned filter_cursor;
 } effects[2];
 
@@ -240,9 +240,10 @@ void spu_core_reverb(unsigned core, unsigned mode, int depth) {
 }
 
 static int effect_filter(const int16_t *samples, unsigned cursor, int scale) {
-    static const int taps[39] = {-1,0,2,0,-10,0,35,0,-103,0,266,0,-616,0,1332,0,-2960,0,10246,16384,10246,0,-2960,0,1332,0,-616,0,266,0,-103,0,35,0,-10,0,2,0,-1};
-    int64_t sum = 0;
-    for (unsigned i = 0; i < 39; ++i) sum += (int64_t)samples[(cursor + 39 - i) % 39] * taps[i];
+    static const int taps[10] = {-1, 2, -10, 35, -103, 266, -616, 1332, -2960, 10246};
+    const int16_t *newest = samples + cursor + 39;
+    int64_t sum = (int64_t)newest[-19] * 16384;
+    for (unsigned i = 0; i < 10; ++i) sum += (int64_t)(newest[-2 * (int)i] + newest[-38 + 2 * (int)i]) * taps[i];
     return clamp((int)((sum * scale) >> 15));
 }
 
@@ -275,11 +276,11 @@ static void effect_sample(unsigned core, const int32_t *input, int32_t *output) 
     unsigned cursor = effects[core].filter_cursor;
     unsigned channel = effects[core].phase;
     for (unsigned c = 0; c < 2; ++c) {
-        effects[core].down[c][cursor] = (int16_t)clamp(input[c]);
-        effects[core].up[c][cursor] = 0;
+        effects[core].down[c][cursor] = effects[core].down[c][cursor + 39] = (int16_t)clamp(input[c]);
+        effects[core].up[c][cursor] = effects[core].up[c][cursor + 39] = 0;
     }
     int filtered = effect_filter(effects[core].down[channel], cursor, 1);
-    effects[core].up[channel][cursor] = (int16_t)effect_channel(core, channel, filtered);
+    effects[core].up[channel][cursor] = effects[core].up[channel][cursor + 39] = (int16_t)effect_channel(core, channel, filtered);
     for (unsigned c = 0; c < 2; ++c) output[c] += multiply(effect_filter(effects[core].up[c], cursor, 2), effects[core].depth[c]);
     if (channel) effects[core].cursor = (effects[core].cursor + 1) % effects[core].length;
     effects[core].phase ^= 1;

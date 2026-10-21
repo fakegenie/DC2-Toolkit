@@ -16,9 +16,10 @@ struct FaceMesh {
     std::vector<MeshVertex> vertices;
     u_short type;
     u_int used;
+    int resident = -1;
 };
 
-enum { MESH_IDLE_FRAMES = 600 };
+enum { MESH_IDLE_FRAMES = 600, MESH_CACHE_LIMIT = 30000 };
 
 struct VisualDraw {
     mgCVisualMDT *visual;
@@ -76,6 +77,8 @@ void visual_build_face(const mgCVisualMDT *visual, const mgCFace *face, const mg
     port_stats.mesh_builds++;
     port_stats.cached_meshes = (uint32_t)face_meshes.size();
     mesh.type = face->type;
+    render_mesh_forget(mesh.resident, (int)mesh.vertices.size());
+    mesh.resident = -1;
     mesh.vertices.clear();
     int corners = face->vertex_num;
     if (corners < 3 || face->index == NULL) return;
@@ -93,6 +96,7 @@ void visual_build_face(const mgCVisualMDT *visual, const mgCFace *face, const mg
         for (int corner = 0; corner + 2 < corners; corner += 3)
             for (int i = 0; i < 3; i++) mesh.vertices.push_back(points[(size_t)(corner + i)]);
     }
+    mesh.resident = render_mesh_store(mesh.vertices.data(), (int)mesh.vertices.size());
 }
 
 static int mirrored(float (*matrix)[4]) {
@@ -122,16 +126,13 @@ static void draw_group(const VisualDraw &draw, const mgFACE_GROUP *group) {
     gs_texture_state(&textured, material->texture, &uniforms.depth[1], &uniforms.depth[2]);
     for (const mgCFace *face = group->face; face != NULL; face = face->next) {
         auto found = face_meshes.find(face);
-        if (found == face_meshes.end()) {
-            visual_build_face(draw.visual, face, draw.skinned ? ((const mgCVisualMotionMDT *)draw.visual)->weight : NULL);
-            found = face_meshes.find(face);
-        }
+        if (found == face_meshes.end()) continue;
         found->second.used = mesh_frame;
         if (found->second.vertices.empty()) continue;
         RenderState state = (found->second.type & MG_FACE_NO_TEXTURE) ? draw.state : textured;
         uniforms.flags[1] = found->second.type;
         render_mesh(&state, draw.cull, &uniforms, draw.skinned ? draw.bones : NULL, found->second.vertices.data(),
-                    (int)found->second.vertices.size());
+                    (int)found->second.vertices.size(), found->second.resident);
     }
 }
 
@@ -149,10 +150,14 @@ int visual_packet_draw(const void *common, const void *packet) {
 
 void visual_next_frame() {
     sorted_draws.clear();
-    if (++mesh_frame % MESH_IDLE_FRAMES != 0) return;
+    if (++mesh_frame % MESH_IDLE_FRAMES != 0 || face_meshes.size() <= MESH_CACHE_LIMIT) return;
     for (auto entry = face_meshes.begin(); entry != face_meshes.end();) {
-        if (mesh_frame - entry->second.used > MESH_IDLE_FRAMES) entry = face_meshes.erase(entry);
-        else ++entry;
+        if (mesh_frame - entry->second.used > MESH_IDLE_FRAMES) {
+            render_mesh_forget(entry->second.resident, (int)entry->second.vertices.size());
+            entry = face_meshes.erase(entry);
+        } else {
+            ++entry;
+        }
     }
 }
 

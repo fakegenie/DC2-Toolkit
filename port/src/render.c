@@ -59,6 +59,8 @@ typedef struct {
     FragmentState fragment;
     float blend_constant;
     int texture;
+    int resident;
+    SDL_GPUTexture *color;
     int sampler;
     SDL_Rect scissor;
     uint32_t offset;
@@ -95,6 +97,34 @@ static Pipeline pipelines[PIPELINE_LIMIT];
 static int pipeline_count;
 static Command pending[COMMAND_LIMIT];
 static int pending_count;
+enum { SPARE_LIMIT = 64, SPARE_FRAMES = 3 };
+static struct {
+    SDL_GPUTexture *texture;
+    int width;
+    int height;
+    uint64_t frame;
+} spares[SPARE_LIMIT];
+static uint64_t presented;
+enum { MESH_VERTEX_LIMIT = 1 << 20, MESH_FREE_LIMIT = 8192 };
+static SDL_GPUBuffer *mesh_buffer;
+static struct {
+    int first;
+    int count;
+} mesh_free[MESH_FREE_LIMIT];
+static int mesh_free_count;
+static struct {
+    int first;
+    int count;
+    MeshVertex *data;
+} *mesh_uploads;
+static int mesh_upload_count;
+static int mesh_upload_capacity;
+static struct {
+    int first;
+    int count;
+} *mesh_retired;
+static int mesh_retired_count;
+static int mesh_retired_capacity;
 static unsigned char *vertex_data;
 static uint32_t vertex_used;
 static uint32_t vertex_flushed;
@@ -234,6 +264,11 @@ int render_init(void) {
     }
     SDL_GPUBufferCreateInfo buffer = {SDL_GPU_BUFFERUSAGE_VERTEX, VERTEX_BYTES, 0};
     vertex_buffer = SDL_CreateGPUBuffer(device, &buffer);
+    SDL_GPUBufferCreateInfo meshes = {SDL_GPU_BUFFERUSAGE_VERTEX, MESH_VERTEX_LIMIT * (Uint32)sizeof(MeshVertex), 0};
+    mesh_buffer = SDL_CreateGPUBuffer(device, &meshes);
+    mesh_free[0].first = 0;
+    mesh_free[0].count = MESH_VERTEX_LIMIT;
+    mesh_free_count = mesh_buffer ? 1 : 0;
     SDL_GPUTransferBufferCreateInfo transfer = {SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD, VERTEX_BYTES, 0};
     vertex_transfer = SDL_CreateGPUTransferBuffer(device, &transfer);
     vertex_data = malloc(VERTEX_BYTES);
@@ -439,11 +474,118 @@ static int writes_depth(void) {
     return 0;
 }
 
+static void upload_meshes(SDL_GPUCommandBuffer *buffer) {
+    if (!mesh_upload_count) return;
+    uint32_t total = 0;
+    for (int i = 0; i < mesh_upload_count; ++i) total += (uint32_t)mesh_uploads[i].count * sizeof(MeshVertex);
+    SDL_GPUTransferBufferCreateInfo info = {SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD, total, 0};
+    SDL_GPUTransferBuffer *transfer = SDL_CreateGPUTransferBuffer(device, &info);
+    unsigned char *mapped = SDL_MapGPUTransferBuffer(device, transfer, false);
+    uint32_t offset = 0;
+    for (int i = 0; i < mesh_upload_count; ++i) {
+        uint32_t bytes = (uint32_t)mesh_uploads[i].count * sizeof(MeshVertex);
+        memcpy(mapped + offset, mesh_uploads[i].data, bytes);
+        offset += bytes;
+    }
+    SDL_UnmapGPUTransferBuffer(device, transfer);
+    SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(buffer);
+    offset = 0;
+    for (int i = 0; i < mesh_upload_count; ++i) {
+        uint32_t bytes = (uint32_t)mesh_uploads[i].count * sizeof(MeshVertex);
+        SDL_GPUTransferBufferLocation from = {transfer, offset};
+        SDL_GPUBufferRegion to = {mesh_buffer, (uint32_t)mesh_uploads[i].first * sizeof(MeshVertex), bytes};
+        SDL_UploadToGPUBuffer(copy, &from, &to, false);
+        offset += bytes;
+        free(mesh_uploads[i].data);
+    }
+    SDL_EndGPUCopyPass(copy);
+    SDL_ReleaseGPUTransferBuffer(device, transfer);
+    port_stats.upload_bytes += total;
+    mesh_upload_count = 0;
+}
+
+int render_mesh_store(const MeshVertex *vertices, int count) {
+    if (count <= 0) return -1;
+    if (mesh_upload_count == mesh_upload_capacity) {
+        int capacity = mesh_upload_capacity ? mesh_upload_capacity * 2 : 256;
+        void *grown = realloc(mesh_uploads, (size_t)capacity * sizeof *mesh_uploads);
+        if (!grown) return -1;
+        mesh_uploads = grown;
+        mesh_upload_capacity = capacity;
+    }
+    MeshVertex *data = malloc((size_t)count * sizeof *data);
+    if (!data) return -1;
+    for (int i = 0; i < mesh_free_count; ++i) {
+        if (mesh_free[i].count < count) continue;
+        int first = mesh_free[i].first;
+        mesh_free[i].first += count;
+        mesh_free[i].count -= count;
+        if (!mesh_free[i].count) {
+            memmove(&mesh_free[i], &mesh_free[i + 1], (size_t)(mesh_free_count - i - 1) * sizeof mesh_free[0]);
+            mesh_free_count--;
+        }
+        memcpy(data, vertices, (size_t)count * sizeof *data);
+        mesh_uploads[mesh_upload_count].first = first;
+        mesh_uploads[mesh_upload_count].count = count;
+        mesh_uploads[mesh_upload_count].data = data;
+        mesh_upload_count++;
+        return first;
+    }
+    free(data);
+    return -1;
+}
+
+static void release_mesh_range(int first, int count) {
+    int at = 0;
+    while (at < mesh_free_count && mesh_free[at].first < first) at++;
+    int joins_previous = at > 0 && mesh_free[at - 1].first + mesh_free[at - 1].count == first;
+    int joins_next = at < mesh_free_count && first + count == mesh_free[at].first;
+    if (joins_previous && joins_next) {
+        mesh_free[at - 1].count += count + mesh_free[at].count;
+        memmove(&mesh_free[at], &mesh_free[at + 1], (size_t)(mesh_free_count - at - 1) * sizeof mesh_free[0]);
+        mesh_free_count--;
+    } else if (joins_previous) {
+        mesh_free[at - 1].count += count;
+    } else if (joins_next) {
+        mesh_free[at].first = first;
+        mesh_free[at].count += count;
+    } else if (mesh_free_count < MESH_FREE_LIMIT) {
+        memmove(&mesh_free[at + 1], &mesh_free[at], (size_t)(mesh_free_count - at) * sizeof mesh_free[0]);
+        mesh_free[at].first = first;
+        mesh_free[at].count = count;
+        mesh_free_count++;
+    }
+}
+
+static void release_retired_meshes(void) {
+    for (int i = 0; i < mesh_retired_count; ++i) release_mesh_range(mesh_retired[i].first, mesh_retired[i].count);
+    mesh_retired_count = 0;
+}
+
+void render_mesh_forget(int first, int count) {
+    if (first < 0 || count <= 0) return;
+    if (!pending_count) {
+        release_mesh_range(first, count);
+        return;
+    }
+    if (mesh_retired_count == mesh_retired_capacity) {
+        int capacity = mesh_retired_capacity ? mesh_retired_capacity * 2 : 256;
+        void *grown = realloc(mesh_retired, (size_t)capacity * sizeof *mesh_retired);
+        if (!grown) return;
+        mesh_retired = grown;
+        mesh_retired_capacity = capacity;
+    }
+    mesh_retired[mesh_retired_count].first = first;
+    mesh_retired[mesh_retired_count].count = count;
+    mesh_retired_count++;
+}
+
 static void flush(void) {
     if (!pending_count) return;
     if (held_valid && pending_count < COMMAND_LIMIT) pending[pending_count++] = held;
     held_valid = 0;
     SDL_GPUCommandBuffer *buffer = command_buffer();
+    upload_meshes(buffer);
     uint32_t size = vertex_used - vertex_flushed;
     unsigned char *mapped = SDL_MapGPUTransferBuffer(device, vertex_transfer, vertex_cycle);
     if (!mapped) render_error("map vertices");
@@ -489,43 +631,114 @@ static void flush(void) {
     port_stats.render_passes++;
     port_stats.gpu_commands += (uint32_t)pending_count;
     float scale[4] = {2.0f / (float)target->width, 2.0f / (float)target->height, 0.0f, 0.0f};
-    int scale_pushed = 0;
+    SDL_GPUBuffer *bound_buffer = NULL;
+    SDL_GPUGraphicsPipeline *last_pipeline = NULL;
+    const Command *last = NULL;
+    int vertex_uniforms = -2, last_bones = -1;
     for (int i = 0; i < pending_count; ++i) {
         Command *command = &pending[i];
-        SDL_GPUBufferBinding binding = {vertex_buffer, command->offset};
-        SDL_BindGPUVertexBuffers(pass, 0, &binding, 1);
-        if (command->model >= 0) {
-            SDL_PushGPUVertexUniformData(buffer, 0, &models[command->model], sizeof models[0]);
-            SDL_PushGPUVertexUniformData(buffer, 1, bone_sets[command->bones], sizeof bone_sets[0]);
-            scale_pushed = 0;
-        } else if (!scale_pushed) {
-            SDL_PushGPUVertexUniformData(buffer, 0, scale, sizeof scale);
-            scale_pushed = 1;
+        SDL_GPUBuffer *source = command->resident ? mesh_buffer : vertex_buffer;
+        if (source != bound_buffer) {
+            SDL_GPUBufferBinding binding = {source, 0};
+            SDL_BindGPUVertexBuffers(pass, 0, &binding, 1);
+            bound_buffer = source;
         }
-        if (i == 0 || command->key != pending[i - 1].key) port_stats.pipeline_changes++;
-        SDL_BindGPUGraphicsPipeline(pass, pipeline_for(command->key | (mirror ? KEY_MIRROR : 0)));
-        SDL_SetGPUScissor(pass, &command->scissor);
-        SDL_FColor constant = {command->blend_constant, command->blend_constant, command->blend_constant,
-                               command->blend_constant};
-        SDL_SetGPUBlendConstants(pass, constant);
-        SDL_GPUTextureSamplerBinding sampled = {textures[command->texture].color, samplers[command->sampler]};
-        SDL_BindGPUFragmentSamplers(pass, 0, &sampled, 1);
-        SDL_PushGPUFragmentUniformData(buffer, 0, &command->fragment, sizeof command->fragment);
-        SDL_DrawGPUPrimitives(pass, (Uint32)command->count, 1, 0, 0);
+        if (command->model >= 0) {
+            if (command->model != vertex_uniforms)
+                SDL_PushGPUVertexUniformData(buffer, 0, &models[command->model], sizeof models[0]);
+            if (command->bones != last_bones)
+                SDL_PushGPUVertexUniformData(buffer, 1, bone_sets[command->bones], sizeof bone_sets[0]);
+            vertex_uniforms = command->model;
+            last_bones = command->bones;
+        } else if (vertex_uniforms != -1) {
+            SDL_PushGPUVertexUniformData(buffer, 0, scale, sizeof scale);
+            vertex_uniforms = -1;
+        }
+        SDL_GPUGraphicsPipeline *pipeline = pipeline_for(command->key | (mirror ? KEY_MIRROR : 0));
+        if (pipeline != last_pipeline) {
+            SDL_BindGPUGraphicsPipeline(pass, pipeline);
+            last_pipeline = pipeline;
+            port_stats.pipeline_changes++;
+        }
+        if (!last || memcmp(&command->scissor, &last->scissor, sizeof command->scissor))
+            SDL_SetGPUScissor(pass, &command->scissor);
+        if (!last || command->blend_constant != last->blend_constant) {
+            SDL_FColor constant = {command->blend_constant, command->blend_constant, command->blend_constant,
+                                   command->blend_constant};
+            SDL_SetGPUBlendConstants(pass, constant);
+        }
+        if (!last || command->color != last->color || command->sampler != last->sampler) {
+            SDL_GPUTextureSamplerBinding sampled = {command->color, samplers[command->sampler]};
+            SDL_BindGPUFragmentSamplers(pass, 0, &sampled, 1);
+        }
+        if (!last || memcmp(&command->fragment, &last->fragment, sizeof command->fragment))
+            SDL_PushGPUFragmentUniformData(buffer, 0, &command->fragment, sizeof command->fragment);
+        uint32_t stride = (command->key & KEY_MESH) ? sizeof(MeshVertex) : sizeof(RenderVertex);
+        SDL_DrawGPUPrimitives(pass, (Uint32)command->count, 1, command->offset / stride, 0);
+        last = command;
     }
     SDL_EndGPURenderPass(pass);
     pending_count = 0;
+    release_retired_meshes();
     model_count = 0;
     bone_count = 1;
     vertex_flushed = vertex_used;
 }
 
-static void flush_if_used(int texture) {
+static int used_by_pending(int texture) {
     for (int i = 0; i < pending_count; ++i)
-        if (pending[i].texture == texture) {
-            flush();
-            return;
+        if (pending[i].texture == texture) return 1;
+    return 0;
+}
+
+static void flush_if_used(int texture) {
+    if (used_by_pending(texture)) flush();
+}
+
+static SDL_GPUTexture *spare_texture(int width, int height) {
+    for (int i = 0; i < SPARE_LIMIT; ++i)
+        if (spares[i].texture && spares[i].width == width && spares[i].height == height &&
+            spares[i].frame + SPARE_FRAMES <= presented) {
+            SDL_GPUTexture *texture = spares[i].texture;
+            spares[i].texture = NULL;
+            return texture;
         }
+    return create_texture(width, height, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+                          SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET, 1);
+}
+
+static void retire_texture(SDL_GPUTexture *texture, int width, int height) {
+    int oldest = 0;
+    for (int i = 0; i < SPARE_LIMIT; ++i) {
+        if (!spares[i].texture) {
+            oldest = i;
+            break;
+        }
+        if (spares[i].frame < spares[oldest].frame) oldest = i;
+    }
+    if (spares[oldest].texture) SDL_ReleaseGPUTexture(device, spares[oldest].texture);
+    spares[oldest].texture = texture;
+    spares[oldest].width = width;
+    spares[oldest].height = height;
+    spares[oldest].frame = presented;
+}
+
+static void rename_texture(int slot) {
+    Texture *texture = &textures[slot];
+    if (texture->samples > 1 || texture->multi) {
+        flush();
+        return;
+    }
+    int width = texture->width * texture->scale, height = texture->height * texture->scale;
+    SDL_GPUTexture *fresh = spare_texture(width, height);
+    SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(command_buffer());
+    SDL_GPUTextureLocation from = {texture->color, 0, 0, 0, 0, 0};
+    SDL_GPUTextureLocation to = {fresh, 0, 0, 0, 0, 0};
+    SDL_CopyGPUTextureToTexture(copy, &from, &to, (Uint32)width, (Uint32)height, 1, false);
+    SDL_EndGPUCopyPass(copy);
+    retire_texture(texture->color, width, height);
+    texture->color = fresh;
+    port_stats.texture_renames++;
 }
 
 static void create_storage(Texture *texture) {
@@ -715,7 +928,7 @@ void render_copy(int source, int source_x, int source_y, int destination, int de
                  int width, int height) {
     if (width <= 0 || height <= 0) return;
     if (bound == source || bound == destination) flush();
-    flush_if_used(destination);
+    if (used_by_pending(destination)) rename_texture(destination);
     int scale = textures[source].scale;
     if (scale == textures[destination].scale) {
         SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(command_buffer());
@@ -829,6 +1042,8 @@ static int prepare(Command *command, const RenderState *state, uint32_t key_extr
     command->fragment.fog_color = state->fog_color;
     command->blend_constant = fix >= 128 ? 1.0f : (float)fix / 128.0f;
     command->texture = textured ? state->texture : blank;
+    command->resident = 0;
+    command->color = textures[command->texture].color;
     if (!state->depth_read) {
         if (render_toggles.overdraw) {
             command->key = (command->key & ~0x7fffu) | SDL_GPU_BLENDFACTOR_ONE | SDL_GPU_BLENDFACTOR_ONE << 4 |
@@ -851,15 +1066,16 @@ static int prepare(Command *command, const RenderState *state, uint32_t key_extr
     return 1;
 }
 
-static int store_vertices(Command *command, const void *vertices, uint32_t bytes, int count) {
-    if (vertex_used + bytes > VERTEX_BYTES || pending_count == COMMAND_LIMIT) {
+static int store_vertices(Command *command, const void *vertices, uint32_t bytes, int count, uint32_t stride) {
+    uint32_t start = (vertex_used + stride - 1) / stride * stride;
+    if (start + bytes > VERTEX_BYTES || pending_count == COMMAND_LIMIT) {
         fputs("render: too many vertices in one frame\n", stderr);
         return 0;
     }
-    command->offset = vertex_used;
+    command->offset = start;
     command->count = count;
-    memcpy(vertex_data + vertex_used, vertices, bytes);
-    vertex_used += bytes;
+    memcpy(vertex_data + start, vertices, bytes);
+    vertex_used = start + bytes;
     return 1;
 }
 
@@ -874,6 +1090,7 @@ static void highlight(const Command *command) {
                 SDL_GPU_BLENDOP_ADD << 8 | 15 << 11 | (uint32_t)SDL_GPU_COMPAREOP_ALWAYS << 17;
     solid.fragment.flags = SOLID;
     solid.texture = blank;
+    solid.color = textures[blank].color;
     held = solid;
     held_valid = 1;
 }
@@ -938,7 +1155,7 @@ static void restore(void) {
                   (uint32_t)SDL_GPU_COMPAREOP_ALWAYS << 17 | (uint32_t)RENDER_TRIANGLES << 15 |
                   (uint32_t)sample_count(target->samples) << KEY_SAMPLES_SHIFT;
     command.fragment.flags = TEXTURED | DECAL;
-    if (store_vertices(&command, quad, sizeof quad, 6)) append(&command);
+    if (store_vertices(&command, quad, sizeof quad, 6, sizeof(RenderVertex))) append(&command);
 }
 
 static void submit(const RenderState *state, int topology, const RenderVertex *vertices, int count, int index,
@@ -946,7 +1163,7 @@ static void submit(const RenderState *state, int topology, const RenderVertex *v
     if (!pending_count && textures[bound].stale) restore();
     Command command;
     if (!prepare(&command, state, (uint32_t)topology << 15) ||
-        !store_vertices(&command, vertices, (uint32_t)(count * (int)sizeof(RenderVertex)), count)) {
+        !store_vertices(&command, vertices, (uint32_t)(count * (int)sizeof(RenderVertex)), count, sizeof(RenderVertex))) {
         if (capturing) record(source, state, topology, 0, count, vertices, -1, 0, NULL);
         return;
     }
@@ -1001,7 +1218,7 @@ void render_draw(const RenderState *state, int topology, const RenderVertex *ver
 }
 
 void render_mesh(const RenderState *state, int cull, const MeshUniforms *uniforms, const float *bones,
-                 const MeshVertex *vertices, int count) {
+                 const MeshVertex *vertices, int count, int resident) {
     if (!bound || count <= 0 || render_toggles.no_models) return;
     port_stats.mesh_calls++;
     port_stats.vertices += (uint32_t)count;
@@ -1011,8 +1228,14 @@ void render_mesh(const RenderState *state, int cull, const MeshUniforms *uniform
     if (!pending_count && textures[bound].stale) restore();
     Command command;
     uint32_t key = KEY_MESH | (uint32_t)RENDER_TRIANGLES << 15 | (uint32_t)cull << KEY_CULL_SHIFT;
-    if (!prepare(&command, state, key) ||
-        !store_vertices(&command, vertices, (uint32_t)(count * (int)sizeof(MeshVertex)), count)) {
+    int prepared = prepare(&command, state, key);
+    if (prepared && resident >= 0) {
+        command.offset = (uint32_t)resident * sizeof(MeshVertex);
+        command.count = count;
+        command.resident = 1;
+    }
+    if (!prepared ||
+        (resident < 0 && !store_vertices(&command, vertices, (uint32_t)(count * (int)sizeof(MeshVertex)), count, sizeof(MeshVertex)))) {
         if (capturing) record(RENDER_SOURCE_MESH, state, RENDER_TRIANGLES, cull, count, NULL, -1, 0, uniforms);
         return;
     }
@@ -1112,6 +1335,7 @@ static void apply_quality(void) {
 
 void render_present(int target, int width, int height) {
     flush();
+    presented++;
     frame_draws = 0;
     SDL_GPUCommandBuffer *buffer = command_buffer();
     SDL_GPUTexture *swapchain = NULL;

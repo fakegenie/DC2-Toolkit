@@ -103,13 +103,14 @@ static int image_bytes(int width, int height, int bpp) {
 
 static u_long checksum(const void *data, int bytes) {
     const unsigned char *p = (const unsigned char *)data;
-    u_long hash = 0xcbf29ce484222325ull;
+    u_long lanes[4] = {0xcbf29ce484222325ull, 0x84222325cbf29ce4ull, 0x9e3779b97f4a7c15ull, 0xc2b2ae3d27d4eb4full};
     int i = 0;
-    for (; i + 8 <= bytes; i += 8) {
-        u_long word;
-        memcpy(&word, p + i, 8);
-        hash = (hash ^ word) * 0x100000001b3ull;
+    for (; i + 32 <= bytes; i += 32) {
+        u_long words[4];
+        memcpy(words, p + i, 32);
+        for (int lane = 0; lane < 4; ++lane) lanes[lane] = (lanes[lane] ^ words[lane]) * 0x100000001b3ull;
     }
+    u_long hash = lanes[0] ^ lanes[1] * 3 ^ lanes[2] * 5 ^ lanes[3] * 7;
     for (; i < bytes; ++i) hash = (hash ^ p[i]) * 0x100000001b3ull;
     return hash;
 }

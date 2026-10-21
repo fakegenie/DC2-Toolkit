@@ -138,7 +138,9 @@ void render_bind(int target);
 int render_bound(void);
 void render_draw(const RenderState *state, int topology, const RenderVertex *vertices, int count);
 void render_mesh(const RenderState *state, int cull, const MeshUniforms *uniforms, const float *bones,
-                 const MeshVertex *vertices, int count);
+                 const MeshVertex *vertices, int count, int resident);
+int render_mesh_store(const MeshVertex *vertices, int count);
+void render_mesh_forget(int first, int count);
 void render_present(int target, int width, int height);
 
 void render_capture_begin(void);

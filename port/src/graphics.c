@@ -57,12 +57,16 @@ void port_graphics_tick(void) {
     graphics_field();
 }
 
-int sceGsSyncV(int mode) {
-    if (mode == 1) return (int)(port_graphics.fields & 1);
+void port_graphics_wait(void) {
     uint64_t now = monotonic_ns();
     if (!next_field) next_field = now + port_field_period;
     sleep_until(next_field);
     port_graphics_tick();
+}
+
+int sceGsSyncV(int mode) {
+    if (mode == 1) return (int)(port_graphics.fields & 1);
+    port_graphics_wait();
     return (int)(port_graphics.fields & 1);
 }
 

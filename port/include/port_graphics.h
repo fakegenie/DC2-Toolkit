@@ -18,6 +18,7 @@ extern "C" {
 extern PortGraphicsState port_graphics;
 extern uint64_t port_field_period;
 void port_graphics_tick(void);
+void port_graphics_wait(void);
 int sceGsSyncV(int mode);
 #ifdef __cplusplus
 }

@@ -4,7 +4,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 enum { THREAD_LIMIT = 32, SEMA_LIMIT = 64, HANDLER_LIMIT = 64, STACK_SIZE = 1024 * 1024 };
 enum { UNUSED, DORMANT, READY, RUNNING, WAITING };
@@ -54,6 +53,7 @@ static int game_result;
 static int host_requested;
 
 extern void port_graphics_tick(void);
+extern void port_graphics_wait(void);
 
 __attribute__((weak)) void debug_host(void) {}
 
@@ -80,8 +80,8 @@ static void schedule(void) {
         port_graphics_tick();
         next = highest();
         if (!next) {
-            struct timespec pause = {0, 1000000};
-            nanosleep(&pause, NULL);
+            port_graphics_wait();
+            next = highest();
         }
     }
     running = next;

@@ -18,6 +18,7 @@ typedef struct {
     uint32_t downloads;
     uint32_t texture_decodes;
     uint32_t target_creates;
+    uint32_t texture_renames;
     uint32_t mesh_builds;
     uint32_t sorted_draws;
     uint32_t allocations;

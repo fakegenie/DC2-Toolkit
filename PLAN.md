@@ -226,7 +226,16 @@ written fresh. These are what it found to fix:
   thread) and busy time per frame (frame time less the wait for the next field) in a fixed set of towns,
   dungeons and boss fights (port 7792) and compares it with the previous run in
   `build/port/perf-bench.json`. Busy time includes the kernel's idle sleeps, so `game_ms` is not engine
-  work alone; compiling the engine at -O2 changed it by a few percent.
+  work alone. Compiling the engine at -O2 saves 3-5% of CPU in towns and 17% in dungeons; it stays at -O0.
+- **Where the CPU goes** (`debug.py profile`, count `iokit_user_client_trap` as work: it is Metal
+  submitting command buffers): game logic is small; the cost is draw submission and render passes
+  (47 a frame in Balance Valley, 53 in the Dark Genie fight), then SPU2 mixing on the main thread.
+  Done: unchanged GPU state is not resent, queued draws keep the texture they sampled so copies into
+  it rename it instead of ending the pass, meshes stay in a GPU buffer, the kernel sleeps to the next
+  field. Still open: encoding the whole frame at present (one vertex upload instead of one per pass),
+  the add/subtract alternation of shadow volumes (about 2500 commands in the Dark Genie fight), the
+  heat-haze frame copies (18 passes in Balance Valley), and characters composited one by one between
+  targets 2 and 10.
 - **The replay harness:** `python3 -I port/tests/gameplay.py` links
   `build/port/replay/darkchronicle`; `DC2TK_REPLAY_FIELDS`, `DC2TK_REPLAY_SKIP`,
   `DC2TK_REPLAY_FIGHT` and `DC2TK_REPLAY_SCREENSHOTS` steer it.

@@ -59,6 +59,7 @@ def launch(saves, log):
             raise SystemExit(f"the game exited with {process.returncode} while starting")
         if request("status", timeout=1):
             break
+    request("window")
     request("speed", {"value": "0"})
     request("wait", {"frames": "320"})
     request("press", {"buttons": "cross", "frames": "6"})
