@@ -209,7 +209,7 @@ def compile_one(source, name):
     if name == "main":
         changes.append(f"--redefine-sym={PREFIX}main={PREFIX}port_game_main")
     return compile_command(source, target, depfile, command_file, command, changes,
-                           operators=not c and not name.startswith("debug_"))
+                           operators=not c and not name.startswith(("debug_", "port_")))
 
 
 def compile_command(source, target, depfile, command_file, command, changes, operators=False):
@@ -258,8 +258,12 @@ def link(objects, extra, binary):
         platform = [f"-Wl,-alias,_{target},_{alias}" for alias, target in ALIASES.items()]
     else:
         platform = ["-no-pie", "-Wl,--no-demangle", *(f"-Wl,--defsym={alias}={target}" for alias, target in ALIASES.items())]
-    command = [LINKER, *TARGET, "-o", str(binary), *map(str, objects), *map(str, extra), *platform, *LINK_FLAGS]
-    return subprocess.run(command, capture_output=True, text=True)
+    fresh = binary.with_name(binary.name + ".linking")
+    command = [LINKER, *TARGET, "-o", str(fresh), *map(str, objects), *map(str, extra), *platform, *LINK_FLAGS]
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode == 0:
+        os.replace(fresh, binary)
+    return result
 
 
 def undefined(link_errors, objects):

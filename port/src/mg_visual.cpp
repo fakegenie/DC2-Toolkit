@@ -15,7 +15,10 @@
 struct FaceMesh {
     std::vector<MeshVertex> vertices;
     u_short type;
+    u_int used;
 };
+
+enum { MESH_IDLE_FRAMES = 600 };
 
 struct VisualDraw {
     mgCVisualMDT *visual;
@@ -29,6 +32,7 @@ struct VisualDraw {
 };
 
 static std::unordered_map<const mgCFace *, FaceMesh> face_meshes;
+static u_int mesh_frame;
 static std::vector<VisualDraw> sorted_draws;
 static VisualDraw current;
 
@@ -68,6 +72,7 @@ static MeshVertex corner_vertex(const mgCVisualMDT *visual, const mgCFace *face,
 
 void visual_build_face(const mgCVisualMDT *visual, const mgCFace *face, const mgVertexWeight *weights) {
     FaceMesh &mesh = face_meshes[face];
+    mesh.used = mesh_frame;
     port_stats.mesh_builds++;
     port_stats.cached_meshes = (uint32_t)face_meshes.size();
     mesh.type = face->type;
@@ -90,6 +95,13 @@ void visual_build_face(const mgCVisualMDT *visual, const mgCFace *face, const mg
     }
 }
 
+static int mirrored(float (*matrix)[4]) {
+    float determinant = matrix[0][0] * (matrix[1][1] * matrix[2][2] - matrix[1][2] * matrix[2][1]) -
+                        matrix[0][1] * (matrix[1][0] * matrix[2][2] - matrix[1][2] * matrix[2][0]) +
+                        matrix[0][2] * (matrix[1][0] * matrix[2][1] - matrix[1][1] * matrix[2][0]);
+    return determinant < 0.0f;
+}
+
 static void copy_matrix(float *out, float (*matrix)[4]) {
     memcpy(out, matrix, 16 * sizeof(float));
 }
@@ -110,7 +122,12 @@ static void draw_group(const VisualDraw &draw, const mgFACE_GROUP *group) {
     gs_texture_state(&textured, material->texture, &uniforms.depth[1], &uniforms.depth[2]);
     for (const mgCFace *face = group->face; face != NULL; face = face->next) {
         auto found = face_meshes.find(face);
-        if (found == face_meshes.end() || found->second.vertices.empty()) continue;
+        if (found == face_meshes.end()) {
+            visual_build_face(draw.visual, face, draw.skinned ? ((const mgCVisualMotionMDT *)draw.visual)->weight : NULL);
+            found = face_meshes.find(face);
+        }
+        found->second.used = mesh_frame;
+        if (found->second.vertices.empty()) continue;
         RenderState state = (found->second.type & MG_FACE_NO_TEXTURE) ? draw.state : textured;
         uniforms.flags[1] = found->second.type;
         render_mesh(&state, draw.cull, &uniforms, draw.skinned ? draw.bones : NULL, found->second.vertices.data(),
@@ -132,6 +149,11 @@ int visual_packet_draw(const void *common, const void *packet) {
 
 void visual_next_frame() {
     sorted_draws.clear();
+    if (++mesh_frame % MESH_IDLE_FRAMES != 0) return;
+    for (auto entry = face_meshes.begin(); entry != face_meshes.end();) {
+        if (mesh_frame - entry->second.used > MESH_IDLE_FRAMES) entry = face_meshes.erase(entry);
+        else ++entry;
+    }
 }
 
 PORT_OVERRIDE int mgCVisualMDT::CreateFacePacket(u_int *packet, mgCFace *face) {
@@ -238,6 +260,7 @@ PORT_OVERRIDE int mgCVisualMDT::CreateRenderInfoPacket(u_int *packet, float (*ma
     draw.state.fog = fogged;
     draw.state.fog_color = fog_colour;
     draw.cull = RENDER_CULL_NONE;
+    if (attr->program_option != 0) draw.cull = mirrored(matrix) ? RENDER_CULL_FRONT : RENDER_CULL_BACK;
     if (info->motion != 0) {
         static u_int bone_packet[4 + 32 * 16];
         memset(bone_packet, 0, sizeof bone_packet);

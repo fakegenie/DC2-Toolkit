@@ -911,5 +911,40 @@
     "file": "ps2/src/dataread.cpp",
     "find": "        entry->name += base;",
     "replace": "        entry->name = (char *) (base + entry->name_offset);"
+  },
+  {
+    "file": "ps2/src/gameutil.cpp",
+    "find": "    unsigned int   vertex;",
+    "replace": "    int            vertex;"
+  },
+  {
+    "file": "ps2/src/charasetup.cpp",
+    "find": "#define CHARA_SCRIPT_RUNTIME_DELTA (((sizeof(RS_STACKDATA) - 8) * 0x80 + (sizeof(RS_CALLDATA) - 12) * 0x200) / 16)\n",
+    "replace": "#define CHARA_SCRIPT_RUNTIME_DELTA (((sizeof(RS_STACKDATA) - 8) * 0x80 + (sizeof(RS_CALLDATA) - 12) * 0x200) / 16)\n#define CHARA_MODEL_STACK_EXTRA 12000\n"
+  },
+  {
+    "file": "ps2/src/charasetup.cpp",
+    "find": "    {68500,  40000, 7000,",
+    "replace": "    {68500 + CHARA_MODEL_STACK_EXTRA,  40000 + CHARA_MODEL_STACK_EXTRA, 7000,"
+  },
+  {
+    "file": "ps2/src/charasetup.cpp",
+    "find": "    {30000,  30000, 60000, 10000,",
+    "replace": "    {30000 + CHARA_MODEL_STACK_EXTRA,  30000 + CHARA_MODEL_STACK_EXTRA, 60000 + CHARA_MODEL_STACK_EXTRA, 10000,"
+  },
+  {
+    "file": "ps2/src/charasetup.cpp",
+    "find": "    {75000,  40000, 7000,",
+    "replace": "    {75000 + CHARA_MODEL_STACK_EXTRA,  40000, 7000,"
+  },
+  {
+    "file": "ps2/src/charasetup.cpp",
+    "find": "    {120000, 0,",
+    "replace": "    {120000 + CHARA_MODEL_STACK_EXTRA, 0,"
+  },
+  {
+    "file": "ps2/src/funcpoint.cpp",
+    "find": "        case OBJ_ANIME_MODE_PINGPONG_ONCE:\n            mgAddVector(param, speed);\n",
+    "replace": "        case OBJ_ANIME_MODE_PINGPONG_ONCE:\n            for (int axis = 0; axis < 3; axis++) {\n                if ((settings->end[axis] - settings->param[axis]) * (back != 0 ? -1.0f : 1.0f) * speed[axis] < 0.0f) {\n                    speed[axis] = -speed[axis];\n                }\n            }\n\n            mgAddVector(param, speed);\n"
   }
 ]

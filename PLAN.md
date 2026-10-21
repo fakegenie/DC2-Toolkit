@@ -217,6 +217,16 @@ written fresh. These are what it found to fix:
 - **Golden screenshot tests:** `python3 -I tools/golden_port.py` runs `port/tests/golden/*.json`
   against the debug build, paused and stepped frame by frame; `--update` writes the baselines to
   `build/port/golden/` (game imagery, never in git).
+- **Crash sweep:** `python3 -I tools/event_sweep.py` plays every row of the debug menu's event list
+  (`event/view_pal.txt`) in its own copy of the debug build (port 7791, throwaway saves) and writes
+  `build/port/event-sweep.json` with the top of each crash's backtrace; `--rows 32,129` or `--from 145`
+  for a subset. Rows run in order without a save reset, as the in-game list does, so a crash can need
+  the rows before it.
+- **Frame-time benchmark:** `python3 -I tools/perf_bench.py` measures CPU time per game frame (every
+  thread) and busy time per frame (frame time less the wait for the next field) in a fixed set of towns,
+  dungeons and boss fights (port 7792) and compares it with the previous run in
+  `build/port/perf-bench.json`. Busy time includes the kernel's idle sleeps, so `game_ms` is not engine
+  work alone; compiling the engine at -O2 changed it by a few percent.
 - **The replay harness:** `python3 -I port/tests/gameplay.py` links
   `build/port/replay/darkchronicle`; `DC2TK_REPLAY_FIELDS`, `DC2TK_REPLAY_SKIP`,
   `DC2TK_REPLAY_FIGHT` and `DC2TK_REPLAY_SCREENSHOTS` steer it.
