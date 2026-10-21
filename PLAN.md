@@ -15,7 +15,9 @@ macOS, Vulkan elsewhere), and `CSound` calls the synth directly with no IOP behi
 and runs on macOS arm64 with 0 stubbed symbols, at 50 Hz in a real window with real sound: the
 language select, title, the attract demo, New Game, the costume screen, the opening cutscene,
 the castle dungeon with its HUD, and the main and item menus. `port/tests/run.py` passes on macOS.
-Linux compiles and links (checked in Docker, aarch64) but has not been run since. Part 2 below
+Linux x86-64 builds and plays too (2026-10-21, in a Docker container on the Mac; see "This
+machine"): both binaries link with 0 stubs, the title, a town and a dungeon play headless on
+Vulkan, and `port/tests/run.py` passes; fixes 17 to 22 are what it left. Part 2 below
 describes the port as it is now; the table and notes after this paragraph are the earlier review
 of the emulated port and are kept for the engine milestones and the fixes.
 
@@ -136,6 +138,24 @@ written fresh. These are what it found to fix:
     `tools/test_native_prepare.py` and `port/tests/native_save.py` lack the usage docstring.
 16. **Disk:** `build/` is 33 GB, 22 GB of it `build/validation` (traces and captures). Once the
     work is committed, keep the save checkpoints and delete the traces.
+17. **Savestates on Linux.** `port/debug/savestate.cpp` finds the restored objects' data through
+    the Mach-O debug map and refuses elsewhere. Read the ELF `.symtab` instead (`STT_FILE` symbols
+    name each object's locals; globals through `build/port/objects.json`), and replace the
+    `mincore` walk of `0x10000000-0x20000000`, mostly unmapped on Linux, with the mapped pieces.
+18. **`profile` on Linux.** `port/debug/core.cpp` runs macOS's `/usr/bin/sample`; use `perf`, or
+    say it is missing.
+19. **Golden baselines are per GPU.** Lavapipe's pictures differ from Metal's by 1 to 3 per
+    channel on about half the title's pixels, and up to 44 on seven edge pixels; the `capture`
+    draw lists at the same frame are identical, so the CPU side matches. Keep baselines per
+    platform (for example `build/port/golden/baseline-<platform>/`), or compare across GPUs
+    with a tolerance and an outlier count.
+20. **The default save folder** on Linux is `./saves` (macOS uses iCloud Drive when it exists).
+    Use `$XDG_DATA_HOME/Dark Chronicle/saves`, falling back to `~/.local/share`.
+21. **The costume screen draws white patches over Max** (face, hands, a block over the body),
+    on macOS and Linux alike, in the release build after New Game.
+22. **Debug warps from the title during the attract demo** only end the demo: the warp's
+    Start+Select press is taken as "leave the demo", so the first `town` or `dungeon` there does
+    nothing and a second one is needed.
 
 ### Gates only the user can run
 
@@ -241,6 +261,22 @@ written fresh. These are what it found to fix:
   the `dc2tk-rust` image (`printf 'FROM rust:1-trixie\nRUN rustup component add rustfmt clippy\n' |
   docker build -t dc2tk-rust -`); `python3 -I tools/port_sdk.py` copies SDL3 out of Kazarov's
   image and `python3 -I tools/movie_sdk.py` builds FFmpeg 8.0.1's MPEG-2 decoder.
+- **Linux x86-64 from this Mac:** OrbStack's Docker runs `--platform linux/amd64` containers
+  under Rosetta on a real Linux kernel. A Debian trixie image with `clang lld llvm binutils
+  python3 pkg-config libsdl3-dev libavcodec-dev libavutil-dev mesa-vulkan-drivers` (clang 19,
+  SDL 3.2.10, FFmpeg 7.1) is enough; `tools/port.py` then finds SDL3 and FFmpeg through
+  `pkg-config`, and `--movies --debug` links both binaries in about a minute. Add `xvfb` for an
+  X display, or run with `SDL_VIDEO_DRIVER=offscreen` (Vulkan on lavapipe works with either);
+  `SDL_AUDIO_DRIVER=disk SDL_AUDIO_DISK_OUTPUT_FILE=out.raw` records the sound. Mount the
+  repository at its own path, mount a separate folder over `build/port` so the Linux and macOS
+  builds do not overwrite each other, and mount `dc2.iso` too. Speed there (8 to 50 frames a
+  second on lavapipe under Rosetta) says nothing about real hardware.
+- **What Linux does differently:** EE threads switch with `ucontext` (about 47 switches a
+  second, 0.3 µs each, so no asm is needed); the binary is non-PIE at `0x400000`, with data and
+  BSS at `0x727000-0x9a77000` in a memfd mirrored at `+0x20000000` and `+0x30000000`, and the EE
+  registers, GS registers and scratchpad mapped at their PS2 addresses; shaders take the SPIR-V
+  path (`tools/port_shaders.py` there reproduces `shaders.h` byte for byte). Savestates and
+  `profile` are macOS-only (fixes 17, 18).
 - **Kazarov's image** `kazarov-dev:01b70a4a6008` is made by `dc2tk engine` when missing (a few
   minutes).
 - **The scratch folder under `/tmp` is cleared by a reboot.**
