@@ -618,7 +618,42 @@
   {
     "file": "ps2/include/runscript.hpp",
     "find": "STATIC_ASSERT(sizeof(RS_CALLDATA) == 0xC);",
-    "replace": "STATIC_ASSERT(sizeof(RS_CALLDATA) == 0xC);\n\nconstexpr int RS_MONSTER_MEMORY_QUADWORDS = 4000 + (128 * sizeof(RS_STACKDATA) + 512 * sizeof(RS_CALLDATA) - 7168 + 15) / 16;"
+    "replace": "STATIC_ASSERT(sizeof(RS_CALLDATA) == 0xC);\n\nconstexpr int RS_SCRIPT_EXTRA_QUADWORDS = (128 * sizeof(RS_STACKDATA) + 512 * sizeof(RS_CALLDATA) - 7168 + 15) / 16;\nconstexpr int RS_MONSTER_MEMORY_QUADWORDS = 4000 + RS_SCRIPT_EXTRA_QUADWORDS;"
+  },
+  {
+    "file": "ps2/src/mainloop.cpp",
+    "find": "#include \"mainloop.hpp\"",
+    "replace": "#include \"mainloop.hpp\"\n#include \"runscript.hpp\""
+  },
+  {
+    "file": "ps2/src/mainloop.cpp",
+    "find": "u_long128 main_buffer[0x1A0000];",
+    "replace": "u_long128 main_buffer[0x1A0000 + RS_SCRIPT_EXTRA_QUADWORDS];"
+  },
+  {
+    "file": "ps2/src/mainloop.cpp",
+    "find": "memory->stSetBuffer(main_buffer, 0x1A0000);",
+    "replace": "memory->stSetBuffer(main_buffer, 0x1A0000 + RS_SCRIPT_EXTRA_QUADWORDS);"
+  },
+  {
+    "file": "ps2/src/mainloop.cpp",
+    "find": "memory->stSetBuffer(&main_buffer[5000], 0x1A0000 - 5000);",
+    "replace": "memory->stSetBuffer(&main_buffer[5000], 0x1A0000 + RS_SCRIPT_EXTRA_QUADWORDS - 5000);"
+  },
+  {
+    "file": "ps2/src/editloop.cpp",
+    "find": "#include \"mainloop.hpp\"",
+    "replace": "#include \"mainloop.hpp\"\n#include \"runscript.hpp\""
+  },
+  {
+    "file": "ps2/src/editloop.cpp",
+    "find": "script_data = main_stack->stAlloc64(20000);",
+    "replace": "script_data = main_stack->stAlloc64(20000 + RS_SCRIPT_EXTRA_QUADWORDS);"
+  },
+  {
+    "file": "ps2/src/editloop.cpp",
+    "find": "ScriptBuffer__2.stSetBuffer(script_data, 20000);",
+    "replace": "ScriptBuffer__2.stSetBuffer(script_data, 20000 + RS_SCRIPT_EXTRA_QUADWORDS);"
   },
   {
     "file": "ps2/src/dng_event.cpp",
