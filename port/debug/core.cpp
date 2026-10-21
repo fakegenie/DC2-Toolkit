@@ -193,7 +193,8 @@ void debug_finish(DebugReply *reply) {
 
 static const DebugCommand *find_command(const char *name) {
     const DebugCommand *tables[] = {debug_core_commands, debug_scenario_commands, debug_capture_commands,
-                                    debug_replay_commands, debug_savestate_commands, debug_reload_commands};
+                                    debug_replay_commands, debug_savestate_commands, debug_reload_commands,
+                                    debug_overlay_commands};
     for (const DebugCommand *table : tables)
         for (const DebugCommand *command = table; command->name; ++command)
             if (!strcmp(command->name, name)) return command;
@@ -449,7 +450,8 @@ static void finish_profile(void) {
 static int command_help(const DebugArgs *args, DebugReply *reply) {
     (void)args;
     const DebugCommand *tables[] = {debug_core_commands, debug_scenario_commands, debug_capture_commands,
-                                    debug_replay_commands, debug_savestate_commands, debug_reload_commands};
+                                    debug_replay_commands, debug_savestate_commands, debug_reload_commands,
+                                    debug_overlay_commands};
     debug_print(reply, "{\"commands\": [");
     int first = 1;
     for (const DebugCommand *table : tables)

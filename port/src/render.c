@@ -716,6 +716,7 @@ static void retire_texture(SDL_GPUTexture *texture, int width, int height) {
         }
         if (spares[i].frame < spares[oldest].frame) oldest = i;
     }
+    if (spares[oldest].texture && spares[oldest].frame == presented) flush();
     if (spares[oldest].texture) SDL_ReleaseGPUTexture(device, spares[oldest].texture);
     spares[oldest].texture = texture;
     spares[oldest].width = width;
@@ -1169,7 +1170,8 @@ static void submit(const RenderState *state, int topology, const RenderVertex *v
     }
     Command *last = pending_count ? &pending[pending_count - 1] : NULL;
     int merged = last && last->model < 0 && last->offset + (uint32_t)last->count * sizeof(RenderVertex) == command.offset &&
-                 last->key == command.key && last->texture == command.texture && last->sampler == command.sampler &&
+                 last->key == command.key && last->texture == command.texture && last->color == command.color &&
+                 last->sampler == command.sampler &&
                  last->blend_constant == command.blend_constant &&
                  !memcmp(&last->fragment, &command.fragment, sizeof last->fragment) &&
                  !memcmp(&last->scissor, &command.scissor, sizeof last->scissor);

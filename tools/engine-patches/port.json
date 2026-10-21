@@ -946,5 +946,10 @@
     "file": "ps2/src/funcpoint.cpp",
     "find": "        case OBJ_ANIME_MODE_PINGPONG_ONCE:\n            mgAddVector(param, speed);\n",
     "replace": "        case OBJ_ANIME_MODE_PINGPONG_ONCE:\n            for (int axis = 0; axis < 3; axis++) {\n                if ((settings->end[axis] - settings->param[axis]) * (back != 0 ? -1.0f : 1.0f) * speed[axis] < 0.0f) {\n                    speed[axis] = -speed[axis];\n                }\n            }\n\n            mgAddVector(param, speed);\n"
+  },
+  {
+    "file": "ps2/src/event_func.cpp",
+    "find": "void EdEventDraw() {\n    int hit_no;\n    int sprite_no;\n",
+    "replace": "#include \"port_debug.h\"\n\nvoid EdEventDraw() {\n    int hit_no;\n    int sprite_no;\n\n    debug_overlay();\n"
   }
 ]

@@ -145,20 +145,33 @@ static void frame_graph(void) {
     float spike_y = origin.y + size.y - spike_ms / top_ms * size.y;
     draw->AddLine(ImVec2(origin.x, spike_y), ImVec2(origin.x + size.x, spike_y), IM_COL32(200, 60, 60, 255));
     float step = size.x / (float)(count - 1);
-    ImU32 colors[4] = {IM_COL32(230, 230, 230, 255), IM_COL32(90, 170, 250, 255), IM_COL32(250, 170, 60, 255),
-                       IM_COL32(120, 220, 120, 255)};
-    for (int series = 0; series < 4; ++series) {
+    ImU32 colors[5] = {IM_COL32(230, 230, 230, 255), IM_COL32(90, 170, 250, 255), IM_COL32(250, 170, 60, 255),
+                       IM_COL32(120, 220, 120, 255), IM_COL32(200, 120, 250, 255)};
+    int order[5] = {3, 2, 1, 4, 0};
+    const DebugFrame *newest = debug_frame_back(0);
+    int first = newest && ((newest->frame - (unsigned)(count - 1)) & 1) ? count - 2 : count - 1;
+    for (int drawn = 0; drawn < 5; ++drawn) {
+        int series = order[drawn];
         ImVec2 previous;
         int have = 0;
-        for (int i = count - 1; i >= 0; --i) {
-            const DebugFrame *frame = debug_frame_back(i);
-            if (!frame) continue;
-            float value = series == 0 ? frame->frame_ms : series == 1 ? frame->game_ms
-                          : series == 2 ? frame->draw_ms : frame->present_ms;
+        for (int i = first; i >= 0; i -= 2) {
+            float value = 0.0f, longest = 0.0f;
+            int found = 0;
+            for (int j = i; j > i - 2 && j >= 0; --j) {
+                const DebugFrame *frame = debug_frame_back(j);
+                if (!frame) continue;
+                float busy = frame->frame_ms - frame->wait_ms;
+                float sample = series == 0 ? frame->frame_ms : series == 1 ? frame->game_ms
+                               : series == 2 ? frame->draw_ms : series == 3 ? frame->present_ms : busy > 0.0f ? busy : 0.0f;
+                if (sample > value) value = sample;
+                if (frame->frame_ms > longest) longest = frame->frame_ms;
+                found = 1;
+            }
+            if (!found) continue;
             if (value > top_ms) value = top_ms;
             ImVec2 point(origin.x + (float)(count - 1 - i) * step, origin.y + size.y - value / top_ms * size.y);
-            if (have) draw->AddLine(previous, point, series == 0 && frame->frame_ms > spike_ms ? IM_COL32(255, 80, 80, 255)
-                                                                                                 : colors[series]);
+            if (have) draw->AddLine(previous, point, series == 0 && longest > spike_ms ? IM_COL32(255, 80, 80, 255)
+                                                                                       : colors[series]);
             previous = point;
             have = 1;
         }
@@ -172,10 +185,10 @@ static void frame_graph(void) {
         int back = count - 1 - (int)((ImGui::GetIO().MousePos.x - origin.x) / step + 0.5f);
         const DebugFrame *frame = debug_frame_back(back);
         if (frame) {
-            ImGui::SetTooltip("frame %u (field %llu)\nframe %.2f ms\ngame %.2f ms\ndraw %.2f ms\npresent %.2f ms\nwait %.2f ms\n"
-                              "draws %u meshes %u commands %u",
-                              frame->frame, (unsigned long long)frame->field, frame->frame_ms, frame->game_ms, frame->draw_ms,
-                              frame->present_ms, frame->wait_ms, frame->stats.draw_calls, frame->stats.mesh_calls,
+            ImGui::SetTooltip("frame %u (field %llu)\nframe %.2f ms\nbusy %.2f ms\ngame %.2f ms\ndraw %.2f ms\npresent %.2f ms\n"
+                              "wait %.2f ms\ndraws %u meshes %u commands %u",
+                              frame->frame, (unsigned long long)frame->field, frame->frame_ms, frame->frame_ms - frame->wait_ms,
+                              frame->game_ms, frame->draw_ms, frame->present_ms, frame->wait_ms, frame->stats.draw_calls, frame->stats.mesh_calls,
                               frame->stats.gpu_commands);
             if (ImGui::IsMouseClicked(0)) selected_back = back;
         }
@@ -187,6 +200,8 @@ static void frame_graph(void) {
     ImGui::TextColored(ImVec4(0.98f, 0.67f, 0.24f, 1), "draw");
     ImGui::SameLine();
     ImGui::TextColored(ImVec4(0.47f, 0.86f, 0.47f, 1), "present");
+    ImGui::SameLine();
+    ImGui::TextColored(ImVec4(0.78f, 0.47f, 0.98f, 1), "busy (frame less wait)");
     ImGui::SameLine();
     ImGui::TextColored(ImVec4(0.86f, 0.24f, 0.24f, 1), "spike line");
     ImGui::SameLine();
@@ -275,17 +290,20 @@ static void spikes(void) {
 }
 
 static void performance_tab(void) {
-    float total = 0;
+    float total = 0, busy = 0;
     int counted = 0;
     for (int i = 0; i < 50; ++i) {
         const DebugFrame *frame = debug_frame_back(i);
         if (!frame) break;
         total += frame->frame_ms;
+        busy += frame->frame_ms - frame->wait_ms;
         counted++;
     }
     float average = counted ? total / (float)counted : 0.0f;
-    ImGui::Text("%.1f fps (%.2f ms average over %d frames)   frame %u   field %llu", average > 0 ? 1000.0f / average : 0.0f,
-                average, counted, debug_frame_total, (unsigned long long)port_graphics.fields);
+    float busy_average = counted ? busy / (float)counted : 0.0f;
+    ImGui::Text("%.1f fps (%.2f ms average over %d frames)   busy %.2f ms, %.0f fps uncapped   frame %u   field %llu",
+                average > 0 ? 1000.0f / average : 0.0f, average, counted, busy_average,
+                busy_average > 0 ? 1000.0f / busy_average : 0.0f, debug_frame_total, (unsigned long long)port_graphics.fields);
     if (selected_back >= 0) {
         ImGui::SameLine();
         if (ImGui::SmallButton("clear selection")) selected_back = -1;
@@ -321,6 +339,7 @@ static void game_tab(void) {
     bool flag = DebugFlag != 0;
     if (ImGui::Checkbox("engine DebugFlag (Start+Select opens the debug menu)", &flag))
         debug_run(flag ? "debugflag?value=1" : "debugflag?value=0");
+    if (ImGui::CollapsingHeader("Helpers", ImGuiTreeNodeFlags_DefaultOpen)) debug_helpers_panel();
     ImGui::Separator();
     ImGui::TextUnformatted("command (same as the HTTP API, e.g. press?buttons=cross&frames=6)");
     ImGui::SetNextItemWidth(-80);

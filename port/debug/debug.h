@@ -90,12 +90,14 @@ extern const DebugCommand debug_capture_commands[];
 extern const DebugCommand debug_replay_commands[];
 extern const DebugCommand debug_savestate_commands[];
 extern const DebugCommand debug_reload_commands[];
+extern const DebugCommand debug_overlay_commands[];
 
 void debug_scenario_panel(void);
 void debug_capture_panel(void);
 void debug_replay_panel(void);
 void debug_savestate_panel(void);
 void debug_reload_bar(void);
+void debug_helpers_panel(void);
 
 void debug_scenario_status(DebugReply *reply);
 void debug_capture_frame(void);

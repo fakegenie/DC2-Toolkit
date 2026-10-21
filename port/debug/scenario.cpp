@@ -96,6 +96,9 @@ static const Place chapter_places[CHAPTER_LIMIT] = {
     {10, "Palm Brinks"},
 };
 
+static const int travel_flags[] = {100, 103, 207, 208, 209, 215, 300, 302, 306, 312, 332, 400, 402,
+                                   404, 408, 500, 504, 600, 616, 648, 700, 702, 800};
+
 static Entry maps[MAP_LIMIT];
 static int map_total;
 static Entry items[ITEM_LIMIT];
@@ -385,6 +388,13 @@ static void all_geo_parts(void) {
     save()->game_progress = progress;
 }
 
+static void open_travel(int chapter) {
+    if (chapter < 2) return;
+    save()->SetBitFlag(SAVE_FLAG_EARLY_GAME_DONE, 1);
+    for (int flag : travel_flags)
+        if (flag / 100 <= chapter) save()->SetBitFlag(flag, 1);
+}
+
 static int preset_path(const DebugArgs *args, char *path, size_t size) {
     const char *given = debug_arg(args, "path", NULL);
     const char *name = debug_arg(args, "name", NULL);
@@ -411,6 +421,7 @@ static int command_preset(const DebugArgs *args, DebugReply *reply) {
     if (debug_arg_int(args, "geo", 0)) all_geo_parts();
     if (debug_arg(args, "money", NULL)) save()->user_data.AddMoney((int)debug_arg_int(args, "money", 0));
     int chapter = GetGameChapter(save()->game_progress);
+    open_travel(chapter);
     const Place *place = chapter > 0 && chapter < CHAPTER_LIMIT ? &chapter_places[chapter] : NULL;
     debug_print(reply, "{\"ok\": 1, \"path\": ");
     debug_print_string(reply, path);
