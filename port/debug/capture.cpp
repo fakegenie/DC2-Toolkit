@@ -42,6 +42,7 @@ static const Toggle toggles[] = {
     {"textures", &render_toggles.no_textures, 1},
     {"wireframe", &render_toggles.wireframe, 0},
     {"overdraw", &render_toggles.overdraw, 0},
+    {"unpaced", &render_toggles.unpaced, 0},
 };
 
 static const char *const sources[] = {"2d", "mesh", "shadow", "sprite", "water", "depth"};
@@ -287,6 +288,12 @@ static int command_toggle(const DebugArgs *args, DebugReply *reply) {
 }
 
 static int command_skip(const DebugArgs *args, DebugReply *reply) {
+    if (debug_arg_int(args, "prisms", 0)) {
+        render_toggles.prism_from = (int)debug_arg_int(args, "from", 0);
+        render_toggles.prism_to = (int)debug_arg_int(args, "to", 0);
+        debug_print(reply, "{\"prism_from\": %d, \"prism_to\": %d}", render_toggles.prism_from, render_toggles.prism_to);
+        return 0;
+    }
     render_toggles.skip_from = (int)debug_arg_int(args, "from", 0);
     render_toggles.skip_to = (int)debug_arg_int(args, "to", 0);
     debug_print(reply, "{\"from\": %d, \"to\": %d}", render_toggles.skip_from, render_toggles.skip_to);
@@ -405,8 +412,8 @@ extern const DebugCommand debug_capture_commands[] = {
     {"highlight", command_highlight, 1, "redraw draw index=N of every frame in magenta on top; -1 clears"},
     {"textures", command_textures, 1, "every live texture and render target slot"},
     {"texture", command_texture, 0, "a slot as PNG; slot=N, alpha=1 for its alpha channel as grey"},
-    {"skip", command_skip, 1, "skip draws numbered from=A to=B (exclusive) in every frame, to find which draws make a picture; to=0 clears"},
-    {"toggle", command_toggle, 1, "name=models|2d|shadows|water|sprites|fog|textures|wireframe|overdraw value=0|1; no arguments lists them"},
+    {"skip", command_skip, 1, "skip draws numbered from=A to=B (exclusive) in every frame, to find which draws make a picture; to=0 clears; prisms=1 hides shadow prisms from=A to=B in in-between pictures"},
+    {"toggle", command_toggle, 1, "name=models|2d|shadows|water|sprites|fog|textures|wireframe|overdraw|unpaced value=0|1; no arguments lists them"},
     {"scale", command_scale, 0, "internal resolution value=1|2|3|4 times the PS2 size; applied at the next frame"},
     {"msaa", command_msaa, 0, "multisampling value=1|2|4|8, lowered to what the GPU supports; applied at the next frame"},
     {"depth", command_depth, 0, "reads the depth buffer like the game's photo and pick-z; x=N y=N size=N (8)"},

@@ -7,7 +7,7 @@ layout(location = 3) in vec4 color;
 layout(location = 4) in vec4 bone;
 layout(location = 5) in vec4 weight;
 
-layout(set = 1, binding = 0) uniform Model {
+struct Model {
     mat4 model_screen;
     mat4 model_world;
     mat4 clip_or_view;
@@ -26,9 +26,30 @@ layout(set = 1, binding = 0) uniform Model {
     uvec4 flags;
 };
 
-layout(set = 1, binding = 1) uniform Bones {
-    vec4 bones[96];
+layout(std430, set = 0, binding = 0) readonly buffer Models {
+    Model models[];
 };
+
+layout(std430, set = 0, binding = 1) readonly buffer Bones {
+    vec4 bones[];
+};
+
+#define model_screen models[gl_InstanceIndex].model_screen
+#define model_world models[gl_InstanceIndex].model_world
+#define clip_or_view models[gl_InstanceIndex].clip_or_view
+#define light_direction models[gl_InstanceIndex].light_direction
+#define light_color models[gl_InstanceIndex].light_color
+#define ambient models[gl_InstanceIndex].ambient
+#define object_color models[gl_InstanceIndex].object_color
+#define eye models[gl_InstanceIndex].eye
+#define diffuse models[gl_InstanceIndex].diffuse
+#define specular models[gl_InstanceIndex].specular
+#define point_light models[gl_InstanceIndex].point_light
+#define point_color models[gl_InstanceIndex].point_color
+#define fog models[gl_InstanceIndex].fog
+#define screen models[gl_InstanceIndex].screen
+#define depth models[gl_InstanceIndex].depth
+#define flags models[gl_InstanceIndex].flags
 
 layout(location = 0) out vec4 frag_color;
 layout(location = 1) out vec2 frag_uv;
@@ -61,7 +82,7 @@ void skin(inout vec3 p, inout vec3 n) {
     vec3 blended_normal = vec3(0.0);
     for (int i = 0; i < 4; i++) {
         float w = weight[i];
-        int b = int(min(bone[i] * 255.0 + 0.5, 31.0)) * 3;
+        int b = int(flags.w) * 96 + int(min(bone[i] * 255.0 + 0.5, 31.0)) * 3;
         vec4 r0 = bones[b];
         vec4 r1 = bones[b + 1];
         vec4 r2 = bones[b + 2];

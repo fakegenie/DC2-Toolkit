@@ -4,7 +4,9 @@
 #include "mg_math.hpp"
 #include "mglib.hpp"
 #include <cmath>
+#include <array>
 #include <cstring>
+#include <vector>
 
 ShadowSetup shadow_setup;
 
@@ -77,16 +79,33 @@ static int is_back(const RenderVertex v[4]) {
     return (v[2].x - v[0].x) * (v[1].y - v[0].y) - (v[2].y - v[0].y) * (v[1].x - v[0].x) < 0.0f;
 }
 
-static void draw_quads(const ShadowSetup &setup, const RenderVertex *vertices, const float (*points)[4], int quads, int back,
-                       int record) {
+struct ShadowFaces {
+    std::vector<RenderVertex> vertices;
+    std::vector<std::array<float, 4>> points;
+};
+
+static ShadowFaces shadow_faces[2];
+
+static void draw_faces(const ShadowSetup &setup, int back, int record) {
+    ShadowFaces &faces = shadow_faces[back];
+    if (faces.vertices.empty()) return;
     RenderState state = setup.state;
     state.alpha = back ? 0x8000000062ull : 0x8000000068ull;
     render_source = RENDER_SOURCE_SHADOW;
-    render_shadow(&state, vertices, points, quads * 6, record);
+    render_shadow(&state, faces.vertices.data(), (const float (*)[4])faces.points.data(), (int)faces.vertices.size(), record);
+}
+
+static void keep_faces(const RenderVertex *vertices, const float (*points)[4], int quads, int back) {
+    ShadowFaces &faces = shadow_faces[back];
+    for (int i = 0; i < quads * 6; i++) {
+        faces.vertices.push_back(vertices[i]);
+        faces.points.push_back({points[i][0], points[i][1], points[i][2], points[i][3]});
+    }
 }
 
 static void add_quad(RenderVertex *out, float (*points)[4], const RenderVertex *const v[4], const RenderVertex *model,
-                     const RenderVertex *cast, const float *const source[3], const int index[3], int back, int hidden) {
+                     const RenderVertex *cast, const float *const source[3], const int index[3], int prism, int back,
+                     int hidden) {
     const int order[6] = {0, 1, 2, 0, 2, 3};
     for (int i = 0; i < 6; i++) {
         const RenderVertex *corner = v[order[i]];
@@ -97,12 +116,12 @@ static void add_quad(RenderVertex *out, float (*points)[4], const RenderVertex *
         points[i][0] = position[0];
         points[i][1] = position[1];
         points[i][2] = position[2];
-        points[i][3] = (float)(cast_side + 2 * back + 4 * index[corner_index]);
+        points[i][3] = (float)(cast_side + 2 * back + 4 * index[corner_index] + SHADOW_PRISM * prism);
     }
 }
 
 static void draw_triangle(const ShadowSetup &setup, const float screen[4], float depth, int record, const float *const v[3],
-                         const int index[3]) {
+                          const int index[3], int prism) {
     float c[3][4], t[3][4];
     for (int j = 0; j < 3; j++) {
         float position[4] = {v[j][0], v[j][1], v[j][2], 1.0f};
@@ -142,17 +161,17 @@ static void draw_triangle(const ShadowSetup &setup, const float screen[4], float
         int back = is_back(corners);
         facing += !back;
         if (record >= 0 || back) {
-            add_quad(&backs[6 * back_count], &back_points[6 * back_count], quads[g], model, cast, v, index, 1, !back);
+            add_quad(&backs[6 * back_count], &back_points[6 * back_count], quads[g], model, cast, v, index, prism, 1, !back);
             back_count++;
         }
         if (record >= 0 || !back) {
-            add_quad(&fronts[6 * front_count], &front_points[6 * front_count], quads[g], model, cast, v, index, 0, back);
+            add_quad(&fronts[6 * front_count], &front_points[6 * front_count], quads[g], model, cast, v, index, prism, 0, back);
             front_count++;
         }
     }
     if (!facing) return;
-    draw_quads(setup, fronts, front_points, front_count, 0, record);
-    if (back_count) draw_quads(setup, backs, back_points, back_count, 1, record);
+    keep_faces(fronts, front_points, front_count, 0);
+    keep_faces(backs, back_points, back_count, 1);
 }
 
 void shadow_draw(const mgCVisualMDT *visual, const ShadowSetup &setup, const mgFACE_GROUP *group) {
@@ -160,13 +179,23 @@ void shadow_draw(const mgCVisualMDT *visual, const ShadowSetup &setup, const mgF
     float screen[4];
     float depth;
     gs_screen_mapping(screen, &depth);
+    int prisms = 0;
+    for (const mgCFace *face = group->face; face != NULL; face = face->next) prisms += face->vertex_num;
     int record = render_shadow_setup(setup.key, &setup.world[0][0], &setup.camera[0][0], &setup.caster[0][0],
-                                     &setup.screen[0][0], screen, depth, (const float (*)[4])visual->vertex, visual->vertex_num);
+                                     &setup.screen[0][0], screen, depth, (const float (*)[4])visual->vertex,
+                                     visual->vertex_num, prisms);
+    int prism = 0;
+    shadow_faces[0].vertices.clear();
+    shadow_faces[0].points.clear();
+    shadow_faces[1].vertices.clear();
+    shadow_faces[1].points.clear();
     for (const mgCFace *face = group->face; face != NULL; face = face->next) {
         const int *index = face->index;
         for (int i = 0; i < face->vertex_num; i++, index += 3) {
             const float *corners[3] = {visual->vertex[index[0]], visual->vertex[index[1]], visual->vertex[index[2]]};
-            draw_triangle(setup, screen, depth, record, corners, index);
+            draw_triangle(setup, screen, depth, record, corners, index, prism++);
         }
     }
+    draw_faces(setup, 0, record);
+    draw_faces(setup, 1, record);
 }

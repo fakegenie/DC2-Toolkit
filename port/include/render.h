@@ -80,6 +80,9 @@ typedef struct {
     int overdraw;
     int skip_from;
     int skip_to;
+    int unpaced;
+    int prism_from;
+    int prism_to;
 } RenderToggles;
 
 typedef struct {
@@ -148,8 +151,9 @@ void render_mesh(const RenderState *state, int cull, const MeshUniforms *uniform
 int render_mesh_store(const MeshVertex *vertices, int count);
 void render_mesh_forget(int first, int count);
 void render_shadow_place(RenderVertex *vertex, const float *clip, const float *screen, const float *mapping, float depth);
+enum { SHADOW_PRISM = 4096 };
 int render_shadow_setup(const void *key, const float *world, const float *camera, const float *light, const float *screen,
-                        const float *mapping, float depth, const float (*shape)[4], int count);
+                        const float *mapping, float depth, const float (*shape)[4], int count, int prisms);
 void render_sprite(const RenderState *state, const RenderVertex *vertices, int count, const float *mapping, float depth);
 void render_shadow(const RenderState *state, const RenderVertex *vertices, const float (*points)[4], int count, int setup);
 void render_present(int target, int width, int height);

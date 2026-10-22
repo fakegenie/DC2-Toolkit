@@ -20,6 +20,8 @@ enum { KEY_MESH = 1 << 22, KEY_CULL_SHIFT = 23, KEY_WIRE = 1 << 25, KEY_SAMPLES_
        RECORD_LIMIT = 32768 };
 enum { KEY_KEEP = (3 << 15) | KEY_MESH | (3 << 23) | (3 << KEY_SAMPLES_SHIFT) };
 enum { SCALE_LIMIT = 4, SAMPLE_LIMIT = 8, WIDEN_LIMIT = 1024 };
+#define MODEL_BYTES ((Uint32)(MODEL_LIMIT * sizeof(MeshUniforms)))
+#define BONE_BYTES ((Uint32)(BONE_LIMIT * 384 * sizeof(float)))
 #ifdef SDL_PLATFORM_IOS
 #define WINDOW_FLAGS (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY)
 #else
@@ -135,6 +137,7 @@ typedef struct {
     float depth;
     int first;
     int count;
+    int prism_first;
     int match;
     int model;
     int bone;
@@ -165,6 +168,7 @@ typedef struct {
     ShadowRecord *shadows;
     int shadow_count;
     int shadow_capacity;
+    int prism_count;
     float (*shapes)[4];
     int shape_count;
     int shape_capacity;
@@ -226,6 +230,16 @@ static SDL_GPUShader *fragment_shader;
 static SDL_GPUSampler *samplers[8];
 static SDL_GPUBuffer *vertex_buffer;
 static SDL_GPUTransferBuffer *vertex_transfer;
+static SDL_GPUBuffer *model_buffer;
+static SDL_GPUBuffer *bone_buffer;
+static SDL_GPUTransferBuffer *model_transfer;
+static SDL_GPUBuffer *replay_model_buffer;
+static SDL_GPUBuffer *replay_bone_buffer;
+static SDL_GPUTransferBuffer *replay_model_transfer;
+static uint32_t replay_storage_capacity;
+static int model_flushed;
+static int bone_flushed;
+static int model_cycle;
 static SDL_GPUCommandBuffer *commands;
 static SDL_GPUTextureFormat depth_format;
 static struct {
@@ -279,6 +293,7 @@ static uint32_t vertex_used;
 static uint32_t vertex_flushed;
 static int vertex_cycle;
 static int bound;
+static int drawing;
 static int blank;
 static Command held;
 static int held_valid;
@@ -321,12 +336,14 @@ static SDL_GPUCommandBuffer *command_buffer(void) {
 }
 
 static SDL_GPUShader *create_shader(const unsigned char *spirv, size_t spirv_size, const unsigned char *msl,
-                                    size_t msl_size, SDL_GPUShaderStage stage, int samplers_used, int uniforms) {
+                                    size_t msl_size, SDL_GPUShaderStage stage, int samplers_used, int uniforms,
+                                    int storage) {
     SDL_GPUShaderCreateInfo info = {0};
     SDL_GPUShaderFormat formats = SDL_GetGPUShaderFormats(device);
     info.stage = stage;
     info.num_samplers = samplers_used;
     info.num_uniform_buffers = uniforms;
+    info.num_storage_buffers = storage;
     if (formats & SDL_GPU_SHADERFORMAT_MSL) {
         info.format = SDL_GPU_SHADERFORMAT_MSL;
         info.code = msl;
@@ -432,18 +449,18 @@ int render_init(void) {
     if (!window || !SDL_ClaimWindowForGPUDevice(device, window)) render_error("window");
     if (background) render_send_back(window);
     apply_present_mode();
-    depth_format = SDL_GPUTextureSupportsFormat(device, SDL_GPU_TEXTUREFORMAT_D24_UNORM_S8_UINT, SDL_GPU_TEXTURETYPE_2D,
-                                                SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET)
-                       ? SDL_GPU_TEXTUREFORMAT_D24_UNORM_S8_UINT
-                       : SDL_GPU_TEXTUREFORMAT_D32_FLOAT_S8_UINT;
+    depth_format = SDL_GPUTextureSupportsFormat(device, SDL_GPU_TEXTUREFORMAT_D24_UNORM, SDL_GPU_TEXTURETYPE_2D,
+                                                SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER)
+                       ? SDL_GPU_TEXTUREFORMAT_D24_UNORM
+                       : SDL_GPU_TEXTUREFORMAT_D32_FLOAT;
     quality_scale = wanted_scale;
     quality_samples = wanted_samples = supported_samples(wanted_samples);
     vertex_shader = create_shader(draw_vert_spirv, sizeof draw_vert_spirv, draw_vert_msl, sizeof draw_vert_msl,
-                                  SDL_GPU_SHADERSTAGE_VERTEX, 0, 1);
+                                  SDL_GPU_SHADERSTAGE_VERTEX, 0, 1, 0);
     mesh_shader = create_shader(mesh_vert_spirv, sizeof mesh_vert_spirv, mesh_vert_msl, sizeof mesh_vert_msl,
-                                SDL_GPU_SHADERSTAGE_VERTEX, 0, 2);
+                                SDL_GPU_SHADERSTAGE_VERTEX, 0, 0, 2);
     fragment_shader = create_shader(draw_frag_spirv, sizeof draw_frag_spirv, draw_frag_msl, sizeof draw_frag_msl,
-                                    SDL_GPU_SHADERSTAGE_FRAGMENT, 2, 1);
+                                    SDL_GPU_SHADERSTAGE_FRAGMENT, 2, 1, 0);
     for (int i = 0; i < 8; ++i) {
         SDL_GPUSamplerCreateInfo info = {0};
         info.min_filter = info.mag_filter = (i & 1) ? SDL_GPU_FILTER_LINEAR : SDL_GPU_FILTER_NEAREST;
@@ -465,7 +482,15 @@ int render_init(void) {
     vertex_transfer = SDL_CreateGPUTransferBuffer(device, &transfer);
     vertex_data = malloc(VERTEX_BYTES);
     if (!vertex_buffer || !vertex_transfer || !vertex_data) render_error("vertex buffer");
+    SDL_GPUBufferCreateInfo model_info = {SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ, MODEL_BYTES, 0};
+    model_buffer = SDL_CreateGPUBuffer(device, &model_info);
+    SDL_GPUBufferCreateInfo bone_info = {SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ, BONE_BYTES, 0};
+    bone_buffer = SDL_CreateGPUBuffer(device, &bone_info);
+    SDL_GPUTransferBufferCreateInfo model_upload = {SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD, MODEL_BYTES + BONE_BYTES, 0};
+    model_transfer = SDL_CreateGPUTransferBuffer(device, &model_upload);
+    if (!model_buffer || !bone_buffer || !model_transfer) render_error("model buffer");
     vertex_cycle = 1;
+    model_cycle = 1;
     bone_count = 1;
     blank = render_texture(1, 1);
     uint32_t white = 0xffffffff;
@@ -781,13 +806,13 @@ void render_mesh_forget(int first, int count) {
 }
 
 static void encode(SDL_GPUCommandBuffer *buffer, SDL_GPURenderPass *pass, const Command *list, int count,
-                   const MeshUniforms *model_list, const float (*bone_list)[384], SDL_GPUBuffer *drawn, int width,
-                   int height, int mirror) {
+                   SDL_GPUBuffer *model_list, SDL_GPUBuffer *bone_list, SDL_GPUBuffer *drawn, int width, int height,
+                   int mirror) {
     float scale[4] = {2.0f / (float)width, 2.0f / (float)height, 0.0f, 0.0f};
     SDL_GPUBuffer *bound_buffer = NULL;
     SDL_GPUGraphicsPipeline *last_pipeline = NULL;
     const Command *last = NULL;
-    int vertex_uniforms = -2, last_bones = -1;
+    int vertex_uniforms = -2, storage_bound = 0;
     for (int i = 0; i < count; ++i) {
         const Command *command = &list[i];
         SDL_GPUBuffer *source = command->resident ? mesh_buffer : command->moving ? moving_buffer : drawn;
@@ -797,12 +822,11 @@ static void encode(SDL_GPUCommandBuffer *buffer, SDL_GPURenderPass *pass, const 
             bound_buffer = source;
         }
         if (command->model >= 0) {
-            if (command->model != vertex_uniforms)
-                SDL_PushGPUVertexUniformData(buffer, 0, &model_list[command->model], sizeof model_list[0]);
-            if (command->bones != last_bones)
-                SDL_PushGPUVertexUniformData(buffer, 1, bone_list[command->bones], sizeof bone_list[0]);
-            vertex_uniforms = command->model;
-            last_bones = command->bones;
+            if (!storage_bound) {
+                SDL_GPUBuffer *storage[2] = {model_list, bone_list};
+                SDL_BindGPUVertexStorageBuffers(pass, 0, storage, 2);
+                storage_bound = 1;
+            }
         } else if (vertex_uniforms != -1) {
             SDL_PushGPUVertexUniformData(buffer, 0, scale, sizeof scale);
             vertex_uniforms = -1;
@@ -829,7 +853,8 @@ static void encode(SDL_GPUCommandBuffer *buffer, SDL_GPURenderPass *pass, const 
         if (!last || memcmp(&command->fragment, &last->fragment, sizeof command->fragment))
             SDL_PushGPUFragmentUniformData(buffer, 0, &command->fragment, sizeof command->fragment);
         uint32_t stride = (command->key & KEY_MESH) ? sizeof(MeshVertex) : sizeof(RenderVertex);
-        SDL_DrawGPUPrimitives(pass, (Uint32)command->count, 1, command->offset / stride, 0);
+        SDL_DrawGPUPrimitives(pass, (Uint32)command->count, 1, command->offset / stride,
+                              command->model >= 0 ? (Uint32)command->model : 0);
         last = command;
     }
 }
@@ -872,6 +897,7 @@ static void record_model(Recording *frame, Command *kept, const Command *command
     }
     kept->model = model;
     kept->bones = frame->model_bones[model];
+    frame->models[model].flags[3] = (uint32_t)frame->model_bones[model];
     frame->model_count++;
 }
 
@@ -919,8 +945,9 @@ static void record_pass(const Texture *target, int depth, SDL_GPULoadOp color_lo
         const Command *command = &pending[i];
         Command *kept = &frame->commands[frame->command_count++];
         *kept = *command;
-        kept->signature =
-            command->model < 0 && !command->resident && command->shadow < 0 ? draw_signature(command, target->color) : 0;
+        kept->signature = command->model < 0 && !command->resident && command->shadow < 0 && !textures[command->texture].target
+                              ? draw_signature(command, target->color)
+                              : 0;
         kept->pair = -1;
         kept->copy = command->offset;
         if (!command->resident) {
@@ -987,6 +1014,39 @@ static void copy_texture(SDL_GPUTextureLocation from, SDL_GPUTextureLocation to,
     step->copy_height = height;
 }
 
+static void upload_models(SDL_GPUCopyPass *copy) {
+    if (model_flushed == model_count && bone_flushed == bone_count) return;
+    unsigned char *mapped = SDL_MapGPUTransferBuffer(device, model_transfer, model_cycle);
+    if (!mapped) render_error("map models");
+    uint32_t first = (uint32_t)model_flushed * sizeof *models, bytes = (uint32_t)(model_count - model_flushed) * sizeof *models;
+    uint32_t bone_first = (uint32_t)bone_flushed * sizeof bone_sets[0], bone_bytes = (uint32_t)(bone_count - bone_flushed) * sizeof bone_sets[0];
+    memcpy(mapped + first, &models[model_flushed], bytes);
+    memcpy(mapped + MODEL_BYTES + bone_first, bone_sets[bone_flushed], bone_bytes);
+    SDL_UnmapGPUTransferBuffer(device, model_transfer);
+    if (bytes) {
+        SDL_GPUTransferBufferLocation from = {model_transfer, first};
+        SDL_GPUBufferRegion to = {model_buffer, first, bytes};
+        SDL_UploadToGPUBuffer(copy, &from, &to, model_cycle);
+    }
+    if (bone_bytes) {
+        SDL_GPUTransferBufferLocation from = {model_transfer, MODEL_BYTES + bone_first};
+        SDL_GPUBufferRegion to = {bone_buffer, bone_first, bone_bytes};
+        SDL_UploadToGPUBuffer(copy, &from, &to, model_cycle);
+    }
+    model_cycle = 0;
+    model_flushed = model_count;
+    bone_flushed = bone_count;
+}
+
+static void restart_buffers(void) {
+    vertex_cycle = 1;
+    vertex_used = vertex_flushed = 0;
+    model_cycle = 1;
+    model_count = model_flushed = 0;
+    bone_count = 1;
+    bone_flushed = 0;
+}
+
 static void flush(void) {
     if (!pending_count) return;
     if (held_valid && pending_count < COMMAND_LIMIT) pending[pending_count++] = held;
@@ -1002,10 +1062,11 @@ static void flush(void) {
     SDL_GPUTransferBufferLocation from = {vertex_transfer, vertex_flushed};
     SDL_GPUBufferRegion to = {vertex_buffer, vertex_flushed, size};
     SDL_UploadToGPUBuffer(copy, &from, &to, vertex_cycle);
+    upload_models(copy);
     SDL_EndGPUCopyPass(copy);
     vertex_cycle = 0;
-    Texture *target = &textures[bound];
-    int shared = depth_for(bound);
+    Texture *target = &textures[drawing];
+    int shared = depth_for(drawing);
     if (shared < 0) {
         shared = 0;
         while (shared < 8 && depths[shared].texture) shared++;
@@ -1026,8 +1087,8 @@ static void flush(void) {
     depth.load_op = depths[shared].cleared ? SDL_GPU_LOADOP_LOAD : SDL_GPU_LOADOP_CLEAR;
     depths[shared].cleared = 1;
     depth.store_op = SDL_GPU_STOREOP_STORE;
-    depth.stencil_load_op = depth.load_op;
-    depth.stencil_store_op = SDL_GPU_STOREOP_STORE;
+    depth.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
+    depth.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
     color[1].texture = depths[shared].color;
     color[1].load_op = depth.load_op;
     color[1].store_op = SDL_GPU_STOREOP_RESOLVE_AND_STORE;
@@ -1038,13 +1099,11 @@ static void flush(void) {
     port_stats.render_passes++;
     port_stats.gpu_commands += (uint32_t)pending_count;
     if (smoothing) record_pass(target, shared, color[0].load_op, depth.load_op, mirror);
-    encode(buffer, pass, pending, pending_count, models, (const float (*)[384])bone_sets, vertex_buffer, target->width,
-           target->height, mirror);
+    encode(buffer, pass, pending, pending_count, model_buffer, bone_buffer, vertex_buffer, target->width, target->height,
+           mirror);
     SDL_EndGPURenderPass(pass);
     pending_count = 0;
     release_retired_meshes();
-    model_count = 0;
-    bone_count = 1;
     vertex_flushed = vertex_used;
 }
 
@@ -1147,7 +1206,7 @@ int render_target(uint32_t base, int width, int height) {
         Texture *texture = &textures[i];
         if (!texture->used || !texture->target || texture->base != base) continue;
         if (texture->width >= width && texture->height >= height) return i;
-        if (bound == i) flush();
+        if (drawing == i) flush();
         render_release(i);
         break;
     }
@@ -1180,10 +1239,8 @@ int render_scaled_texture(int width, int height) {
 void render_release(int slot) {
     if (slot <= 0 || slot >= TEXTURE_LIMIT || !textures[slot].used) return;
     flush_if_used(slot);
-    if (bound == slot) {
-        flush();
-        bound = 0;
-    }
+    if (drawing == slot) flush();
+    if (bound == slot) bound = 0;
     release_later(textures[slot].color);
     release_later(textures[slot].multi);
     memset(&textures[slot], 0, sizeof textures[slot]);
@@ -1254,7 +1311,7 @@ static void upload(SDL_GPUTexture *texture, int x, int y, int width, int height,
 void render_upload(int slot, int x, int y, int width, int height, const uint32_t *pixels) {
     if (width <= 0 || height <= 0) return;
     flush_if_used(slot);
-    if (bound == slot) flush();
+    if (drawing == slot) flush();
     if (textures[slot].scale == 1) upload(textures[slot].color, x, y, width, height, pixels);
     else {
         int temporary = render_texture(width, height);
@@ -1267,7 +1324,7 @@ void render_upload(int slot, int x, int y, int width, int height, const uint32_t
 
 void render_upload_full(int slot, const uint32_t *pixels) {
     flush_if_used(slot);
-    if (bound == slot) flush();
+    if (drawing == slot) flush();
     Texture *texture = &textures[slot];
     upload(texture->color, 0, 0, texture->width * texture->scale, texture->height * texture->scale, pixels);
     changed(slot);
@@ -1285,8 +1342,7 @@ static void download(SDL_GPUTexture *texture, int x, int y, int width, int heigh
     SDL_EndGPUCopyPass(copy);
     SDL_GPUFence *fence = SDL_SubmitGPUCommandBufferAndAcquireFence(commands);
     commands = NULL;
-    vertex_cycle = 1;
-    vertex_used = vertex_flushed = 0;
+    restart_buffers();
     SDL_WaitForGPUFences(device, true, &fence, 1);
     SDL_ReleaseGPUFence(device, fence);
     void *mapped = SDL_MapGPUTransferBuffer(device, transfer, false);
@@ -1318,7 +1374,7 @@ void render_download_full(int slot, int width, int height, uint32_t *pixels) {
 void render_copy(int source, int source_x, int source_y, int destination, int destination_x, int destination_y,
                  int width, int height) {
     if (width <= 0 || height <= 0) return;
-    if (bound == source || bound == destination) flush();
+    if (drawing == source || drawing == destination) flush();
     if (used_by_pending(destination)) rename_texture(destination);
     int scale = textures[source].scale;
     if (scale == textures[destination].scale) {
@@ -1385,9 +1441,12 @@ void render_download_depth(int target, int x, int y, int width, int height, uint
 }
 
 void render_bind(int target) {
-    if (target == bound) return;
-    flush();
     bound = target;
+}
+
+static void draw_to_bound(void) {
+    if (pending_count && drawing != bound) flush();
+    drawing = bound;
 }
 
 int render_bound(void) { return bound; }
@@ -1399,7 +1458,10 @@ static SDL_GPUCompareOp depth_compare(uint64_t test) {
     return ops[(test >> 17) & 3];
 }
 
+static void draw_to_bound(void);
+
 static int prepare(Command *command, const RenderState *state, uint32_t key_extra) {
+    draw_to_bound();
     if (state->texture && state->texture == bound) {
         fputs("render: a draw samples its own target\n", stderr);
         return 0;
@@ -1561,6 +1623,7 @@ static void restore(void) {
 
 static void submit(const RenderState *state, int topology, const RenderVertex *vertices, int count, int index,
                    int source) {
+    draw_to_bound();
     if (!pending_count && textures[bound].stale) restore();
     Command command;
     if (!prepare(&command, state, (uint32_t)topology << 15) ||
@@ -1641,7 +1704,7 @@ void render_shadow_place(RenderVertex *vertex, const float *clip, const float *s
 }
 
 int render_shadow_setup(const void *key, const float *world, const float *camera, const float *light, const float *screen,
-                        const float *mapping, float depth, const float (*shape)[4], int count) {
+                        const float *mapping, float depth, const float (*shape)[4], int count, int prisms) {
     if (!smoothing) return -1;
     if (!point_data) point_data = malloc(VERTEX_BYTES / sizeof(RenderVertex) * sizeof *point_data);
     Recording *frame = &recordings[recording_slot];
@@ -1651,6 +1714,8 @@ int render_shadow_setup(const void *key, const float *world, const float *camera
     ShadowRecord *record = &frame->shadows[frame->shadow_count];
     record->first = frame->shape_count;
     record->count = count;
+    record->prism_first = frame->prism_count;
+    frame->prism_count += prisms;
     record->model = -1;
     memcpy(frame->shapes + frame->shape_count, shape, (size_t)count * sizeof *frame->shapes);
     frame->shape_count += count;
@@ -1698,7 +1763,14 @@ void render_mesh(const RenderState *state, int cull, const MeshUniforms *uniform
     port_stats.vertices += (uint32_t)count;
     int index = frame_draws++;
     if (index >= render_toggles.skip_from && index < render_toggles.skip_to) return;
-    if (model_count == MODEL_LIMIT || (bones && bone_count == BONE_LIMIT)) flush();
+    if (model_count == MODEL_LIMIT || (bones && bone_count == BONE_LIMIT)) {
+        flush();
+        model_cycle = 1;
+        model_count = model_flushed = 0;
+        bone_count = 1;
+        bone_flushed = 0;
+    }
+    draw_to_bound();
     if (!pending_count && textures[bound].stale) restore();
     Command command;
     uint32_t key = KEY_MESH | (uint32_t)RENDER_TRIANGLES << 15 | (uint32_t)cull << KEY_CULL_SHIFT;
@@ -1714,12 +1786,13 @@ void render_mesh(const RenderState *state, int cull, const MeshUniforms *uniform
         return;
     }
     command.model = model_count;
-    models[model_count++] = *uniforms;
+    models[model_count] = *uniforms;
     command.bones = 0;
     if (bones) {
         command.bones = bone_count;
         memcpy(bone_sets[bone_count++], bones, sizeof bone_sets[0]);
     }
+    models[model_count++].flags[3] = (uint32_t)command.bones;
     append(&command);
     if (capturing) record(RENDER_SOURCE_MESH, state, RENDER_TRIANGLES, cull, count, NULL, command_serial - 1, 0, uniforms);
     if (index == render_highlight) highlight(&command);
@@ -1908,6 +1981,7 @@ static void start_recording(Recording *frame) {
     frame->has_camera = 0;
     frame->shadow_count = 0;
     frame->shape_count = 0;
+    frame->prism_count = 0;
     frame->follow_count = 0;
     frame->bone_count = 0;
     if (grow((void **)&frame->bones, &frame->bone_capacity, 1, sizeof *frame->bones)) {
@@ -2019,6 +2093,14 @@ static int draw_close(const Recording *frame, const Command *now, const Recordin
     return 1;
 }
 
+static void forget_hidden_draws(Recording *frame) {
+    for (int i = 0; i < frame->step_count; ++i) {
+        const Step *step = &frame->steps[i];
+        if (step->kind != STEP_PASS || step->color == frame->shown) continue;
+        for (int k = step->first; k < step->first + step->count; ++k) frame->commands[k].signature = 0;
+    }
+}
+
 static void match_draws(void) {
     static uint64_t *taken;
     static int *heads;
@@ -2029,6 +2111,7 @@ static void match_draws(void) {
     static int next_capacity;
     static int balance_capacity;
     Recording *frame = &recordings[shown_slot], *before = &recordings[previous_slot];
+    forget_hidden_draws(frame);
     frame->paired = 0;
     if (!before->valid || !before->command_count || camera_cut(frame, before)) return;
     int size = 1;
@@ -2315,12 +2398,12 @@ static void blend_frame(float *out, const float *was, const float *now, float al
     }
 }
 
-static int place_shadow(float *clip, float *cast, const Recording *frame, const Recording *before, int record, float alpha,
+static int place_shadow(float (*placed)[16], const Recording *frame, const Recording *before, int record, float alpha,
                         const float *shift) {
     const ShadowRecord *now = &frame->shadows[record];
     const ShadowRecord *was = now->match >= 0 ? &before->shadows[now->match] : NULL;
     if (!was && !shift) return 0;
-    float world[16], camera[16], light[16], screen[16], placed[16];
+    float world[16], camera[16], light[16], screen[16];
     memcpy(world, now->world, sizeof world);
     memcpy(camera, now->camera, sizeof camera);
     memcpy(light, now->light, sizeof light);
@@ -2341,52 +2424,71 @@ static int place_shadow(float *clip, float *cast, const Recording *frame, const 
     } else {
         multiply(screen, shift, now->screen);
     }
-    multiply(placed, camera, world);
-    multiply(clip, screen, placed);
-    multiply(placed, light, world);
-    multiply(cast, screen, placed);
+    multiply(placed[2], camera, world);
+    multiply(placed[0], screen, placed[2]);
+    multiply(placed[3], light, world);
+    multiply(placed[1], screen, placed[3]);
     return 1;
+}
+
+static void shadow_corner(float *out, const float *matrix, const float *position) {
+    for (int j = 0; j < 4; ++j)
+        out[j] = position[0] * matrix[j] + position[1] * matrix[4 + j] + position[2] * matrix[8 + j] + matrix[12 + j];
 }
 
 static void blend_shadows(unsigned char *mapped, const Recording *frame, const Recording *before, float alpha,
                           const float *shift) {
-    static float (*placements)[2][16];
+    static float (*placements)[4][16];
     static int *placed;
+    static unsigned char *hidden;
     static int placement_capacity;
     static int placed_capacity;
+    static int hidden_capacity;
     if (!grow((void **)&placements, &placement_capacity, frame->shadow_count, sizeof *placements) ||
-        !grow((void **)&placed, &placed_capacity, frame->shadow_count, sizeof *placed))
+        !grow((void **)&placed, &placed_capacity, frame->shadow_count, sizeof *placed) ||
+        !grow((void **)&hidden, &hidden_capacity, frame->prism_count, sizeof *hidden))
         return;
-    for (int s = 0; s < frame->shadow_count; ++s)
-        placed[s] = place_shadow(placements[s][0], placements[s][1], frame, before, s, alpha, shift);
-    for (int i = 0; i < frame->command_count; ++i) {
-        const Command *command = &frame->commands[i];
-        if (command->shadow < 0 || !placed[command->shadow]) continue;
-        const ShadowRecord *now = &frame->shadows[command->shadow];
-        const ShadowRecord *was = now->match >= 0 ? &before->shadows[now->match] : NULL;
-        const float(*old_shape)[4] = was && was->count == now->count ? before->shapes + was->first : NULL;
-        const float(*shape)[4] = frame->shapes + now->first;
-        RenderVertex *out = (RenderVertex *)(mapped + command->offset);
-        const float(*points)[4] = frame->points + command->copy / sizeof(RenderVertex);
-        for (int k = 0; k < command->count; ++k) {
-            int flags = (int)points[k][3];
-            const float *matrix = placements[command->shadow][flags & 1];
-            int index = flags >> 2;
-            float position[3] = {points[k][0], points[k][1], points[k][2]};
-            if (old_shape && index < now->count)
-                for (int j = 0; j < 3; ++j) position[j] = old_shape[index][j] + (shape[index][j] - old_shape[index][j]) * alpha;
-            float p[4];
-            for (int j = 0; j < 4; ++j)
-                p[j] = position[0] * matrix[j] + position[1] * matrix[4 + j] + position[2] * matrix[8 + j] + matrix[12 + j];
-            shadow_vertex(&out[k], p, now->mapping, now->depth);
+    memset(hidden, 0, (size_t)frame->prism_count);
+    for (int s = 0; s < frame->shadow_count; ++s) placed[s] = place_shadow(placements[s], frame, before, s, alpha, shift);
+    for (int pass = 0; pass < 3; ++pass)
+        for (int i = 0; i < frame->command_count; ++i) {
+            const Command *command = &frame->commands[i];
+            if (command->shadow < 0 || !placed[command->shadow]) continue;
+            const ShadowRecord *now = &frame->shadows[command->shadow];
+            const ShadowRecord *was = now->match >= 0 ? &before->shadows[now->match] : NULL;
+            const float(*old_shape)[4] = was && was->count == now->count ? before->shapes + was->first : NULL;
+            const float(*shape)[4] = frame->shapes + now->first;
+            RenderVertex *out = (RenderVertex *)(mapped + command->offset);
+            const float(*points)[4] = frame->points + command->copy / sizeof(RenderVertex);
+            if (pass == 2) {
+                for (int k = 0; k + 6 <= command->count; k += 6) {
+                    const RenderVertex *a = &out[k], *b = &out[k + 1], *c = &out[k + 2];
+                    int flags = (int)points[k][3];
+                    int prism = now->prism_first + flags / SHADOW_PRISM;
+                    int back = (c->x - a->x) * (b->y - a->y) - (c->y - a->y) * (b->x - a->x) < 0.0f;
+                    int skipped = prism >= render_toggles.prism_from && prism < render_toggles.prism_to;
+                    if (back == ((flags & 2) != 0) && !hidden[prism] && !skipped) continue;
+                    for (int j = 1; j < 6; ++j) out[k + j] = out[k];
+                }
+                continue;
+            }
+            for (int k = 0; k < command->count; ++k) {
+                int flags = (int)points[k][3];
+                int index = (flags % SHADOW_PRISM) >> 2, prism = now->prism_first + flags / SHADOW_PRISM;
+                float position[3] = {points[k][0], points[k][1], points[k][2]};
+                if (old_shape && index < now->count)
+                    for (int j = 0; j < 3; ++j) position[j] = old_shape[index][j] + (shape[index][j] - old_shape[index][j]) * alpha;
+                float p[4];
+                if (pass == 0) {
+                    shadow_corner(p, placements[command->shadow][2 + (flags & 1)], position);
+                    float w = fabsf(p[3]);
+                    if (p[0] > w || p[0] < -w || p[1] > w || p[1] < -w || p[2] > w || p[2] < -w) hidden[prism] = 1;
+                    continue;
+                }
+                shadow_corner(p, placements[command->shadow][flags & 1], position);
+                shadow_vertex(&out[k], p, now->mapping, now->depth);
+            }
         }
-        for (int k = 0; k + 6 <= command->count; k += 6) {
-            const RenderVertex *a = &out[k], *b = &out[k + 1], *c = &out[k + 2];
-            int back = (c->x - a->x) * (b->y - a->y) - (c->y - a->y) * (b->x - a->x) < 0.0f;
-            if (back == (((int)points[k][3] & 2) != 0)) continue;
-            for (int j = 1; j < 6; ++j) out[k + j] = out[k];
-        }
-    }
 }
 
 static void follow_camera(unsigned char *mapped, const Recording *frame, const float *shift) {
@@ -2444,6 +2546,44 @@ static int make_moving_room(uint32_t bytes) {
     moving_transfer = SDL_CreateGPUTransferBuffer(device, &transfer);
     moving_capacity = moving_buffer && moving_transfer ? wanted : 0;
     return moving_capacity != 0;
+}
+
+static int upload_replay_models(SDL_GPUCommandBuffer *buffer, const Recording *frame) {
+    uint32_t model_bytes = (uint32_t)frame->model_count * sizeof *replay_models;
+    uint32_t bone_bytes = (uint32_t)frame->bone_count * sizeof *replay_bones;
+    uint32_t wanted = model_bytes > bone_bytes ? model_bytes : bone_bytes;
+    if (wanted > replay_storage_capacity) {
+        uint32_t size = replay_storage_capacity ? replay_storage_capacity : 1 << 20;
+        while (size < wanted) size *= 2;
+        if (replay_model_buffer) SDL_ReleaseGPUBuffer(device, replay_model_buffer);
+        if (replay_bone_buffer) SDL_ReleaseGPUBuffer(device, replay_bone_buffer);
+        if (replay_model_transfer) SDL_ReleaseGPUTransferBuffer(device, replay_model_transfer);
+        SDL_GPUBufferCreateInfo info = {SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ, size, 0};
+        replay_model_buffer = SDL_CreateGPUBuffer(device, &info);
+        replay_bone_buffer = SDL_CreateGPUBuffer(device, &info);
+        SDL_GPUTransferBufferCreateInfo transfer = {SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD, size * 2, 0};
+        replay_model_transfer = SDL_CreateGPUTransferBuffer(device, &transfer);
+        replay_storage_capacity = replay_model_buffer && replay_bone_buffer && replay_model_transfer ? size : 0;
+        if (!replay_storage_capacity) return 0;
+    }
+    unsigned char *mapped = SDL_MapGPUTransferBuffer(device, replay_model_transfer, true);
+    if (!mapped) return 0;
+    memcpy(mapped, replay_models, model_bytes);
+    memcpy(mapped + replay_storage_capacity, replay_bones, bone_bytes);
+    SDL_UnmapGPUTransferBuffer(device, replay_model_transfer);
+    SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(buffer);
+    if (model_bytes) {
+        SDL_GPUTransferBufferLocation from = {replay_model_transfer, 0};
+        SDL_GPUBufferRegion to = {replay_model_buffer, 0, model_bytes};
+        SDL_UploadToGPUBuffer(copy, &from, &to, true);
+    }
+    if (bone_bytes) {
+        SDL_GPUTransferBufferLocation from = {replay_model_transfer, replay_storage_capacity};
+        SDL_GPUBufferRegion to = {replay_bone_buffer, 0, bone_bytes};
+        SDL_UploadToGPUBuffer(copy, &from, &to, true);
+    }
+    SDL_EndGPUCopyPass(copy);
+    return 1;
 }
 
 static int upload_replay_vertices(SDL_GPUCommandBuffer *buffer, const Recording *frame, const Recording *before,
@@ -2529,14 +2669,14 @@ static void replay_pass(SDL_GPUCommandBuffer *buffer, const Recording *frame, co
     depth.texture = depths[step->depth].texture;
     depth.load_op = step->depth_load;
     depth.store_op = SDL_GPU_STOREOP_STORE;
-    depth.stencil_load_op = depth.load_op;
-    depth.stencil_store_op = SDL_GPU_STOREOP_STORE;
+    depth.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
+    depth.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
     color[1].texture = depths[step->depth].color;
     color[1].load_op = depth.load_op;
     color[1].store_op = SDL_GPU_STOREOP_RESOLVE_AND_STORE;
     color[1].resolve_texture = depths[step->depth].resolved;
     SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(buffer, color, step->mirror ? 2 : 1, &depth);
-    encode(buffer, pass, frame->commands + step->first, step->count, replay_models, (const float (*)[384])replay_bones,
+    encode(buffer, pass, frame->commands + step->first, step->count, replay_model_buffer, replay_bone_buffer,
            replay_buffer, step->width, step->height, step->mirror);
     SDL_EndGPURenderPass(pass);
 }
@@ -2551,7 +2691,7 @@ int render_replay(float alpha) {
     blend_models(frame, before, alpha);
     SDL_GPUCommandBuffer *buffer = SDL_AcquireGPUCommandBuffer(device);
     if (!buffer) return 0;
-    if (!upload_replay_vertices(buffer, frame, before, alpha)) {
+    if (!upload_replay_vertices(buffer, frame, before, alpha) || !upload_replay_models(buffer, frame)) {
         SDL_CancelGPUCommandBuffer(buffer);
         return 0;
     }
@@ -2569,7 +2709,8 @@ int render_replay(float alpha) {
         SDL_CopyGPUTextureToTexture(copy, &step->from, &step->to, step->copy_width, step->copy_height, 1, false);
         SDL_EndGPUCopyPass(copy);
     }
-    present_texture(buffer, frame->shown, frame->shown_scale, frame->shown_width, frame->shown_height);
+    if (!render_toggles.unpaced)
+        present_texture(buffer, frame->shown, frame->shown_scale, frame->shown_width, frame->shown_height);
     SDL_SubmitGPUCommandBuffer(buffer);
     port_stats.replays++;
     port_debug_replayed(alpha);
@@ -2599,8 +2740,7 @@ void render_present(int target, int width, int height) {
     if (!replayed) present_texture(buffer, target ? textures[target].color : NULL, target ? textures[target].scale : 1, width, height);
     SDL_SubmitGPUCommandBuffer(buffer);
     commands = NULL;
-    vertex_cycle = 1;
-    vertex_used = vertex_flushed = 0;
+    restart_buffers();
     apply_quality();
     bury(presented);
     if (!replayed) {
