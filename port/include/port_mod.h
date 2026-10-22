@@ -6,7 +6,18 @@
 extern "C" {
 #endif
 
-#define PORT_MOD_API "1.0.0"
+#define PORT_MOD_API "1.2.0"
+
+enum { RENDER_SCALE_AUTO = -1 };
+
+typedef struct {
+    int auto_scale;
+    int fullscreen;
+    int vsync;
+    int nearest;
+    int window_width;
+    int window_height;
+} RenderDisplay;
 
 typedef struct {
     const char *id;
@@ -32,6 +43,18 @@ int port_mod_loaded(const char *id);
 const char *port_setting(const char *name);
 void port_mod_command(const char *name, PortCommandRun run, const char *help);
 void port_mod_panel(const char *name, PortPanelDraw draw);
+
+void render_set_quality(int scale, int samples);
+void render_set_window(int width, int height, int fullscreen);
+void render_toggle_fullscreen(void);
+void render_set_vsync(int enabled);
+void render_set_filter(int nearest);
+void render_display(RenderDisplay *display);
+void render_set_aspect(int numerator, int denominator);
+void render_set_smoothing(int enabled);
+int render_smoothing(void);
+void smooth_set_rate(int hz);
+int render_frame_width(void);
 
 int port_mods_command(const char *name, const char *const *keys, const char *const *values, int count, char *reply,
                       int size);

@@ -27,7 +27,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PORT = int(os.environ.get("DC2TK_DEBUG_PORT", "7777"))
-IMAGES = {"screenshot", "windowshot", "texture", "grab"}
+IMAGES = {"screenshot", "windowshot", "texture", "grab", "between"}
 
 
 def request(command, arguments, timeout=120):

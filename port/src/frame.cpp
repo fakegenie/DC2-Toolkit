@@ -4,6 +4,8 @@
 #include "mg_math.hpp"
 #include "mglib.hpp"
 
+extern "C" int port_screen_width(void);
+
 static float clip_corners[8][4];
 
 static void corner_bounds(float corners[8][4], float *high, float *low) {
@@ -171,7 +173,8 @@ int mgCFrame::GetDrawRect(mgVu0FBOX *rect, mgCDrawManager *manager) {
         test2(high, low);
         float half_width = mgScreenWidth * 0.5f;
         float half_height = mgScreenHeight * 0.5f;
-        visible = low[0] <= half_width && high[0] >= -half_width && low[1] <= half_height && high[1] >= -half_height && high[3] >= info->clip_min[2];
+        float half_frame = port_screen_width() * 0.5f;
+        visible = low[0] <= half_frame && high[0] >= -half_frame && low[1] <= half_height && high[1] >= -half_height && high[3] >= info->clip_min[2];
         if (visible) {
             high[0] += half_width;
             low[0] += half_width;

@@ -107,10 +107,7 @@ static u_char vu_byte(float value) {
 }
 
 static void sprite_vertex(RenderVertex *vertex, float x, float y, float z, float u, float v, const SpriteOp &item,
-                          float fog) {
-    float screen[4];
-    float depth;
-    gs_screen_mapping(screen, &depth);
+                          float fog, const float screen[4], float depth) {
     vertex->x = (x * screen[0] + screen[1] + 1.0f) / screen[0];
     vertex->y = (y * screen[2] + screen[3] - 1.0f) / screen[2];
     vertex->z = z * depth > 1.0f ? 1.0f : z * depth;
@@ -138,6 +135,9 @@ static void draw_sprite(const SpriteFrame &frame, const SpriteOp &item, const Re
     float fog = frame.fog[0] + frame.fog[3] * q;
     fog = fmaxf(fminf(fog, frame.fog[1]), frame.fog[2]);
     float u0 = item.data[3][0], v0 = item.data[3][1], u1 = item.data[4][0], v1 = item.data[4][1];
+    float screen[4];
+    float depth;
+    gs_screen_mapping(screen, &depth);
     RenderVertex out[6];
     if (item.mode != 1) {
         float hx = s[0] * frame.axis_x * 0.5f * q;
@@ -145,10 +145,10 @@ static void draw_sprite(const SpriteFrame &frame, const SpriteOp &item, const Re
         float x0 = cx - hx, y0 = cy - hy, x1 = cx + hx, y1 = cy + hy;
         if (!(x0 > 1.0f && y0 > 1.0f && x1 < 4095.0f && y1 < 4095.0f)) return;
         RenderVertex a = {}, b = {}, c = {}, d = {};
-        sprite_vertex(&a, x0, y0, cz, u0, v0, item, fog);
-        sprite_vertex(&b, x1, y0, cz, u1, v0, item, fog);
-        sprite_vertex(&c, x0, y1, cz, u0, v1, item, fog);
-        sprite_vertex(&d, x1, y1, cz, u1, v1, item, fog);
+        sprite_vertex(&a, x0, y0, cz, u0, v0, item, fog, screen, depth);
+        sprite_vertex(&b, x1, y0, cz, u1, v0, item, fog, screen, depth);
+        sprite_vertex(&c, x0, y1, cz, u0, v1, item, fog, screen, depth);
+        sprite_vertex(&d, x1, y1, cz, u1, v1, item, fog, screen, depth);
         out[0] = a, out[1] = b, out[2] = c, out[3] = b, out[4] = d, out[5] = c;
     } else {
         float sine = s[2], cosine = s[3];
@@ -160,7 +160,8 @@ static void draw_sprite(const SpriteFrame &frame, const SpriteOp &item, const Re
         if (!(low_x > 1.0f && low_y > 1.0f && high_x < 4095.0f && high_y < 4095.0f)) return;
         float uvs[4][2] = {{u0, v0}, {u1, v0}, {u0, v1}, {u1, v1}};
         RenderVertex v[4] = {};
-        for (int i = 0; i < 4; i++) sprite_vertex(&v[i], corners[i][0], corners[i][1], cz, uvs[i][0], uvs[i][1], item, fog);
+        for (int i = 0; i < 4; i++)
+            sprite_vertex(&v[i], corners[i][0], corners[i][1], cz, uvs[i][0], uvs[i][1], item, fog, screen, depth);
         out[0] = v[0], out[1] = v[1], out[2] = v[2], out[3] = v[1], out[4] = v[3], out[5] = v[2];
     }
     for (int i = 0; i < 6; i++) {
@@ -168,7 +169,7 @@ static void draw_sprite(const SpriteFrame &frame, const SpriteOp &item, const Re
         out[i].v /= (float)height;
     }
     render_source = RENDER_SOURCE_SPRITE;
-    render_draw(&state, RENDER_TRIANGLES, out, 6);
+    render_sprite(&state, out, 6, screen, depth);
 }
 
 PORT_OVERRIDE int mgC3DSprite::Draw(u_int *tag, float (*matrix)[4], mgCDrawManager *manager) {

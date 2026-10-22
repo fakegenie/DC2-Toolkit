@@ -8,6 +8,11 @@
 #include <string.h>
 #ifdef PORT_GRAPHICS
 #include <SDL3/SDL.h>
+#define AUDIO_TARGET 3.0f
+#define AUDIO_LIMIT 12.0f
+#define AUDIO_PULL 0.004f
+#define AUDIO_SWAY 0.01f
+
 static SDL_AudioStream *audio;
 #endif
 
@@ -198,7 +203,12 @@ void audio_frame(void) {
     audio_render(samples, 960);
     port_mods_audio(samples, 960);
 #ifdef PORT_GRAPHICS
-    if (audio && SDL_GetAudioStreamQueued(audio) < (int)sizeof(samples) * 5 && !SDL_PutAudioStreamData(audio, samples, sizeof(samples))) fprintf(stderr, "sound: %s\n", SDL_GetError());
+    if (!audio) return;
+    float fill = (float)SDL_GetAudioStreamQueued(audio) / (float)sizeof(samples);
+    if (fill >= AUDIO_LIMIT) return;
+    float ratio = 1.0f + (fill - AUDIO_TARGET) * AUDIO_PULL;
+    SDL_SetAudioStreamFrequencyRatio(audio, ratio < 1.0f - AUDIO_SWAY ? 1.0f - AUDIO_SWAY : ratio > 1.0f + AUDIO_SWAY ? 1.0f + AUDIO_SWAY : ratio);
+    if (!SDL_PutAudioStreamData(audio, samples, sizeof(samples))) fprintf(stderr, "sound: %s\n", SDL_GetError());
 #endif
 }
 

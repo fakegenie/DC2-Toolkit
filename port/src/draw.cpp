@@ -12,6 +12,7 @@
 #include <vector>
 
 enum { CACHE_LIMIT = 4096, CACHE_IDLE_FRAMES = 300, COPY_LIMIT = 8 };
+enum { LAYOUT_RIGHT = 511, WIDE_FRAME_LIMIT = 16, UV_WRAP = 1 << 14 };
 enum {
     GS_PRIM = 0x00, GS_RGBAQ = 0x01, GS_ST = 0x02, GS_UV = 0x03, GS_XYZF2 = 0x04, GS_XYZ2 = 0x05, GS_TEX0 = 0x06,
     GS_CLAMP = 0x08, GS_FOG = 0x0a, GS_XYZF3 = 0x0c, GS_XYZ3 = 0x0d, GS_TEX1 = 0x14, GS_XYOFFSET = 0x18,
@@ -45,6 +46,11 @@ struct TargetCopy {
 GsRegisters gs;
 
 static int frame_target;
+static int frame_shift;
+static struct {
+    u_int base;
+    int shift;
+} wide_frames[WIDE_FRAME_LIMIT];
 static RenderVertex queue[3];
 static int queued;
 static mgCTexture source_texture;
@@ -75,6 +81,7 @@ void gs_reset() {
 }
 
 void gs_frame(int fbp, int width, int height, int psm) {
+    frame_shift = 0;
     const mgCTexture *texture = resident_texture((u_int)fbp * 32, 0);
     if (texture) frame_target = gs_texture_for(texture);
     else frame_target = render_target((u_int)fbp * 32, width, height);
@@ -88,6 +95,34 @@ void gs_frame(int fbp, int width, int height, int psm) {
 
 int gs_frame_target() {
     return frame_target;
+}
+
+void gs_frame_shift(int pixels) {
+    frame_shift = pixels;
+    u_int base = field(gs.frame, 0, 9) * 32;
+    int slot = WIDE_FRAME_LIMIT - 1;
+    for (int i = 0; i < WIDE_FRAME_LIMIT; ++i)
+        if (wide_frames[i].base == base) slot = i;
+    for (int i = slot; i > 0; --i) wide_frames[i] = wide_frames[i - 1];
+    wide_frames[0].base = base;
+    wide_frames[0].shift = pixels;
+}
+
+int gs_read_shift(u_int base) {
+    for (int i = 0; i < WIDE_FRAME_LIMIT; ++i)
+        if (wide_frames[i].base == base) return wide_frames[i].shift;
+    return 0;
+}
+
+static u_long shifted_scissor(u_long value) {
+    u_long left = field(value, 0, 11);
+    u_long right = field(value, 16, 11);
+    if (left == 0 && right == LAYOUT_RIGHT) right += (u_long)(2 * frame_shift);
+    else {
+        left += (u_long)frame_shift;
+        right += (u_long)frame_shift;
+    }
+    return (value & ~(u_long)0x7ff07ff) | left | right << 16;
 }
 
 static u_int gs_alpha(u_int alpha) {
@@ -334,6 +369,8 @@ void gs_copy_image(u_int source_base, int source_x, int source_y, u_int destinat
         palettes[destination_clut->clut].assign(colors, colors + (destination_clut->bpp == 8 ? 256 : 16));
         return;
     }
+    source_x += gs_read_shift(source_base);
+    destination_x += gs_read_shift(destination_base);
     if (width <= 0 || height <= 0 || source_x < 0 || source_y < 0 || destination_x < 0 || destination_y < 0) return;
     int source = gs_texture(source_base, source_x + width, source_y + height);
     int destination = gs_texture(destination_base, destination_x + width, destination_y + height);
@@ -387,12 +424,18 @@ void gs_next_frame() {
     }
 }
 
+static int sampled_texture(u_long tex0, int width, int height) {
+    u_int base = field(tex0, 0, 14);
+    int target = resident_texture(base, 0) ? 0 : render_target_at(base);
+    return target ? target : gs_texture(tex0, width, height);
+}
+
 static int bound_texture(int repeat, int *width, int *height) {
     int texture_width = 1 << field(gs.tex0, 26, 4);
     int texture_height = 1 << field(gs.tex0, 30, 4);
     int texture = 0;
     if (source && source->tex0.TBP0 == field(gs.tex0, 0, 14) && source->image[0]) texture = gs_texture_for(source);
-    else texture = gs_texture(gs.tex0, texture_width, texture_height);
+    else texture = sampled_texture(gs.tex0, texture_width, texture_height);
     texture = gs_sampled(texture, texture_width, texture_height, repeat);
     *width = texture ? render_width(texture) : 1;
     *height = texture ? render_height(texture) : 1;
@@ -516,8 +559,11 @@ static void kick(u_int x, u_int y, u_int z, int fog, int draw) {
     vertex->b = (unsigned char)field(gs.rgbaq, 16, 8);
     vertex->a = (unsigned char)field(gs.rgbaq, 24, 8);
     vertex->fog = (float)fog / 255.0f;
+    int lift = field(gs.prim, 4, 1) ? gs_read_shift(field(gs.tex0, 0, 14)) : 0;
     if (field(gs.prim, 8, 1)) {
-        vertex->u = (float)field(gs.uv, 0, 14) / 16.0f;
+        int u = (int)field(gs.uv, 0, 14);
+        if (lift > 0 && u >= UV_WRAP - lift * 16) u -= UV_WRAP;
+        vertex->u = (float)u / 16.0f + (float)lift;
         vertex->v = (float)field(gs.uv, 16, 14) / 16.0f;
     } else {
         float s, t;
@@ -526,7 +572,7 @@ static void kick(u_int x, u_int y, u_int z, int fog, int draw) {
         bits = (u_int)(gs.st >> 32);
         memcpy(&t, &bits, 4);
         float q = gs.q != 0.0f ? gs.q : 1.0f;
-        vertex->u = s / q * (float)(1 << field(gs.tex0, 26, 4));
+        vertex->u = s / q * (float)(1 << field(gs.tex0, 26, 4)) + (float)lift;
         vertex->v = t / q * (float)(1 << field(gs.tex0, 30, 4));
     }
     queued++;
@@ -610,11 +656,11 @@ void gs_write(int reg, u_long value) {
         case GS_CLAMP: gs.clamp = value; break;
         case GS_TEXA: gs.texa = value; break;
         case GS_FOGCOL: gs.fogcol = value; break;
-        case GS_SCISSOR: gs.scissor = value; break;
+        case GS_SCISSOR: gs.scissor = frame_shift ? shifted_scissor(value) : value; break;
         case GS_ALPHA: gs.alpha = value; break;
         case GS_TEST: gs.test = value; break;
         case GS_ZBUF: gs.zbuf = value; break;
-        case GS_XYOFFSET: gs.xyoffset = value; break;
+        case GS_XYOFFSET: gs.xyoffset = frame_shift ? value - (u_long)(frame_shift * 16) : value; break;
         case GS_BITBLTBUF: gs.bitbltbuf = value; break;
         case GS_TRXPOS: gs.trxpos = value; break;
         case GS_TRXREG: gs.trxreg = value; break;

@@ -542,54 +542,76 @@ change the second-to-last does not.
 
 ### Resolution changing
 
-Mostly built: `--scale 1-4` renders at whole multiples of the PS2 resolution, `--msaa 1|2|4|8`
-adds multisampling, and the debug API's `scale` and `msaa` change both while running. Left to do:
+Built: `--scale 1-4|auto` (auto renders at the smallest whole multiple that covers the window and
+scales down to fit it exactly), `--msaa 1|2|4|8`, `--fullscreen` (Alt+Enter or F11 toggles it),
+`--vsync`, a window size, and nearest or linear scaling; each is also a port setting
+(`render.scale`, `render.width`, `render.fullscreen`, ...) and a function of `port_mod.h` 1.1,
+which the display mod (`port/display/`, `dc2tk.display`) sets from its player-facing settings.
+The window is HiDPI on macOS. Left to do:
 
-1. **A player-facing setting:** an options screen, fullscreen or borderless, and vsync. A mod
-   set can already choose `render.scale` and `render.msaa` as port settings (a native-only mod's
-   `"port": {"settings"}`), which the port reads from the override folder's `dc2tk-port.cfg`. The window is a fixed 960x720 with the picture fitted 4:3 inside.
-2. **Any resolution:** non-integer scales, so 1080p and 1440p fit exactly.
-3. **The known 1x gaps:** render-to-texture cache textures stay 1x and shadow edges are not
-   antialiased; the bitmap fonts and 2D art go soft when upscaled, so they need a filter choice.
-4. **Checks at 2x and above** of heat haze, depth of field and water.
+1. **An in-game options screen** for these, instead of a mod set.
+2. **The known 1x gaps:** render-to-texture cache textures stay 1x and shadow edges are not
+   antialiased; the bitmap fonts and 2D art go soft when upscaled.
+3. **Checks at 2x and above** of heat haze, depth of field and water.
 
 ### Widescreen
 
-The engine assumes a 512x480 screen in several separate places:
+Built (`--aspect 16:9`, `render.aspect`, the display mod's `aspect`): the frame is widened to W
+pixels (512 is 4:3) while the game's 512-wide layout stays as it was, centred in it:
 
-1. **3D view:** widen the horizontal field of view (`mgSetRenderInfo` builds the screen matrix
-   from one projection value) and render into wider targets than the canonical 640x512.
-2. **Culling:** `prim_clip_check` and the screen-bound tests in object visibility would cut off
-   anything in the new side areas; they need the wider bounds.
-3. **2D:** menus, HUD, text and fades use absolute 512-wide coordinates. Centre most of it,
-   anchor the edge HUD pieces (health top left and so on) to the sides, and make full-screen fills
-   (`DrawMenuFillBox(mgScreenWidth...)`) cover the whole width.
-4. **Full-screen effects:** heat haze, blur and depth of field read the frame back by screen
-   position and must know the width.
-5. **Content limits:** movies stay 4:3 with side bars; some cutscenes were framed for 4:3 and may
-   show unfinished scenery or actors waiting off camera, so a few places may drop back to 4:3.
+- `mgSetPkFrameBuffer` makes every screen-sized (512-wide) frame buffer W wide, the back buffer
+  and the work targets the engine draws whole-screen passes into (the dungeon draws each character
+  into one that shares the frame's depth buffer, so they must stay the same size), with its
+  XYOFFSET at 0x800 - W/2; the engine's own XYOFFSET writes there are moved by (W - 512) / 2, its
+  full-width scissor widened and its other scissors moved, so 2D draws in the middle
+  (`port/src/draw.cpp`, which keeps each target's shift).
+- The 3D view widens (Hor+): `mgSetRenderInfo` passes W for the screen box and guard band and
+  keeps its 512-based projection and aspect; frame culling uses W (`port/src/frame.cpp`).
+- Reads of the back buffer (copies, stores, 2D sampling) see its 512-wide middle, so the effects
+  that read the frame back work as before, in the middle.
+- Full-frame draws are widened: clears, fades (`DivSpriteScreen`), the frame border, and the
+  character shadow pass (`shadow_work`).
+- Only the town (walking, Georama, waiting) and dungeon floors (exploring, events) are wide
+  (`port_world_shown`); menus, the title loop (its costume, load and options screens draw models
+  that a wide frame loses) and 2D-only screens are shown 4:3.
 
-Do it as one logical screen width changed through `port.json`, then audit every use of 512, 640
-and `mgScreenWidth`; the debug `capture` command finds 2D draws in the wrong place.
+Left to do:
+
+1. **Effects in the side areas:** depth of field, heat haze, water refraction, outlines, the
+   photo camera and cross-fades act on the middle only.
+2. **The HUD** stays in the middle; anchoring the edge pieces (health, minimap) to the sides.
+3. **Content limits:** cutscenes framed for 4:3 may show scenery or actors off camera; movies
+   stay 4:3.
 
 ### 144 fps
 
-Game logic is tied to the frame: towns and dungeons run at 25 fps (`mgFrameRate = 2`), and
-animation, physics, camera, effects, timers and scripts each advance one fixed step per frame.
-Only 28 engine sites scale by `mgGetNowFrameRate`, so running the logic faster would break timing,
-physics and events. Keep the logic at 25 or 50 Hz and draw interpolated frames between:
+Built as interpolation (`--smooth HZ`, `render.smooth`, the smooth mod `port/smooth/`,
+`dc2tk.smooth`). The game logic stays at its 25 or 50 Hz (`mgFrameRate`; only five engine sites
+scale by `mgGetNowFrameRate`, so a variable time step would mean rewriting every system and every
+script that counts frames):
 
-1. **Record the whole frame and encode it at present** (also the largest remaining performance
-   lever), giving each draw a stable identity (visual and face group) so it can be matched from
-   one logic frame to the next.
-2. **Interpolate:** for the frames in between, redraw the latest recording with the camera, model
-   matrices and bone matrices blended between the last two logic frames; 2D redraws unchanged.
-3. **What cannot be blended easily:** anything the CPU projects to the screen before the port sees
-   it: particles and 3D sprites (`mgTransWorldPrim`), shadow volumes and water. These stay at the
-   logic rate unless they are recorded in world space.
-4. **Pacing and budget:** a steady 144 Hz needs good present timing, and each in-between frame
-   must cost well under 7 ms, which only step 1 makes possible (a logic frame costs 5 to 11 ms
-   on the M-series Mac today).
+- `render.c` records each frame: every pass (its target, load operations and commands, with the
+  model uniforms, bone sets and a copy of the 2D vertex data) and every texture copy, in order.
+  Textures released while smoothing are freed two frames later, so a recording never points at a
+  freed one.
+- At the game's present the recording replaces the frame shown: `render_replay(alpha)` re-encodes
+  it with each model's uniforms and bones blended between the frame before (alpha 0) and the last
+  (alpha 1). Models are matched by resident mesh, each to the copy of the frame before nearest in
+  its own world and screen matrices and its bones (the camera's matrix is the same for every
+  model, so it cannot tell copies apart); one that moved by more than a quarter of them snaps.
+- `smooth.c` paces the replays at the display's refresh (or the chosen rate) while the field
+  timer waits (`port_graphics_wait`), never starting one that would run past the next field; the
+  picture is one update behind.
+- A replay costs 0.6 to 0.8 ms of CPU at 1x on the M-series Mac; the debug build's `stats` shows
+  `replays` and `replay_us` per frame, and `between alpha=X` returns an in-between frame.
 
-A cheap first test: see whether some scenes run correctly with logic at 50 Hz (`mgFrameRate = 1`),
-as the title already does, to learn how much of the engine really scales with the frame rate.
+Left to do:
+
+1. **What the CPU places on the screen** (particles, 3D sprites, water, shadows drawn as 2D)
+   stays at the game's rate; recording them in world space would let them blend too.
+2. **Present pacing with vsync:** each replay blocks on the display, so fewer fit between the
+   20 ms fields; a mailbox present (where the platform has one) would not block.
+3. **Mid-frame uploads:** a texture uploaded after an earlier pass used it is replayed with its
+   last contents.
+4. **Blending effects** that read the frame (the castle's lamp glow) come out slightly dimmer in
+   replays.

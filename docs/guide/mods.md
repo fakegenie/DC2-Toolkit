@@ -332,15 +332,34 @@ A mod with `"targets": ["native"]` may use features only the native port has. Su
 }
 ```
 
-**Port settings.** `"port": {"settings"}` sets the port's own options, such as `"render.scale"` (internal resolution multiplier) and `"render.msaa"` (samples):
+**Port settings.** `"port": {"settings"}` sets the port's own options:
+
+| Setting | Values | Port option |
+| --- | --- | --- |
+| `render.aspect` | `"16:9"`, `"21:9"` and so on: towns and dungeons widen to it, menus and the title stay 4:3 | `--aspect 16:9` |
+| `render.scale` | `1` to `4`, or `"auto"` to render at the window's resolution | `--scale` |
+| `render.msaa` | `1`, `2`, `4` or `8` samples | `--msaa` |
+| `render.width`, `render.height` | the window's size | |
+| `render.fullscreen` | `true` or `false`; Alt+Enter or F11 toggles it while playing | `--fullscreen` |
+| `render.vsync` | `true` waits for the display's refresh | `--vsync` |
+| `render.filter` | `"nearest"` for sharp pixels, else smooth | |
+| `render.smooth`, `render.refresh` | `true` draws frames between the game's updates (below); `render.refresh` caps them a second, `0` for the display's rate | `--smooth 144`, `--smooth 0` |
 
 ```json
-"port": {"settings": {"render.scale": 2, "render.msaa": 4}}
+"port": {"settings": {"render.aspect": "16:9", "render.scale": "auto"}}
 ```
 
-The port's `--scale` and `--msaa` options win over these.
+The port's options win over these.
 
-**Port code.** `"port": {"sources", "api"}` adds C or C++ files to the port. `"sources"` picks them with patterns and `"api"` is the range of `port_mod.h` they are written for (`"^1.0"`). Each file includes `port_mod.h` and registers a table of hooks:
+**The display mod.** `port/display/` is a mod, `dc2tk.display`, that gives players these choices as settings of their own (aspect, window size, fullscreen, vsync, render scale, multisampling, filter) and sets them through `port_mod.h`. Link or copy the folder into the mods folder and choose it in a [mod set](#mod-sets):
+
+```json
+{"format": 2, "mods": [{"id": "dc2tk.display", "settings": {"aspect": "21:9", "window": "2560x1440"}}]}
+```
+
+**The smooth motion mod.** The game updates 25 times a second in towns and dungeons (50 at the title), and everything in it moves one step per update. `port/smooth/` is a mod, `dc2tk.smooth`, that draws frames in between for 60, 120 or 144 Hz displays: the port records each frame it draws and, while the game waits for its next update, draws the recording again with the camera, every model and every bone blended from the update before to the last. Particles, 3D sprites, water and the HUD keep the game's own rate, and the picture is one update (40 ms) behind. Its settings are `enabled` and `refresh` (`display`, the screen's rate, or 60 to 240). The port's debug build shows the frames it draws between updates as `replays` in `stats`, and `between alpha=0.5` returns one as a picture.
+
+**Port code.** `"port": {"sources", "api"}` adds C or C++ files to the port. `"sources"` picks them with patterns and `"api"` is the range of `port_mod.h` they are written for (`"^1.2"`). Each file includes `port_mod.h` and registers a table of hooks:
 
 ```c
 #include "port_mod.h"
@@ -353,7 +372,7 @@ static const PortMod hello = {.id = "andrew.hello", .field = every_field_frame};
 PORT_MOD(hello)
 ```
 
-The hooks are `start`, `event`, `field`, `frame_enter`, `frame_drawn`, `frame_exit`, `overlay`, `present`, `input`, `audio` and `host`. `port_setting("andrew.hello.speed")` reads a setting's value as text. In the debug build, `port_mod_command` adds a command to the debug API and `port_mod_panel` adds a panel to the debug window's **Mods** tab. The debug tools are themselves a port mod, `dc2tk.debug-tools`, in `port/debug/`. Build the port with another mod's code using `python3 -I tools/port.py --mod mods/hello`.
+The hooks are `start`, `event`, `field`, `frame_enter`, `frame_drawn`, `frame_exit`, `overlay`, `present`, `input`, `audio` and `host`. `port_setting("andrew.hello.speed")` reads a setting's value as text. API 1.1 adds the display: `render_set_aspect`, `render_set_window`, `render_set_vsync`, `render_set_quality` (`RENDER_SCALE_AUTO` for the window's resolution), `render_set_filter`, `render_toggle_fullscreen`, and `render_display` and `render_frame_width` to read them back. API 1.2 adds smooth motion: `render_set_smoothing`, `render_smoothing` and `smooth_set_rate`. In the debug build, `port_mod_command` adds a command to the debug API and `port_mod_panel` adds a panel to the debug window's **Mods** tab. The debug tools are themselves a port mod, `dc2tk.debug-tools`, in `port/debug/`. Build the port with another mod's code using `python3 -I tools/port.py --mod mods/hello`.
 
 ## Trying a change quickly
 

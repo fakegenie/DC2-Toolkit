@@ -19,6 +19,7 @@ typedef struct {
     uint32_t texture_decodes;
     uint32_t target_creates;
     uint32_t texture_renames;
+    uint32_t replays;
     uint32_t mesh_builds;
     uint32_t sorted_draws;
     uint32_t allocations;
@@ -27,6 +28,7 @@ typedef struct {
     uint32_t disc_reads;
     uint32_t disc_bytes;
     uint64_t wait_ns;
+    uint64_t replay_ns;
     uint32_t textures_live;
     uint32_t pipelines;
     uint32_t cached_textures;

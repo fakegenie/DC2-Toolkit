@@ -1,0 +1,36 @@
+{
+  "format": 2,
+  "id": "dc2tk.display",
+  "version": "1.0.0",
+  "name": "Display",
+  "description": "Widescreen, window size, fullscreen, vsync and render quality for the native port.",
+  "targets": ["native"],
+  "port": {
+    "sources": ["*.c"],
+    "api": "^1.1"
+  },
+  "settings": {
+    "aspect": {
+      "type": "enum",
+      "default": "16:9",
+      "values": ["4:3", "16:10", "16:9", "21:9"],
+      "label": "Aspect ratio: towns and dungeons widen to it; menus and the title stay 4:3"
+    },
+    "window": {
+      "type": "enum",
+      "default": "1280x720",
+      "values": ["960x720", "1280x720", "1600x900", "1920x1080", "2560x1440"],
+      "label": "Window size"
+    },
+    "fullscreen": {"type": "bool", "default": false, "label": "Fullscreen (Alt+Enter or F11 toggles it)"},
+    "vsync": {"type": "bool", "default": false, "label": "Wait for the display's refresh"},
+    "quality": {
+      "type": "enum",
+      "default": "auto",
+      "values": ["auto", "1", "2", "3", "4"],
+      "label": "Render scale: auto renders at the window's resolution"
+    },
+    "msaa": {"type": "enum", "default": "1", "values": ["1", "2", "4", "8"], "label": "Multisampling"},
+    "filter": {"type": "enum", "default": "smooth", "values": ["smooth", "sharp"], "label": "Scaling filter"}
+  }
+}

@@ -16,7 +16,7 @@ pub const FORMAT: u32 = 2;
 pub const GAME: &str = "dc2-pal";
 pub const FIRST_VERSION: &str = "0.1.0";
 pub const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const PORT_API: &str = "1.0.0";
+pub const PORT_API: &str = "1.2.0";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -582,6 +582,13 @@ pub fn index(mods_dir: &Path) -> Result<IndexMap<String, PathBuf>> {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn the_port_api_is_the_one_port_mod_h_declares() {
+        let header = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../port/include/port_mod.h");
+        let text = std::fs::read_to_string(header).unwrap();
+        assert!(text.contains(&format!("#define PORT_MOD_API \"{PORT_API}\"")), "port_mod.h and PORT_API differ");
+    }
 
     fn fresh_folder() -> PathBuf {
         static NEXT: AtomicUsize = AtomicUsize::new(0);

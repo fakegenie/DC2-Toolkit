@@ -1,5 +1,7 @@
 #include "render.h"
+#include "port_mod.h"
 #include "port_stats.h"
+#include "smooth.h"
 #include "shaders.h"
 #include <SDL3/SDL.h>
 #if defined(__APPLE__) && !defined(SDL_PLATFORM_IOS)
@@ -21,8 +23,12 @@ enum { SCALE_LIMIT = 4, SAMPLE_LIMIT = 8, WIDEN_LIMIT = 1024 };
 #ifdef SDL_PLATFORM_IOS
 #define WINDOW_FLAGS (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY)
 #else
-#define WINDOW_FLAGS SDL_WINDOW_RESIZABLE
+#define WINDOW_FLAGS (SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY)
 #endif
+
+#define PIXEL_ASPECT 1.25f
+
+enum { LAYOUT_WIDTH = 512, LAYOUT_HEIGHT = 480, FRAME_WIDTH_LIMIT = 1024 };
 
 enum { WINDOW_WIDTH = 960, WINDOW_HEIGHT = 720, TARGET_WIDTH = 640, TARGET_HEIGHT = 512, DEPTH_TILE = 64 };
 
@@ -73,7 +79,140 @@ typedef struct {
     int count;
     int model;
     int bones;
+    uint64_t signature;
+    int pair;
+    int shadow;
+    int follow;
+    uint32_t copy;
+    int moving;
 } Command;
+
+enum { STEP_PASS, STEP_COPY, STEP_BLIT };
+
+#define SNAP_FRACTION 0.25f
+#define CUT_DISTANCE 40.0f
+#define CUT_TURN 0.3f
+#define BONE_FLIP 1.6f
+#define DRAW_JUMP 64.0f
+#define CLAIM_NEAR 0x40000000
+#define ATTACH_GAP 0.25f
+#define ATTACH_REACH 400.0f
+#define EXACT_FRACTION 1e-6f
+#define SCREEN_WEIGHT 1e-7f
+
+static void forget_recordings(void);
+static void multiply(float *out, const float *a, const float *b);
+static int invert(float *out, const float *matrix);
+static int grow(void **items, int *capacity, int needed, size_t size);
+
+typedef struct {
+    int kind;
+    SDL_GPUTexture *color;
+    SDL_GPUTexture *multi;
+    int depth;
+    int width;
+    int height;
+    SDL_GPULoadOp color_load;
+    SDL_GPULoadOp depth_load;
+    int mirror;
+    int first;
+    int count;
+    SDL_GPUTextureLocation from;
+    SDL_GPUTextureLocation to;
+    Uint32 copy_width;
+    Uint32 copy_height;
+    SDL_GPUBlitInfo blit;
+} Step;
+
+typedef struct {
+    const void *key;
+    float place[3];
+    float world[16];
+    float camera[16];
+    float light[16];
+    float screen[16];
+    float mapping[4];
+    float depth;
+    int first;
+    int count;
+    int match;
+    int model;
+    int bone;
+    float offset[16];
+} ShadowRecord;
+
+typedef struct {
+    Step *steps;
+    int step_count;
+    int step_capacity;
+    Command *commands;
+    int command_count;
+    int command_capacity;
+    MeshUniforms *models;
+    uint64_t *keys;
+    int *model_bones;
+    int *matches;
+    int model_count;
+    int model_capacity;
+    float (*bones)[384];
+    int bone_count;
+    int bone_capacity;
+    unsigned char *vertices;
+    uint32_t vertex_used;
+    uint32_t vertex_capacity;
+    int paired;
+    uint32_t moving_bytes;
+    ShadowRecord *shadows;
+    int shadow_count;
+    int shadow_capacity;
+    float (*shapes)[4];
+    int shape_count;
+    int shape_capacity;
+    int shadows_matched;
+    float (*points)[4];
+    uint32_t point_capacity;
+    float (*follows)[5];
+    int follow_count;
+    int follow_capacity;
+    float eye[3];
+    float pose[9];
+    float view[16];
+    int has_camera;
+    SDL_GPUTexture *shown;
+    int shown_width;
+    int shown_height;
+    int shown_scale;
+    int valid;
+} Recording;
+
+static Recording recordings[3];
+static struct {
+    SDL_GPUTexture *texture;
+    uint64_t frame;
+} *graveyard;
+static int graveyard_count;
+static int graveyard_capacity;
+static struct {
+    int first;
+    int count;
+    uint64_t frame;
+} *mesh_graveyard;
+static int mesh_graveyard_count;
+static int mesh_graveyard_capacity;
+static int recording_slot;
+static int shown_slot = 1;
+static int previous_slot = 2;
+static int smoothing;
+static SDL_GPUBuffer *replay_buffer;
+static SDL_GPUTransferBuffer *replay_transfer;
+static SDL_GPUBuffer *moving_buffer;
+static SDL_GPUTransferBuffer *moving_transfer;
+static uint32_t moving_capacity;
+static int replay_uploaded;
+static MeshUniforms *replay_models;
+static int replay_model_capacity;
+static float (*replay_bones)[384];
+static int replay_bone_capacity;
 
 static SDL_Window *window;
 static SDL_GPUDevice *device;
@@ -132,6 +271,10 @@ static struct {
 static int mesh_retired_count;
 static int mesh_retired_capacity;
 static unsigned char *vertex_data;
+static float (*point_data)[4];
+static const float (*shadow_points)[4];
+static int drawing_shadow = -1;
+static int drawing_follow = -1;
 static uint32_t vertex_used;
 static uint32_t vertex_flushed;
 static int vertex_cycle;
@@ -152,6 +295,13 @@ static int quality_scale = 1;
 static int quality_samples = 1;
 static int wanted_scale = 1;
 static int wanted_samples = 1;
+static int auto_scale;
+static int frame_width = LAYOUT_WIDTH;
+static int window_width = WINDOW_WIDTH;
+static int window_height = WINDOW_HEIGHT;
+static int fullscreen;
+static int vsync;
+static int nearest;
 static int background;
 static int restore_slot;
 
@@ -228,6 +378,44 @@ static SDL_GPUTexture *create_texture(int width, int height, SDL_GPUTextureForma
     return texture;
 }
 
+static void apply_present_mode(void) {
+    SDL_GPUPresentMode modes[] = {SDL_GPU_PRESENTMODE_MAILBOX, SDL_GPU_PRESENTMODE_IMMEDIATE,
+                                  SDL_GPU_PRESENTMODE_VSYNC};
+    for (int i = vsync ? 2 : 0; i < 3; ++i) {
+        if (!SDL_WindowSupportsGPUPresentMode(device, window, modes[i])) continue;
+        SDL_SetGPUSwapchainParameters(device, window, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, modes[i]);
+        return;
+    }
+}
+
+static void release_later(SDL_GPUTexture *texture) {
+    if (!texture) return;
+    if (!smoothing || !grow((void **)&graveyard, &graveyard_capacity, graveyard_count + 1, sizeof *graveyard)) {
+        SDL_ReleaseGPUTexture(device, texture);
+        return;
+    }
+    graveyard[graveyard_count].texture = texture;
+    graveyard[graveyard_count].frame = presented;
+    graveyard_count++;
+}
+
+static void release_mesh_range(int first, int count);
+
+static void bury(uint64_t before) {
+    int kept = 0;
+    for (int i = 0; i < graveyard_count; ++i) {
+        if (graveyard[i].frame + 2 <= before) SDL_ReleaseGPUTexture(device, graveyard[i].texture);
+        else graveyard[kept++] = graveyard[i];
+    }
+    graveyard_count = kept;
+    kept = 0;
+    for (int i = 0; i < mesh_graveyard_count; ++i) {
+        if (mesh_graveyard[i].frame + 2 <= before) release_mesh_range(mesh_graveyard[i].first, mesh_graveyard[i].count);
+        else mesh_graveyard[kept++] = mesh_graveyard[i];
+    }
+    mesh_graveyard_count = kept;
+}
+
 static int free_slot(void) {
     for (int i = 1; i < TEXTURE_LIMIT; ++i)
         if (!textures[i].used) return i;
@@ -239,15 +427,11 @@ int render_init(void) {
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) render_error("video");
     device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_MSL | SDL_GPU_SHADERFORMAT_SPIRV, 0, NULL);
     if (!device) render_error("device");
-    window = SDL_CreateWindow("Dark Chronicle", WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_FLAGS);
+    window = SDL_CreateWindow("Dark Chronicle", window_width, window_height,
+                              WINDOW_FLAGS | (fullscreen ? SDL_WINDOW_FULLSCREEN : 0));
     if (!window || !SDL_ClaimWindowForGPUDevice(device, window)) render_error("window");
     if (background) render_send_back(window);
-    SDL_GPUPresentMode modes[] = {SDL_GPU_PRESENTMODE_MAILBOX, SDL_GPU_PRESENTMODE_IMMEDIATE};
-    for (int i = 0; i < 2; ++i) {
-        if (!SDL_WindowSupportsGPUPresentMode(device, window, modes[i])) continue;
-        SDL_SetGPUSwapchainParameters(device, window, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, modes[i]);
-        break;
-    }
+    apply_present_mode();
     depth_format = SDL_GPUTextureSupportsFormat(device, SDL_GPU_TEXTUREFORMAT_D24_UNORM_S8_UINT, SDL_GPU_TEXTURETYPE_2D,
                                                 SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET)
                        ? SDL_GPU_TEXTUREFORMAT_D24_UNORM_S8_UINT
@@ -572,6 +756,14 @@ static void release_retired_meshes(void) {
 
 void render_mesh_forget(int first, int count) {
     if (first < 0 || count <= 0) return;
+    if (smoothing &&
+        grow((void **)&mesh_graveyard, &mesh_graveyard_capacity, mesh_graveyard_count + 1, sizeof *mesh_graveyard)) {
+        mesh_graveyard[mesh_graveyard_count].first = first;
+        mesh_graveyard[mesh_graveyard_count].count = count;
+        mesh_graveyard[mesh_graveyard_count].frame = presented;
+        mesh_graveyard_count++;
+        return;
+    }
     if (!pending_count) {
         release_mesh_range(first, count);
         return;
@@ -586,6 +778,213 @@ void render_mesh_forget(int first, int count) {
     mesh_retired[mesh_retired_count].first = first;
     mesh_retired[mesh_retired_count].count = count;
     mesh_retired_count++;
+}
+
+static void encode(SDL_GPUCommandBuffer *buffer, SDL_GPURenderPass *pass, const Command *list, int count,
+                   const MeshUniforms *model_list, const float (*bone_list)[384], SDL_GPUBuffer *drawn, int width,
+                   int height, int mirror) {
+    float scale[4] = {2.0f / (float)width, 2.0f / (float)height, 0.0f, 0.0f};
+    SDL_GPUBuffer *bound_buffer = NULL;
+    SDL_GPUGraphicsPipeline *last_pipeline = NULL;
+    const Command *last = NULL;
+    int vertex_uniforms = -2, last_bones = -1;
+    for (int i = 0; i < count; ++i) {
+        const Command *command = &list[i];
+        SDL_GPUBuffer *source = command->resident ? mesh_buffer : command->moving ? moving_buffer : drawn;
+        if (source != bound_buffer) {
+            SDL_GPUBufferBinding binding = {source, 0};
+            SDL_BindGPUVertexBuffers(pass, 0, &binding, 1);
+            bound_buffer = source;
+        }
+        if (command->model >= 0) {
+            if (command->model != vertex_uniforms)
+                SDL_PushGPUVertexUniformData(buffer, 0, &model_list[command->model], sizeof model_list[0]);
+            if (command->bones != last_bones)
+                SDL_PushGPUVertexUniformData(buffer, 1, bone_list[command->bones], sizeof bone_list[0]);
+            vertex_uniforms = command->model;
+            last_bones = command->bones;
+        } else if (vertex_uniforms != -1) {
+            SDL_PushGPUVertexUniformData(buffer, 0, scale, sizeof scale);
+            vertex_uniforms = -1;
+        }
+        SDL_GPUGraphicsPipeline *pipeline = pipeline_for(command->key | (mirror ? KEY_MIRROR : 0));
+        if (pipeline != last_pipeline) {
+            SDL_BindGPUGraphicsPipeline(pass, pipeline);
+            last_pipeline = pipeline;
+            port_stats.pipeline_changes++;
+        }
+        if (!last || memcmp(&command->scissor, &last->scissor, sizeof command->scissor))
+            SDL_SetGPUScissor(pass, &command->scissor);
+        if (!last || command->blend_constant != last->blend_constant) {
+            SDL_FColor constant = {command->blend_constant, command->blend_constant, command->blend_constant,
+                                   command->blend_constant};
+            SDL_SetGPUBlendConstants(pass, constant);
+        }
+        if (!last || command->color != last->color || command->sampler != last->sampler ||
+            command->destination != last->destination) {
+            SDL_GPUTextureSamplerBinding sampled[2] = {{command->color, samplers[command->sampler]},
+                                                       {command->destination, samplers[0]}};
+            SDL_BindGPUFragmentSamplers(pass, 0, sampled, 2);
+        }
+        if (!last || memcmp(&command->fragment, &last->fragment, sizeof command->fragment))
+            SDL_PushGPUFragmentUniformData(buffer, 0, &command->fragment, sizeof command->fragment);
+        uint32_t stride = (command->key & KEY_MESH) ? sizeof(MeshVertex) : sizeof(RenderVertex);
+        SDL_DrawGPUPrimitives(pass, (Uint32)command->count, 1, command->offset / stride, 0);
+        last = command;
+    }
+}
+
+static int grow(void **items, int *capacity, int needed, size_t size) {
+    if (needed <= *capacity) return 1;
+    int wanted = *capacity ? *capacity : 256;
+    while (wanted < needed) wanted *= 2;
+    void *grown = realloc(*items, (size_t)wanted * size);
+    if (!grown) return 0;
+    *items = grown;
+    *capacity = wanted;
+    return 1;
+}
+
+static Step *new_step(Recording *frame) {
+    if (!grow((void **)&frame->steps, &frame->step_capacity, frame->step_count + 1, sizeof *frame->steps)) return NULL;
+    Step *step = &frame->steps[frame->step_count++];
+    memset(step, 0, sizeof *step);
+    return step;
+}
+
+static void record_model(Recording *frame, Command *kept, const Command *command, int target) {
+    int model = frame->model_count;
+    if (!grow((void **)&frame->models, &frame->model_capacity, model + 1, sizeof *frame->models)) return;
+    frame->keys = realloc(frame->keys, (size_t)frame->model_capacity * sizeof *frame->keys);
+    frame->model_bones = realloc(frame->model_bones, (size_t)frame->model_capacity * sizeof *frame->model_bones);
+    frame->matches = realloc(frame->matches, (size_t)frame->model_capacity * sizeof *frame->matches);
+    if (!frame->keys || !frame->model_bones || !frame->matches) return;
+    frame->models[model] = models[command->model];
+    frame->keys[model] = 0;
+    if (command->resident)
+        frame->keys[model] = (((uint64_t)command->offset << 24 | (uint64_t)command->count) ^
+                              ((uint64_t)command->key << 24 | (uint64_t)target) * 0x9e3779b97f4a7c15ull) | 1;
+    frame->model_bones[model] = 0;
+    if (command->bones > 0 &&
+        grow((void **)&frame->bones, &frame->bone_capacity, frame->bone_count + 1, sizeof *frame->bones)) {
+        memcpy(frame->bones[frame->bone_count], bone_sets[command->bones], sizeof frame->bones[0]);
+        frame->model_bones[model] = frame->bone_count++;
+    }
+    kept->model = model;
+    kept->bones = frame->model_bones[model];
+    frame->model_count++;
+}
+
+static int keep_points(Recording *frame, const Command *kept, const Command *command) {
+    uint32_t first = kept->offset / sizeof(RenderVertex), needed = first + (uint32_t)kept->count;
+    if (needed > frame->point_capacity) {
+        uint32_t wanted = frame->point_capacity ? frame->point_capacity : 1 << 14;
+        while (wanted < needed) wanted *= 2;
+        float(*grown)[4] = realloc(frame->points, wanted * sizeof *grown);
+        if (!grown) return 0;
+        frame->points = grown;
+        frame->point_capacity = wanted;
+    }
+    memcpy(frame->points + first, point_data + command->offset / sizeof(RenderVertex), (size_t)kept->count * sizeof *point_data);
+    return 1;
+}
+
+static uint64_t draw_signature(const Command *command, const SDL_GPUTexture *target) {
+    uint64_t signature = 0xcbf29ce484222325ull;
+    uint64_t parts[6] = {command->key, (uint64_t)(uint32_t)command->texture, (uint64_t)(uint32_t)command->count,
+                         (uint64_t)(uintptr_t)target, (uint64_t)(uintptr_t)command->destination,
+                         (uint64_t)(uint32_t)command->sampler};
+    for (int i = 0; i < 6; ++i) signature = (signature ^ parts[i]) * 0x100000001b3ull;
+    return signature | 1;
+}
+
+static void record_pass(const Texture *target, int depth, SDL_GPULoadOp color_load, SDL_GPULoadOp depth_load, int mirror) {
+    Recording *frame = &recordings[recording_slot];
+    if (!grow((void **)&frame->commands, &frame->command_capacity, frame->command_count + pending_count,
+              sizeof *frame->commands))
+        return;
+    Step *step = new_step(frame);
+    if (!step) return;
+    step->kind = STEP_PASS;
+    step->color = target->color;
+    step->multi = target->samples > 1 ? target->multi : NULL;
+    step->depth = depth;
+    step->width = target->width;
+    step->height = target->height;
+    step->color_load = color_load;
+    step->depth_load = depth_load;
+    step->mirror = mirror;
+    step->first = frame->command_count;
+    for (int i = 0; i < pending_count; ++i) {
+        const Command *command = &pending[i];
+        Command *kept = &frame->commands[frame->command_count++];
+        *kept = *command;
+        kept->signature =
+            command->model < 0 && !command->resident && command->shadow < 0 ? draw_signature(command, target->color) : 0;
+        kept->pair = -1;
+        kept->copy = command->offset;
+        if (!command->resident) {
+            uint32_t stride = (command->key & KEY_MESH) ? sizeof(MeshVertex) : sizeof(RenderVertex);
+            uint32_t start = (frame->vertex_used + stride - 1) / stride * stride;
+            uint32_t bytes = (uint32_t)command->count * stride;
+            if (start + bytes > VERTEX_BYTES) {
+                frame->command_count--;
+                continue;
+            }
+            if (start + bytes > frame->vertex_capacity) {
+                uint32_t wanted = frame->vertex_capacity ? frame->vertex_capacity : 1 << 20;
+                while (wanted < start + bytes) wanted *= 2;
+                unsigned char *grown = realloc(frame->vertices, wanted);
+                if (!grown) {
+                    frame->command_count--;
+                    continue;
+                }
+                frame->vertices = grown;
+                frame->vertex_capacity = wanted;
+            }
+            memcpy(frame->vertices + start, vertex_data + command->offset, bytes);
+            kept->offset = start;
+            kept->copy = start;
+            frame->vertex_used = start + bytes;
+            if (command->shadow >= 0 && !keep_points(frame, kept, command)) kept->shadow = -1;
+        }
+        if (command->model >= 0) record_model(frame, kept, command, target->width << 12 | target->height);
+    }
+    step->count = frame->command_count - step->first;
+}
+
+static void record_blit(int source, int x, int y, int width, int height, int destination, int to_x, int to_y) {
+    if (!smoothing) return;
+    Step *step = new_step(&recordings[recording_slot]);
+    if (!step) return;
+    int from = textures[source].scale, to = textures[destination].scale;
+    step->kind = STEP_BLIT;
+    step->blit.source.texture = textures[source].color;
+    step->blit.source.x = (Uint32)(x * from);
+    step->blit.source.y = (Uint32)(y * from);
+    step->blit.source.w = (Uint32)(width * from);
+    step->blit.source.h = (Uint32)(height * from);
+    step->blit.destination.texture = textures[destination].color;
+    step->blit.destination.x = (Uint32)(to_x * to);
+    step->blit.destination.y = (Uint32)(to_y * to);
+    step->blit.destination.w = (Uint32)(width * to);
+    step->blit.destination.h = (Uint32)(height * to);
+    step->blit.load_op = SDL_GPU_LOADOP_LOAD;
+    step->blit.filter = SDL_GPU_FILTER_NEAREST;
+}
+
+static void copy_texture(SDL_GPUTextureLocation from, SDL_GPUTextureLocation to, Uint32 width, Uint32 height) {
+    SDL_GPUCopyPass *pass = SDL_BeginGPUCopyPass(command_buffer());
+    SDL_CopyGPUTextureToTexture(pass, &from, &to, width, height, 1, false);
+    SDL_EndGPUCopyPass(pass);
+    if (!smoothing) return;
+    Step *step = new_step(&recordings[recording_slot]);
+    if (!step) return;
+    step->kind = STEP_COPY;
+    step->from = from;
+    step->to = to;
+    step->copy_width = width;
+    step->copy_height = height;
 }
 
 static void flush(void) {
@@ -638,55 +1037,9 @@ static void flush(void) {
     pass_serial++;
     port_stats.render_passes++;
     port_stats.gpu_commands += (uint32_t)pending_count;
-    float scale[4] = {2.0f / (float)target->width, 2.0f / (float)target->height, 0.0f, 0.0f};
-    SDL_GPUBuffer *bound_buffer = NULL;
-    SDL_GPUGraphicsPipeline *last_pipeline = NULL;
-    const Command *last = NULL;
-    int vertex_uniforms = -2, last_bones = -1;
-    for (int i = 0; i < pending_count; ++i) {
-        Command *command = &pending[i];
-        SDL_GPUBuffer *source = command->resident ? mesh_buffer : vertex_buffer;
-        if (source != bound_buffer) {
-            SDL_GPUBufferBinding binding = {source, 0};
-            SDL_BindGPUVertexBuffers(pass, 0, &binding, 1);
-            bound_buffer = source;
-        }
-        if (command->model >= 0) {
-            if (command->model != vertex_uniforms)
-                SDL_PushGPUVertexUniformData(buffer, 0, &models[command->model], sizeof models[0]);
-            if (command->bones != last_bones)
-                SDL_PushGPUVertexUniformData(buffer, 1, bone_sets[command->bones], sizeof bone_sets[0]);
-            vertex_uniforms = command->model;
-            last_bones = command->bones;
-        } else if (vertex_uniforms != -1) {
-            SDL_PushGPUVertexUniformData(buffer, 0, scale, sizeof scale);
-            vertex_uniforms = -1;
-        }
-        SDL_GPUGraphicsPipeline *pipeline = pipeline_for(command->key | (mirror ? KEY_MIRROR : 0));
-        if (pipeline != last_pipeline) {
-            SDL_BindGPUGraphicsPipeline(pass, pipeline);
-            last_pipeline = pipeline;
-            port_stats.pipeline_changes++;
-        }
-        if (!last || memcmp(&command->scissor, &last->scissor, sizeof command->scissor))
-            SDL_SetGPUScissor(pass, &command->scissor);
-        if (!last || command->blend_constant != last->blend_constant) {
-            SDL_FColor constant = {command->blend_constant, command->blend_constant, command->blend_constant,
-                                   command->blend_constant};
-            SDL_SetGPUBlendConstants(pass, constant);
-        }
-        if (!last || command->color != last->color || command->sampler != last->sampler ||
-            command->destination != last->destination) {
-            SDL_GPUTextureSamplerBinding sampled[2] = {{command->color, samplers[command->sampler]},
-                                                       {command->destination, samplers[0]}};
-            SDL_BindGPUFragmentSamplers(pass, 0, sampled, 2);
-        }
-        if (!last || memcmp(&command->fragment, &last->fragment, sizeof command->fragment))
-            SDL_PushGPUFragmentUniformData(buffer, 0, &command->fragment, sizeof command->fragment);
-        uint32_t stride = (command->key & KEY_MESH) ? sizeof(MeshVertex) : sizeof(RenderVertex);
-        SDL_DrawGPUPrimitives(pass, (Uint32)command->count, 1, command->offset / stride, 0);
-        last = command;
-    }
+    if (smoothing) record_pass(target, shared, color[0].load_op, depth.load_op, mirror);
+    encode(buffer, pass, pending, pending_count, models, (const float (*)[384])bone_sets, vertex_buffer, target->width,
+           target->height, mirror);
     SDL_EndGPURenderPass(pass);
     pending_count = 0;
     release_retired_meshes();
@@ -727,7 +1080,7 @@ static void retire_texture(SDL_GPUTexture *texture, int width, int height) {
         if (spares[i].frame < spares[oldest].frame) oldest = i;
     }
     if (spares[oldest].texture && spares[oldest].frame == presented) flush();
-    if (spares[oldest].texture) SDL_ReleaseGPUTexture(device, spares[oldest].texture);
+    if (spares[oldest].texture) release_later(spares[oldest].texture);
     spares[oldest].texture = texture;
     spares[oldest].width = width;
     spares[oldest].height = height;
@@ -742,11 +1095,9 @@ static void rename_texture(int slot) {
     }
     int width = texture->width * texture->scale, height = texture->height * texture->scale;
     SDL_GPUTexture *fresh = spare_texture(width, height);
-    SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(command_buffer());
     SDL_GPUTextureLocation from = {texture->color, 0, 0, 0, 0, 0};
     SDL_GPUTextureLocation to = {fresh, 0, 0, 0, 0, 0};
-    SDL_CopyGPUTextureToTexture(copy, &from, &to, (Uint32)width, (Uint32)height, 1, false);
-    SDL_EndGPUCopyPass(copy);
+    copy_texture(from, to, (Uint32)width, (Uint32)height);
     retire_texture(texture->color, width, height);
     texture->color = fresh;
     port_stats.texture_renames++;
@@ -757,11 +1108,9 @@ static SDL_GPUTexture *destination_copy(void) {
     Texture *target = &textures[bound];
     int width = target->width * target->scale, height = target->height * target->scale;
     SDL_GPUTexture *copy = spare_texture(width, height);
-    SDL_GPUCopyPass *pass = SDL_BeginGPUCopyPass(command_buffer());
     SDL_GPUTextureLocation from = {target->color, 0, 0, 0, 0, 0};
     SDL_GPUTextureLocation to = {copy, 0, 0, 0, 0, 0};
-    SDL_CopyGPUTextureToTexture(pass, &from, &to, (Uint32)width, (Uint32)height, 1, false);
-    SDL_EndGPUCopyPass(pass);
+    copy_texture(from, to, (Uint32)width, (Uint32)height);
     retire_texture(copy, width, height);
     port_stats.texture_renames++;
     return copy;
@@ -812,6 +1161,12 @@ int render_target(uint32_t base, int width, int height) {
     return slot;
 }
 
+int render_target_at(uint32_t base) {
+    for (int i = 1; i < TEXTURE_LIMIT; ++i)
+        if (textures[i].used && textures[i].target && textures[i].base == base) return i;
+    return 0;
+}
+
 int render_texture(int width, int height) { return new_texture(width, height, 1, 1); }
 
 int render_texture_at_scale(int width, int height, int scale) { return new_texture(width, height, scale, 1); }
@@ -829,8 +1184,8 @@ void render_release(int slot) {
         flush();
         bound = 0;
     }
-    SDL_ReleaseGPUTexture(device, textures[slot].color);
-    if (textures[slot].multi) SDL_ReleaseGPUTexture(device, textures[slot].multi);
+    release_later(textures[slot].color);
+    release_later(textures[slot].multi);
     memset(&textures[slot], 0, sizeof textures[slot]);
     port_stats.textures_live--;
 }
@@ -967,16 +1322,15 @@ void render_copy(int source, int source_x, int source_y, int destination, int de
     if (used_by_pending(destination)) rename_texture(destination);
     int scale = textures[source].scale;
     if (scale == textures[destination].scale) {
-        SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(command_buffer());
         SDL_GPUTextureLocation from = {textures[source].color, 0, 0, (Uint32)(source_x * scale),
                                        (Uint32)(source_y * scale), 0};
         SDL_GPUTextureLocation to = {textures[destination].color, 0, 0, (Uint32)(destination_x * scale),
                                      (Uint32)(destination_y * scale), 0};
-        SDL_CopyGPUTextureToTexture(copy, &from, &to, (Uint32)(width * scale), (Uint32)(height * scale), 1, false);
-        SDL_EndGPUCopyPass(copy);
+        copy_texture(from, to, (Uint32)(width * scale), (Uint32)(height * scale));
     } else {
         blit_slots(source, source_x, source_y, width, height, destination, destination_x, destination_y,
                    SDL_GPU_FILTER_NEAREST);
+        record_blit(source, source_x, source_y, width, height, destination, destination_x, destination_y);
     }
     changed(destination);
 }
@@ -1101,6 +1455,8 @@ static int prepare(Command *command, const RenderState *state, uint32_t key_extr
     }
     command->sampler = (state->linear ? 1 : 0) | (state->repeat_u ? 2 : 0) | (state->repeat_v ? 4 : 0);
     command->model = -1;
+    command->shadow = -1;
+    command->follow = -1;
     Texture *target = &textures[bound];
     int x0 = state->scissor[0] < 0 ? 0 : state->scissor[0];
     int y0 = state->scissor[1] < 0 ? 0 : state->scissor[1];
@@ -1183,11 +1539,9 @@ static void restore(void) {
         render_release(restore_slot);
         restore_slot = new_texture(width, height, scale, 1);
     }
-    SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(command_buffer());
     SDL_GPUTextureLocation from = {target->color, 0, 0, 0, 0, 0};
     SDL_GPUTextureLocation to = {textures[restore_slot].color, 0, 0, 0, 0, 0};
-    SDL_CopyGPUTextureToTexture(copy, &from, &to, (Uint32)(width * scale), (Uint32)(height * scale), 1, false);
-    SDL_EndGPUCopyPass(copy);
+    copy_texture(from, to, (Uint32)(width * scale), (Uint32)(height * scale));
     RenderVertex a = {0, 0, 0, 0, 0}, b = {(float)width, 0, 0, 1, 0};
     RenderVertex c = {0, (float)height, 0, 0, 1}, d = {(float)width, (float)height, 0, 1, 1};
     RenderVertex quad[6] = {a, b, c, b, d, c};
@@ -1214,8 +1568,13 @@ static void submit(const RenderState *state, int topology, const RenderVertex *v
         if (capturing) record(source, state, topology, 0, count, vertices, -1, 0, NULL);
         return;
     }
+    command.shadow = drawing_shadow;
+    command.follow = drawing_follow;
+    if (drawing_shadow >= 0)
+        memcpy(point_data + command.offset / sizeof(RenderVertex), shadow_points, (size_t)count * sizeof *point_data);
     Command *last = pending_count ? &pending[pending_count - 1] : NULL;
     int merged = last && last->model < 0 && last->offset + (uint32_t)last->count * sizeof(RenderVertex) == command.offset &&
+                 last->shadow == command.shadow && last->follow == command.follow &&
                  last->key == command.key && last->texture == command.texture && last->color == command.color &&
                  last->destination == command.destination &&
                  last->sampler == command.sampler &&
@@ -1264,6 +1623,72 @@ void render_draw(const RenderState *state, int topology, const RenderVertex *ver
     if (index >= render_toggles.skip_from && index < render_toggles.skip_to) return;
     if (textures[bound].scale > 1 && topology != RENDER_TRIANGLES) widen(state, topology, vertices, count, index, render_source);
     else submit(state, topology, vertices, count, index, render_source);
+}
+
+static void shadow_vertex(RenderVertex *vertex, const float *p, const float *mapping, float depth) {
+    float q = p[3] != 0.0f ? 1.0f / p[3] : 0.0f;
+    vertex->x = (p[0] * q * mapping[0] + mapping[1] + 1.0f) / mapping[0];
+    vertex->y = (p[1] * q * mapping[2] + mapping[3] - 1.0f) / mapping[2];
+    float scaled = (float)(long long)(p[2] * q) * depth;
+    vertex->z = scaled < 0.0f ? 0.0f : scaled > 1.0f ? 1.0f : scaled;
+}
+
+void render_shadow_place(RenderVertex *vertex, const float *clip, const float *screen, const float *mapping, float depth) {
+    float p[4];
+    for (int k = 0; k < 4; k++)
+        p[k] = clip[0] * screen[k] + clip[1] * screen[4 + k] + clip[2] * screen[8 + k] + clip[3] * screen[12 + k];
+    shadow_vertex(vertex, p, mapping, depth);
+}
+
+int render_shadow_setup(const void *key, const float *world, const float *camera, const float *light, const float *screen,
+                        const float *mapping, float depth, const float (*shape)[4], int count) {
+    if (!smoothing) return -1;
+    if (!point_data) point_data = malloc(VERTEX_BYTES / sizeof(RenderVertex) * sizeof *point_data);
+    Recording *frame = &recordings[recording_slot];
+    if (!point_data || !grow((void **)&frame->shadows, &frame->shadow_capacity, frame->shadow_count + 1, sizeof *frame->shadows) ||
+        !grow((void **)&frame->shapes, &frame->shape_capacity, frame->shape_count + count, sizeof *frame->shapes))
+        return -1;
+    ShadowRecord *record = &frame->shadows[frame->shadow_count];
+    record->first = frame->shape_count;
+    record->count = count;
+    record->model = -1;
+    memcpy(frame->shapes + frame->shape_count, shape, (size_t)count * sizeof *frame->shapes);
+    frame->shape_count += count;
+    record->key = key;
+    memcpy(record->place, world + 12, sizeof record->place);
+    memcpy(record->world, world, sizeof record->world);
+    memcpy(record->camera, camera, sizeof record->camera);
+    memcpy(record->light, light, sizeof record->light);
+    memcpy(record->screen, screen, sizeof record->screen);
+    memcpy(record->mapping, mapping, sizeof record->mapping);
+    record->depth = depth;
+    record->match = -1;
+    return frame->shadow_count++;
+}
+
+void render_sprite(const RenderState *state, const RenderVertex *vertices, int count, const float *mapping, float depth) {
+    Recording *frame = &recordings[recording_slot];
+    int follow = -1;
+    if (smoothing) {
+        float wanted[5] = {mapping[0], mapping[1], mapping[2], mapping[3], depth};
+        int last = frame->follow_count - 1;
+        if (last >= 0 && !memcmp(frame->follows[last], wanted, sizeof wanted)) follow = last;
+        else if (grow((void **)&frame->follows, &frame->follow_capacity, frame->follow_count + 1, sizeof *frame->follows)) {
+            memcpy(frame->follows[frame->follow_count], wanted, sizeof wanted);
+            follow = frame->follow_count++;
+        }
+    }
+    drawing_follow = follow;
+    render_draw(state, RENDER_TRIANGLES, vertices, count);
+    drawing_follow = -1;
+}
+
+void render_shadow(const RenderState *state, const RenderVertex *vertices, const float (*points)[4], int count, int setup) {
+    drawing_shadow = setup;
+    shadow_points = points;
+    render_draw(state, RENDER_TRIANGLES, vertices, count);
+    drawing_shadow = -1;
+    shadow_points = NULL;
 }
 
 void render_mesh(const RenderState *state, int cull, const MeshUniforms *uniforms, const float *bones,
@@ -1368,8 +1793,57 @@ void render_send_back(SDL_Window *target) {
 }
 
 void render_set_quality(int scale, int samples) {
-    if (scale > 0) wanted_scale = clamp_scale(scale);
+    if (scale == RENDER_SCALE_AUTO) auto_scale = 1;
+    if (scale > 0) {
+        auto_scale = 0;
+        wanted_scale = clamp_scale(scale);
+    }
     if (samples > 0) wanted_samples = clamp_samples(samples);
+}
+
+void render_set_window(int width, int height, int full) {
+    if (width > 0 && height > 0) {
+        window_width = width;
+        window_height = height;
+        if (window && !fullscreen) SDL_SetWindowSize(window, width, height);
+    }
+    if (full >= 0) {
+        fullscreen = full;
+        if (window) SDL_SetWindowFullscreen(window, fullscreen != 0);
+    }
+}
+
+void render_set_aspect(int numerator, int denominator) {
+    if (numerator <= 0 || denominator <= 0) {
+        frame_width = LAYOUT_WIDTH;
+        return;
+    }
+    int width = (int)(LAYOUT_HEIGHT * (float)numerator / (float)denominator / PIXEL_ASPECT / 2.0f + 0.5f) * 2;
+    frame_width = width < LAYOUT_WIDTH ? LAYOUT_WIDTH : width > FRAME_WIDTH_LIMIT ? FRAME_WIDTH_LIMIT : width;
+}
+
+int render_frame_width(void) { return frame_width; }
+
+void render_toggle_fullscreen(void) {
+    render_set_window(0, 0, !fullscreen);
+}
+
+void render_set_vsync(int enabled) {
+    vsync = enabled;
+    if (window) apply_present_mode();
+}
+
+void render_set_filter(int use_nearest) {
+    nearest = use_nearest;
+}
+
+void render_display(RenderDisplay *display) {
+    display->auto_scale = auto_scale;
+    display->fullscreen = fullscreen;
+    display->vsync = vsync;
+    display->nearest = nearest;
+    display->window_width = window_width;
+    display->window_height = window_height;
 }
 
 void render_quality(int *scale, int *samples) {
@@ -1379,6 +1853,7 @@ void render_quality(int *scale, int *samples) {
 
 static void apply_quality(void) {
     if (wanted_scale == quality_scale && wanted_samples == quality_samples) return;
+    forget_recordings();
     quality_scale = wanted_scale;
     quality_samples = wanted_samples = supported_samples(wanted_samples);
     for (int i = 1; i < TEXTURE_LIMIT; ++i) {
@@ -1400,34 +1875,742 @@ static void apply_quality(void) {
     restore_slot = 0;
 }
 
-void render_present(int target, int width, int height) {
-    flush();
-    presented++;
-    frame_draws = 0;
-    SDL_GPUCommandBuffer *buffer = command_buffer();
+static void present_texture(SDL_GPUCommandBuffer *buffer, SDL_GPUTexture *color, int scale, int width, int height) {
     SDL_GPUTexture *swapchain = NULL;
     Uint32 window_width = 0, window_height = 0;
     if (!SDL_WaitAndAcquireGPUSwapchainTexture(buffer, window, &swapchain, &window_width, &window_height))
         render_error("swapchain");
-    if (swapchain && target) {
-        float fit = (float)window_width / 4.0f < (float)window_height / 3.0f ? (float)window_width / 4.0f
-                                                                             : (float)window_height / 3.0f;
-        SDL_GPUBlitInfo blit = {0};
-        blit.source.texture = textures[target].color;
-        blit.source.w = (Uint32)(width * textures[target].scale);
-        blit.source.h = (Uint32)(height * textures[target].scale);
-        blit.destination.texture = swapchain;
-        blit.destination.w = (Uint32)(fit * 4.0f);
-        blit.destination.h = (Uint32)(fit * 3.0f);
-        blit.destination.x = (window_width - blit.destination.w) / 2;
-        blit.destination.y = (window_height - blit.destination.h) / 2;
-        blit.load_op = SDL_GPU_LOADOP_CLEAR;
-        blit.filter = SDL_GPU_FILTER_LINEAR;
-        SDL_BlitGPUTexture(buffer, &blit);
+    if (!swapchain || !color) return;
+    float aspect = (float)width * PIXEL_ASPECT / (float)height;
+    float shown_height = (float)window_width / aspect < (float)window_height ? (float)window_width / aspect
+                                                                             : (float)window_height;
+    SDL_GPUBlitInfo blit = {0};
+    blit.source.texture = color;
+    blit.source.w = (Uint32)(width * scale);
+    blit.source.h = (Uint32)(height * scale);
+    blit.destination.texture = swapchain;
+    blit.destination.w = (Uint32)(shown_height * aspect + 0.5f);
+    blit.destination.h = (Uint32)(shown_height + 0.5f);
+    blit.destination.x = (window_width - blit.destination.w) / 2;
+    blit.destination.y = (window_height - blit.destination.h) / 2;
+    blit.load_op = SDL_GPU_LOADOP_CLEAR;
+    blit.filter = nearest ? SDL_GPU_FILTER_NEAREST : SDL_GPU_FILTER_LINEAR;
+    SDL_BlitGPUTexture(buffer, &blit);
+    if (auto_scale) wanted_scale = clamp_scale(((int)blit.destination.h + height - 1) / height);
+}
+
+static void start_recording(Recording *frame) {
+    frame->step_count = 0;
+    frame->command_count = 0;
+    frame->model_count = 0;
+    frame->vertex_used = 0;
+    frame->valid = 0;
+    frame->has_camera = 0;
+    frame->shadow_count = 0;
+    frame->shape_count = 0;
+    frame->follow_count = 0;
+    frame->bone_count = 0;
+    if (grow((void **)&frame->bones, &frame->bone_capacity, 1, sizeof *frame->bones)) {
+        memset(frame->bones[0], 0, sizeof frame->bones[0]);
+        frame->bone_count = 1;
     }
+}
+
+static float distance(const Recording *frame, int model, const Recording *before, int found) {
+    const float *now = frame->models[model].model_world, *was = before->models[found].model_world;
+    float jumped = 0.0f;
+    for (int i = 12; i < 15; ++i) jumped = fmaxf(jumped, fabsf(now[i] - was[i]));
+    for (int i = 0; i < 12; ++i) jumped = fmaxf(jumped, fabsf(now[i] - was[i]) * CUT_DISTANCE / BONE_FLIP);
+    int bones = frame->model_bones[model], old_bones = before->model_bones[found];
+    if ((bones > 0) != (old_bones > 0)) return SNAP_FRACTION;
+    for (int i = 3; bones > 0 && i < 384; i += 4)
+        jumped = fmaxf(jumped, fabsf(frame->bones[bones][i] - before->bones[old_bones][i]));
+    return jumped / CUT_DISTANCE * SNAP_FRACTION;
+}
+
+static float screen_gap(const Recording *frame, int model, const Recording *before, int found) {
+    const float *now = frame->models[model].model_screen, *was = before->models[found].model_screen;
+    float gap = 0.0f;
+    for (int i = 0; i < 16; ++i) gap += fabsf(now[i] - was[i]);
+    return gap;
+}
+
+static int camera_cut(const Recording *frame, const Recording *before) {
+    if (!frame->has_camera || !before->has_camera) return 0;
+    float moved = 0.0f, turned = 0.0f;
+    for (int i = 0; i < 3; ++i) moved += (frame->eye[i] - before->eye[i]) * (frame->eye[i] - before->eye[i]);
+    for (int i = 0; i < 9; ++i) turned = fmaxf(turned, fabsf(frame->pose[i] - before->pose[i]));
+    return moved > CUT_DISTANCE * CUT_DISTANCE || turned > CUT_TURN;
+}
+
+void render_set_camera(const float *eye, const float (*pose)[4], const float (*view)[4]) {
+    Recording *frame = &recordings[recording_slot];
+    for (int i = 0; i < 3; ++i) {
+        frame->eye[i] = eye[i];
+        for (int k = 0; k < 3; ++k) frame->pose[i * 3 + k] = pose[i][k];
+    }
+    memcpy(frame->view, view, sizeof frame->view);
+    frame->has_camera = 1;
+}
+
+static void match_models(void) {
+    static int *table;
+    static int table_capacity;
+    static int *chain;
+    static int chain_capacity;
+    static int *claimed;
+    static int claimed_capacity;
+    static float *apart;
+    static int apart_capacity;
+    Recording *frame = &recordings[shown_slot], *before = &recordings[previous_slot];
+    for (int i = 0; i < frame->model_count; ++i) frame->matches[i] = -1;
+    if (!before->valid || !before->model_count || !frame->model_count || camera_cut(frame, before)) return;
+    int size = 1;
+    while (size < before->model_count * 2) size *= 2;
+    if (!grow((void **)&table, &table_capacity, size, sizeof *table) ||
+        !grow((void **)&chain, &chain_capacity, before->model_count, sizeof *chain))
+        return;
+    for (int i = 0; i < size; ++i) table[i] = -1;
+    for (int i = 0; i < before->model_count; ++i) {
+        chain[i] = -1;
+        if (!before->keys[i]) continue;
+        uint32_t slot = (uint32_t)(before->keys[i] * 0x9e3779b97f4a7c15ull >> 40) & (uint32_t)(size - 1);
+        while (table[slot] >= 0 && before->keys[table[slot]] != before->keys[i]) slot = (slot + 1) & (uint32_t)(size - 1);
+        chain[i] = table[slot];
+        table[slot] = i;
+    }
+    if (!grow((void **)&claimed, &claimed_capacity, before->model_count, sizeof *claimed) ||
+        !grow((void **)&apart, &apart_capacity, frame->model_count, sizeof *apart))
+        return;
+    for (int i = 0; i < before->model_count; ++i) claimed[i] = -1;
+    for (int round = 0; round < 3; ++round) {
+        for (int i = 0; i < frame->model_count; ++i) {
+            if (!frame->keys[i] || frame->matches[i] >= 0) continue;
+            uint32_t slot = (uint32_t)(frame->keys[i] * 0x9e3779b97f4a7c15ull >> 40) & (uint32_t)(size - 1);
+            while (table[slot] >= 0 && before->keys[table[slot]] != frame->keys[i]) slot = (slot + 1) & (uint32_t)(size - 1);
+            float best = 1e30f;
+            int chosen = -1;
+            for (int found = table[slot]; found >= 0; found = chain[found]) {
+                int exact = claimed[found] >= 0 && claimed[found] < CLAIM_NEAR;
+                if (exact || (round == 0 && claimed[found] >= 0)) continue;
+                float moved = distance(frame, i, before, found);
+                if (moved >= (round == 0 ? EXACT_FRACTION : SNAP_FRACTION)) continue;
+                float score = moved + screen_gap(frame, i, before, found) * SCREEN_WEIGHT;
+                if (claimed[found] >= CLAIM_NEAR && apart[claimed[found] - CLAIM_NEAR] <= score) continue;
+                if (score < best) {
+                    best = score;
+                    chosen = found;
+                }
+            }
+            if (chosen < 0) continue;
+            if (claimed[chosen] >= CLAIM_NEAR) frame->matches[claimed[chosen] - CLAIM_NEAR] = -1;
+            claimed[chosen] = round == 0 ? i : CLAIM_NEAR + i;
+            apart[i] = best;
+            frame->matches[i] = chosen;
+        }
+    }
+}
+
+static int draw_close(const Recording *frame, const Command *now, const Recording *before, const Command *was) {
+    const RenderVertex *a = (const RenderVertex *)(frame->vertices + now->copy);
+    const RenderVertex *b = (const RenderVertex *)(before->vertices + was->copy);
+    for (int i = 0; i < now->count; ++i)
+        if (fabsf(a[i].x - b[i].x) > DRAW_JUMP || fabsf(a[i].y - b[i].y) > DRAW_JUMP) return 0;
+    return 1;
+}
+
+static void match_draws(void) {
+    static uint64_t *taken;
+    static int *heads;
+    static int *next;
+    static int *balance;
+    static int taken_capacity;
+    static int heads_capacity;
+    static int next_capacity;
+    static int balance_capacity;
+    Recording *frame = &recordings[shown_slot], *before = &recordings[previous_slot];
+    frame->paired = 0;
+    if (!before->valid || !before->command_count || camera_cut(frame, before)) return;
+    int size = 1;
+    while (size < before->command_count * 2) size *= 2;
+    if (!grow((void **)&taken, &taken_capacity, size, sizeof *taken) ||
+        !grow((void **)&heads, &heads_capacity, size, sizeof *heads) ||
+        !grow((void **)&next, &next_capacity, before->command_count, sizeof *next) ||
+        !grow((void **)&balance, &balance_capacity, size, sizeof *balance))
+        return;
+    for (int i = 0; i < size; ++i) {
+        taken[i] = 0;
+        heads[i] = -1;
+        balance[i] = 0;
+    }
+    for (int i = before->command_count - 1; i >= 0; --i) {
+        uint64_t signature = before->commands[i].signature;
+        if (!signature) continue;
+        uint32_t slot = (uint32_t)(signature >> 40) & (uint32_t)(size - 1);
+        while (taken[slot] && taken[slot] != signature) slot = (slot + 1) & (uint32_t)(size - 1);
+        taken[slot] = signature;
+        next[i] = heads[slot];
+        heads[slot] = i;
+        balance[slot]++;
+    }
+    for (int i = 0; i < frame->command_count; ++i) {
+        uint64_t signature = frame->commands[i].signature;
+        if (!signature) continue;
+        uint32_t slot = (uint32_t)(signature >> 40) & (uint32_t)(size - 1);
+        while (taken[slot] && taken[slot] != signature) slot = (slot + 1) & (uint32_t)(size - 1);
+        if (taken[slot]) balance[slot]--;
+    }
+    for (int i = 0; i < frame->command_count; ++i) {
+        Command *command = &frame->commands[i];
+        if (!command->signature) continue;
+        uint32_t slot = (uint32_t)(command->signature >> 40) & (uint32_t)(size - 1);
+        while (taken[slot] && taken[slot] != command->signature) slot = (slot + 1) & (uint32_t)(size - 1);
+        int found = heads[slot];
+        if (found < 0 || balance[slot]) continue;
+        heads[slot] = next[found];
+        if (!draw_close(frame, command, before, &before->commands[found])) continue;
+        command->pair = found;
+        frame->paired++;
+    }
+}
+
+static void match_shadows(void) {
+    static int *claimed;
+    static int claimed_capacity;
+    static float *gaps;
+    static int gaps_capacity;
+    Recording *frame = &recordings[shown_slot], *before = &recordings[previous_slot];
+    frame->shadows_matched = 0;
+    if (!before->valid || camera_cut(frame, before)) return;
+    if (!grow((void **)&claimed, &claimed_capacity, before->shadow_count, sizeof *claimed) ||
+        !grow((void **)&gaps, &gaps_capacity, frame->shadow_count, sizeof *gaps))
+        return;
+    for (int k = 0; k < before->shadow_count; ++k) claimed[k] = -1;
+    for (int round = 0; round < 3; ++round) {
+        for (int i = 0; i < frame->shadow_count; ++i) {
+            ShadowRecord *record = &frame->shadows[i];
+            if (record->match >= 0) continue;
+            float best = round == 0 ? 1e-6f : CUT_DISTANCE;
+            int chosen = -1;
+            for (int k = 0; k < before->shadow_count; ++k) {
+                const ShadowRecord *old = &before->shadows[k];
+                int exact = claimed[k] >= 0 && claimed[k] < CLAIM_NEAR;
+                if (old->key != record->key || exact || (round == 0 && claimed[k] >= 0)) continue;
+                float apart = 0.0f;
+                for (int j = 0; j < 3; ++j) apart = fmaxf(apart, fabsf(old->place[j] - record->place[j]));
+                if (claimed[k] >= CLAIM_NEAR && gaps[claimed[k] - CLAIM_NEAR] <= apart) continue;
+                if (apart < best) {
+                    best = apart;
+                    chosen = k;
+                }
+            }
+            if (chosen < 0) continue;
+            if (claimed[chosen] >= CLAIM_NEAR) frame->shadows[claimed[chosen] - CLAIM_NEAR].match = -1;
+            claimed[chosen] = round == 0 ? i : CLAIM_NEAR + i;
+            gaps[i] = best;
+            record->match = chosen;
+        }
+    }
+    for (int i = 0; i < frame->shadow_count; ++i) frame->shadows_matched += frame->shadows[i].match >= 0;
+}
+
+static void bone_matrix(float *out, const float *rows) {
+    for (int c = 0; c < 3; ++c) {
+        for (int k = 0; k < 3; ++k) out[c * 4 + k] = rows[k * 4 + c];
+        out[c * 4 + 3] = 0.0f;
+    }
+    for (int k = 0; k < 3; ++k) out[12 + k] = rows[k * 4 + 3];
+    out[15] = 1.0f;
+}
+
+static float matrix_gap(const float *a, const float *b) {
+    float gap = 0.0f;
+    for (int k = 0; k < 12; ++k) gap = fmaxf(gap, fabsf(a[k] - b[k]));
+    for (int k = 12; k < 15; ++k) gap = fmaxf(gap, fabsf(a[k] - b[k]) / CUT_DISTANCE);
+    return gap;
+}
+
+static void attach_shadows(void) {
+    Recording *frame = &recordings[shown_slot];
+    for (int s = 0; s < frame->shadow_count; ++s) {
+        ShadowRecord *record = &frame->shadows[s];
+        float best = ATTACH_GAP, attached[16];
+        for (int i = 0; i < frame->model_count; ++i) {
+            int bones = frame->model_bones[i];
+            const float *placed = frame->models[i].model_world;
+            if (bones <= 0 || fabsf(placed[12] - record->world[12]) > ATTACH_REACH ||
+                fabsf(placed[14] - record->world[14]) > ATTACH_REACH)
+                continue;
+            for (int bone = 0; bone < 32; ++bone) {
+                float local[16], world[16];
+                bone_matrix(local, &frame->bones[bones][bone * 12]);
+                multiply(world, placed, local);
+                float gap = matrix_gap(world, record->world);
+                if (gap >= best) continue;
+                best = gap;
+                record->model = i;
+                record->bone = bone;
+                memcpy(attached, world, sizeof attached);
+            }
+        }
+        float inverse[16];
+        if (record->model >= 0 && invert(inverse, attached)) multiply(record->offset, inverse, record->world);
+        else record->model = -1;
+    }
+}
+
+static void layout_moving(Recording *frame) {
+    frame->moving_bytes = 0;
+    for (int i = 0; i < frame->command_count; ++i) {
+        Command *command = &frame->commands[i];
+        command->moving = !command->resident && command->model < 0 &&
+                          (command->pair >= 0 || command->shadow >= 0 || command->follow >= 0);
+        command->offset = command->moving ? frame->moving_bytes : command->copy;
+        if (command->moving) frame->moving_bytes += (uint32_t)command->count * sizeof(RenderVertex);
+    }
+}
+
+static void finish_recording(int target, int width, int height) {
+    Recording *frame = &recordings[recording_slot];
+    frame->shown = textures[target].color;
+    frame->shown_width = width;
+    frame->shown_height = height;
+    frame->shown_scale = textures[target].scale;
+    frame->valid = 1;
+    int spare = previous_slot;
+    previous_slot = shown_slot;
+    shown_slot = recording_slot;
+    recording_slot = spare;
+    start_recording(&recordings[recording_slot]);
+    match_models();
+    match_draws();
+    match_shadows();
+    attach_shadows();
+    layout_moving(&recordings[shown_slot]);
+    replay_uploaded = 0;
+}
+
+static void forget_recordings(void) {
+    for (int i = 0; i < 3; ++i) recordings[i].valid = 0;
+}
+
+static float length_of(const float *vector) {
+    return sqrtf(vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]);
+}
+
+static int unit(float *vector) {
+    float length = length_of(vector);
+    if (length < 1e-6f) return 0;
+    for (int i = 0; i < 3; ++i) vector[i] /= length;
+    return 1;
+}
+
+static void blend_bone(float *out, const float *was, const float *now, float alpha) {
+    float turned = 0.0f, column[3][3], size[3];
+    for (int i = 0; i < 12; ++i) out[i] = was[i] + (now[i] - was[i]) * alpha;
+    for (int c = 0; c < 3; ++c) {
+        float before[3], after[3];
+        for (int k = 0; k < 3; ++k) {
+            before[k] = was[k * 4 + c];
+            after[k] = now[k * 4 + c];
+            column[c][k] = out[k * 4 + c];
+            turned = fmaxf(turned, fabsf(after[k] - before[k]));
+        }
+        size[c] = length_of(before) + (length_of(after) - length_of(before)) * alpha;
+    }
+    if (turned > BONE_FLIP) {
+        memcpy(out, now, 12 * sizeof *out);
+        return;
+    }
+    if (!unit(column[0])) return;
+    float along = column[1][0] * column[0][0] + column[1][1] * column[0][1] + column[1][2] * column[0][2];
+    for (int k = 0; k < 3; ++k) column[1][k] -= along * column[0][k];
+    if (!unit(column[1])) return;
+    float cross[3] = {column[0][1] * column[1][2] - column[0][2] * column[1][1],
+                      column[0][2] * column[1][0] - column[0][0] * column[1][2],
+                      column[0][0] * column[1][1] - column[0][1] * column[1][0]};
+    float side = cross[0] * column[2][0] + cross[1] * column[2][1] + cross[2] * column[2][2] < 0.0f ? -1.0f : 1.0f;
+    for (int k = 0; k < 3; ++k) column[2][k] = cross[k] * side;
+    for (int c = 0; c < 3; ++c)
+        for (int k = 0; k < 3; ++k) out[k * 4 + c] = column[c][k] * size[c];
+}
+
+static void multiply(float *out, const float *a, const float *b) {
+    float result[16];
+    for (int c = 0; c < 4; ++c)
+        for (int r = 0; r < 4; ++r)
+            result[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
+    memcpy(out, result, sizeof result);
+}
+
+static int invert(float *out, const float *matrix) {
+    double rows[4][8];
+    for (int i = 0; i < 4; ++i)
+        for (int j = 0; j < 4; ++j) {
+            rows[i][j] = matrix[i * 4 + j];
+            rows[i][4 + j] = i == j;
+        }
+    for (int column = 0; column < 4; ++column) {
+        int pivot = column;
+        for (int r = column + 1; r < 4; ++r)
+            if (fabs(rows[r][column]) > fabs(rows[pivot][column])) pivot = r;
+        if (fabs(rows[pivot][column]) < 1e-12) return 0;
+        for (int j = 0; j < 8; ++j) {
+            double swap = rows[column][j];
+            rows[column][j] = rows[pivot][j];
+            rows[pivot][j] = swap;
+        }
+        double scale = rows[column][column];
+        for (int j = 0; j < 8; ++j) rows[column][j] /= scale;
+        for (int r = 0; r < 4; ++r) {
+            if (r == column) continue;
+            double factor = rows[r][column];
+            for (int j = 0; j < 8; ++j) rows[r][j] -= factor * rows[column][j];
+        }
+    }
+    for (int i = 0; i < 4; ++i)
+        for (int j = 0; j < 4; ++j) out[i * 4 + j] = (float)rows[i][4 + j];
+    return 1;
+}
+
+static int camera_shift(float *shift, const Recording *frame, const Recording *before, float alpha) {
+    if (!frame->has_camera || !before->has_camera || camera_cut(frame, before)) return 0;
+    float view[16], inverse[16];
+    for (int k = 0; k < 16; ++k) view[k] = before->view[k] + (frame->view[k] - before->view[k]) * alpha;
+    if (!invert(inverse, frame->view)) return 0;
+    multiply(shift, view, inverse);
+    return 1;
+}
+
+static void blend_draws(unsigned char *mapped, const Recording *frame, const Recording *before, float alpha) {
+    for (int i = 0; i < frame->command_count; ++i) {
+        const Command *command = &frame->commands[i];
+        if (command->pair < 0) continue;
+        RenderVertex *out = (RenderVertex *)(mapped + command->offset);
+        const RenderVertex *now = (const RenderVertex *)(frame->vertices + command->copy);
+        const RenderVertex *was = (const RenderVertex *)(before->vertices + before->commands[command->pair].copy);
+        for (int k = 0; k < command->count; ++k) {
+            out[k].x = was[k].x + (now[k].x - was[k].x) * alpha;
+            out[k].y = was[k].y + (now[k].y - was[k].y) * alpha;
+            out[k].z = was[k].z + (now[k].z - was[k].z) * alpha;
+        }
+    }
+}
+
+static void blend_frame(float *out, const float *was, const float *now, float alpha) {
+    float a[12], b[12], blended[12];
+    for (int k = 0; k < 3; ++k) {
+        for (int c = 0; c < 3; ++c) {
+            a[k * 4 + c] = was[c * 4 + k];
+            b[k * 4 + c] = now[c * 4 + k];
+        }
+        a[k * 4 + 3] = was[12 + k];
+        b[k * 4 + 3] = now[12 + k];
+    }
+    blend_bone(blended, a, b, alpha);
+    for (int i = 0; i < 16; ++i) out[i] = was[i] + (now[i] - was[i]) * alpha;
+    for (int k = 0; k < 3; ++k) {
+        for (int c = 0; c < 3; ++c) out[c * 4 + k] = blended[k * 4 + c];
+        out[12 + k] = blended[k * 4 + 3];
+    }
+}
+
+static int place_shadow(float *clip, float *cast, const Recording *frame, const Recording *before, int record, float alpha,
+                        const float *shift) {
+    const ShadowRecord *now = &frame->shadows[record];
+    const ShadowRecord *was = now->match >= 0 ? &before->shadows[now->match] : NULL;
+    if (!was && !shift) return 0;
+    float world[16], camera[16], light[16], screen[16], placed[16];
+    memcpy(world, now->world, sizeof world);
+    memcpy(camera, now->camera, sizeof camera);
+    memcpy(light, now->light, sizeof light);
+    memcpy(screen, now->screen, sizeof screen);
+    if (was && now->model >= 0 && frame->matches[now->model] >= 0) {
+        float local[16], body[16];
+        bone_matrix(local, &replay_bones[frame->model_bones[now->model]][now->bone * 12]);
+        multiply(body, replay_models[now->model].model_world, local);
+        multiply(world, body, now->offset);
+    } else if (was) {
+        blend_frame(world, was->world, now->world, alpha);
+    }
+    if (was) {
+        for (int k = 0; k < 16; ++k) {
+            camera[k] = was->camera[k] + (now->camera[k] - was->camera[k]) * alpha;
+            light[k] = was->light[k] + (now->light[k] - was->light[k]) * alpha;
+        }
+    } else {
+        multiply(screen, shift, now->screen);
+    }
+    multiply(placed, camera, world);
+    multiply(clip, screen, placed);
+    multiply(placed, light, world);
+    multiply(cast, screen, placed);
+    return 1;
+}
+
+static void blend_shadows(unsigned char *mapped, const Recording *frame, const Recording *before, float alpha,
+                          const float *shift) {
+    static float (*placements)[2][16];
+    static int *placed;
+    static int placement_capacity;
+    static int placed_capacity;
+    if (!grow((void **)&placements, &placement_capacity, frame->shadow_count, sizeof *placements) ||
+        !grow((void **)&placed, &placed_capacity, frame->shadow_count, sizeof *placed))
+        return;
+    for (int s = 0; s < frame->shadow_count; ++s)
+        placed[s] = place_shadow(placements[s][0], placements[s][1], frame, before, s, alpha, shift);
+    for (int i = 0; i < frame->command_count; ++i) {
+        const Command *command = &frame->commands[i];
+        if (command->shadow < 0 || !placed[command->shadow]) continue;
+        const ShadowRecord *now = &frame->shadows[command->shadow];
+        const ShadowRecord *was = now->match >= 0 ? &before->shadows[now->match] : NULL;
+        const float(*old_shape)[4] = was && was->count == now->count ? before->shapes + was->first : NULL;
+        const float(*shape)[4] = frame->shapes + now->first;
+        RenderVertex *out = (RenderVertex *)(mapped + command->offset);
+        const float(*points)[4] = frame->points + command->copy / sizeof(RenderVertex);
+        for (int k = 0; k < command->count; ++k) {
+            int flags = (int)points[k][3];
+            const float *matrix = placements[command->shadow][flags & 1];
+            int index = flags >> 2;
+            float position[3] = {points[k][0], points[k][1], points[k][2]};
+            if (old_shape && index < now->count)
+                for (int j = 0; j < 3; ++j) position[j] = old_shape[index][j] + (shape[index][j] - old_shape[index][j]) * alpha;
+            float p[4];
+            for (int j = 0; j < 4; ++j)
+                p[j] = position[0] * matrix[j] + position[1] * matrix[4 + j] + position[2] * matrix[8 + j] + matrix[12 + j];
+            shadow_vertex(&out[k], p, now->mapping, now->depth);
+        }
+        for (int k = 0; k + 6 <= command->count; k += 6) {
+            const RenderVertex *a = &out[k], *b = &out[k + 1], *c = &out[k + 2];
+            int back = (c->x - a->x) * (b->y - a->y) - (c->y - a->y) * (b->x - a->x) < 0.0f;
+            if (back == (((int)points[k][3] & 2) != 0)) continue;
+            for (int j = 1; j < 6; ++j) out[k + j] = out[k];
+        }
+    }
+}
+
+static void follow_camera(unsigned char *mapped, const Recording *frame, const float *shift) {
+    for (int i = 0; i < frame->command_count; ++i) {
+        const Command *command = &frame->commands[i];
+        if (command->follow < 0 || command->pair >= 0) continue;
+        const float *mapping = frame->follows[command->follow];
+        float depth = mapping[4];
+        RenderVertex *out = (RenderVertex *)(mapped + command->offset);
+        for (int k = 0; k < command->count; ++k) {
+            float v[4] = {(out[k].x * mapping[0] - mapping[1] - 1.0f) / mapping[0],
+                          (out[k].y * mapping[2] - mapping[3] + 1.0f) / mapping[2], out[k].z / depth, 1.0f};
+            float p[4];
+            for (int r = 0; r < 4; ++r) p[r] = shift[r] * v[0] + shift[4 + r] * v[1] + shift[8 + r] * v[2] + shift[12 + r];
+            if (p[3] == 0.0f) continue;
+            out[k].x = (p[0] / p[3] * mapping[0] + mapping[1] + 1.0f) / mapping[0];
+            out[k].y = (p[1] / p[3] * mapping[2] + mapping[3] - 1.0f) / mapping[2];
+            float z = p[2] / p[3] * depth;
+            out[k].z = z < 0.0f ? 0.0f : z > 1.0f ? 1.0f : z;
+        }
+    }
+}
+
+static int upload_static_vertices(SDL_GPUCommandBuffer *buffer, const Recording *frame) {
+    if (replay_uploaded || !frame->vertex_used) return 1;
+    if (!replay_buffer) {
+        SDL_GPUBufferCreateInfo info = {SDL_GPU_BUFFERUSAGE_VERTEX, VERTEX_BYTES, 0};
+        replay_buffer = SDL_CreateGPUBuffer(device, &info);
+        SDL_GPUTransferBufferCreateInfo transfer = {SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD, VERTEX_BYTES, 0};
+        replay_transfer = SDL_CreateGPUTransferBuffer(device, &transfer);
+        if (!replay_buffer || !replay_transfer) return 0;
+    }
+    unsigned char *mapped = SDL_MapGPUTransferBuffer(device, replay_transfer, true);
+    if (!mapped) return 0;
+    memcpy(mapped, frame->vertices, frame->vertex_used);
+    SDL_UnmapGPUTransferBuffer(device, replay_transfer);
+    SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(buffer);
+    SDL_GPUTransferBufferLocation from = {replay_transfer, 0};
+    SDL_GPUBufferRegion to = {replay_buffer, 0, frame->vertex_used};
+    SDL_UploadToGPUBuffer(copy, &from, &to, true);
+    SDL_EndGPUCopyPass(copy);
+    replay_uploaded = 1;
+    return 1;
+}
+
+static int make_moving_room(uint32_t bytes) {
+    if (bytes <= moving_capacity) return 1;
+    uint32_t wanted = moving_capacity ? moving_capacity : 1 << 20;
+    while (wanted < bytes) wanted *= 2;
+    if (moving_buffer) SDL_ReleaseGPUBuffer(device, moving_buffer);
+    if (moving_transfer) SDL_ReleaseGPUTransferBuffer(device, moving_transfer);
+    SDL_GPUBufferCreateInfo info = {SDL_GPU_BUFFERUSAGE_VERTEX, wanted, 0};
+    moving_buffer = SDL_CreateGPUBuffer(device, &info);
+    SDL_GPUTransferBufferCreateInfo transfer = {SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD, wanted, 0};
+    moving_transfer = SDL_CreateGPUTransferBuffer(device, &transfer);
+    moving_capacity = moving_buffer && moving_transfer ? wanted : 0;
+    return moving_capacity != 0;
+}
+
+static int upload_replay_vertices(SDL_GPUCommandBuffer *buffer, const Recording *frame, const Recording *before,
+                                  float alpha) {
+    if (!upload_static_vertices(buffer, frame)) return 0;
+    if (!frame->moving_bytes) return 1;
+    if (!make_moving_room(frame->moving_bytes)) return 0;
+    static unsigned char *scratch;
+    static uint32_t scratch_capacity;
+    if (frame->moving_bytes > scratch_capacity) {
+        unsigned char *grown = realloc(scratch, frame->moving_bytes);
+        if (!grown) return 0;
+        scratch = grown;
+        scratch_capacity = frame->moving_bytes;
+    }
+    for (int i = 0; i < frame->command_count; ++i) {
+        const Command *command = &frame->commands[i];
+        if (command->moving)
+            memcpy(scratch + command->offset, frame->vertices + command->copy, (size_t)command->count * sizeof(RenderVertex));
+    }
+    float shift[16];
+    int follow = camera_shift(shift, frame, before, alpha);
+    if (frame->paired) blend_draws(scratch, frame, before, alpha);
+    if (frame->shadow_count) blend_shadows(scratch, frame, before, alpha, follow ? shift : NULL);
+    if (frame->follow_count && follow) follow_camera(scratch, frame, shift);
+    unsigned char *mapped = SDL_MapGPUTransferBuffer(device, moving_transfer, true);
+    if (!mapped) return 0;
+    memcpy(mapped, scratch, frame->moving_bytes);
+    SDL_UnmapGPUTransferBuffer(device, moving_transfer);
+    SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(buffer);
+    SDL_GPUTransferBufferLocation from = {moving_transfer, 0};
+    SDL_GPUBufferRegion to = {moving_buffer, 0, frame->moving_bytes};
+    SDL_UploadToGPUBuffer(copy, &from, &to, true);
+    SDL_EndGPUCopyPass(copy);
+    return 1;
+}
+
+static void place_model(MeshUniforms *out, const MeshUniforms *now, const MeshUniforms *was, float alpha) {
+    if (!memcmp(now->model_world, was->model_world, sizeof now->model_world)) return;
+    float now_inverse[16], was_inverse[16], now_camera[16], was_camera[16], camera[16];
+    if (!invert(now_inverse, now->model_world) || !invert(was_inverse, was->model_world)) return;
+    multiply(now_camera, now->model_screen, now_inverse);
+    multiply(was_camera, was->model_screen, was_inverse);
+    for (int k = 0; k < 16; ++k) camera[k] = was_camera[k] + (now_camera[k] - was_camera[k]) * alpha;
+    blend_frame(out->model_world, was->model_world, now->model_world, alpha);
+    multiply(out->model_screen, camera, out->model_world);
+}
+
+static void blend_models(const Recording *frame, const Recording *before, float alpha) {
+    int floats = (int)(offsetof(MeshUniforms, flags) / sizeof(float));
+    float shift[16];
+    int follow = camera_shift(shift, frame, before, alpha);
+    memcpy(replay_bones, frame->bones, (size_t)frame->bone_count * sizeof *frame->bones);
+    for (int i = 0; i < frame->model_count; ++i) {
+        replay_models[i] = frame->models[i];
+        int found = frame->matches[i];
+        if (found < 0 && follow) multiply(replay_models[i].model_screen, shift, frame->models[i].model_screen);
+        if (found < 0) continue;
+        float *out = (float *)&replay_models[i];
+        const float *now = (const float *)&frame->models[i];
+        const float *was = (const float *)&before->models[found];
+        if (memcmp(now, was, (size_t)floats * sizeof *now)) {
+            for (int k = 0; k < floats; ++k) out[k] = was[k] + (now[k] - was[k]) * alpha;
+            place_model(&replay_models[i], &frame->models[i], &before->models[found], alpha);
+        }
+        int bones = frame->model_bones[i], old_bones = before->model_bones[found];
+        if (bones <= 0 || old_bones <= 0) continue;
+        for (int k = 0; k < 384; k += 12)
+            if (memcmp(&before->bones[old_bones][k], &frame->bones[bones][k], 12 * sizeof(float)))
+                blend_bone(&replay_bones[bones][k], &before->bones[old_bones][k], &frame->bones[bones][k], alpha);
+    }
+}
+
+static void replay_pass(SDL_GPUCommandBuffer *buffer, const Recording *frame, const Step *step) {
+    SDL_GPUColorTargetInfo color[2];
+    memset(color, 0, sizeof color);
+    color[0].texture = step->multi ? step->multi : step->color;
+    color[0].load_op = step->color_load;
+    color[0].clear_color.a = 1.0f;
+    color[0].store_op = step->multi ? SDL_GPU_STOREOP_RESOLVE_AND_STORE : SDL_GPU_STOREOP_STORE;
+    color[0].resolve_texture = step->color;
+    SDL_GPUDepthStencilTargetInfo depth = {0};
+    depth.texture = depths[step->depth].texture;
+    depth.load_op = step->depth_load;
+    depth.store_op = SDL_GPU_STOREOP_STORE;
+    depth.stencil_load_op = depth.load_op;
+    depth.stencil_store_op = SDL_GPU_STOREOP_STORE;
+    color[1].texture = depths[step->depth].color;
+    color[1].load_op = depth.load_op;
+    color[1].store_op = SDL_GPU_STOREOP_RESOLVE_AND_STORE;
+    color[1].resolve_texture = depths[step->depth].resolved;
+    SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(buffer, color, step->mirror ? 2 : 1, &depth);
+    encode(buffer, pass, frame->commands + step->first, step->count, replay_models, (const float (*)[384])replay_bones,
+           replay_buffer, step->width, step->height, step->mirror);
+    SDL_EndGPURenderPass(pass);
+}
+
+int render_replay(float alpha) {
+    Recording *frame = &recordings[shown_slot], *before = &recordings[previous_slot];
+    if (!smoothing || !frame->valid) return 0;
+    if (!grow((void **)&replay_models, &replay_model_capacity, frame->model_count, sizeof *replay_models) ||
+        !grow((void **)&replay_bones, &replay_bone_capacity, frame->bone_count, sizeof *replay_bones))
+        return 0;
+    alpha = alpha < 0.0f ? 0.0f : alpha > 1.0f ? 1.0f : alpha;
+    blend_models(frame, before, alpha);
+    SDL_GPUCommandBuffer *buffer = SDL_AcquireGPUCommandBuffer(device);
+    if (!buffer) return 0;
+    if (!upload_replay_vertices(buffer, frame, before, alpha)) {
+        SDL_CancelGPUCommandBuffer(buffer);
+        return 0;
+    }
+    for (int i = 0; i < frame->step_count; ++i) {
+        const Step *step = &frame->steps[i];
+        if (step->kind == STEP_PASS) {
+            replay_pass(buffer, frame, step);
+            continue;
+        }
+        if (step->kind == STEP_BLIT) {
+            SDL_BlitGPUTexture(buffer, &step->blit);
+            continue;
+        }
+        SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(buffer);
+        SDL_CopyGPUTextureToTexture(copy, &step->from, &step->to, step->copy_width, step->copy_height, 1, false);
+        SDL_EndGPUCopyPass(copy);
+    }
+    present_texture(buffer, frame->shown, frame->shown_scale, frame->shown_width, frame->shown_height);
+    SDL_SubmitGPUCommandBuffer(buffer);
+    port_stats.replays++;
+    port_debug_replayed(alpha);
+    return 1;
+}
+
+void render_set_smoothing(int enabled) {
+    smoothing = enabled;
+    forget_recordings();
+    start_recording(&recordings[recording_slot]);
+}
+
+int render_smoothing(void) { return smoothing; }
+
+int render_refresh_rate(void) {
+    const SDL_DisplayMode *mode = window ? SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window)) : NULL;
+    return mode && mode->refresh_rate > 0.0f ? (int)(mode->refresh_rate + 0.5f) : 60;
+}
+
+void render_present(int target, int width, int height) {
+    flush();
+    presented++;
+    frame_draws = 0;
+    int replayed = smoothing && target;
+    if (replayed) finish_recording(target, width, height);
+    SDL_GPUCommandBuffer *buffer = command_buffer();
+    if (!replayed) present_texture(buffer, target ? textures[target].color : NULL, target ? textures[target].scale : 1, width, height);
     SDL_SubmitGPUCommandBuffer(buffer);
     commands = NULL;
     vertex_cycle = 1;
     vertex_used = vertex_flushed = 0;
     apply_quality();
+    bury(presented);
+    if (!replayed) {
+        if (target) port_debug_replayed(1.0f);
+        return;
+    }
+    smooth_presented();
+    if (render_replay(0.0f)) return;
+    buffer = command_buffer();
+    present_texture(buffer, textures[target].color, textures[target].scale, width, height);
+    SDL_SubmitGPUCommandBuffer(buffer);
+    commands = NULL;
 }

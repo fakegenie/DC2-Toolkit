@@ -33,6 +33,9 @@ extern GsRegisters gs;
 void gs_reset();
 void gs_frame(int fbp, int width, int height, int psm);
 int gs_frame_target();
+void gs_frame_shift(int pixels);
+int gs_read_shift(u_int base);
+extern "C" int port_screen_width(void);
 void gs_write(int reg, u_long value);
 void gs_packed(int reg, const u_int *words);
 void gs_texture_source(const mgCTexture *texture);
@@ -55,6 +58,10 @@ struct ShadowSetup {
     float shadow[4][4];
     float screen[4][4];
     float light[4];
+    float world[4][4];
+    float camera[4][4];
+    float caster[4][4];
+    const void *key;
     RenderState state;
 };
 

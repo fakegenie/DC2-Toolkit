@@ -991,5 +991,71 @@
     "file": "ps2/src/menuchr.cpp",
     "find": "    AttachForm();\n    AttachMessageForm();\n",
     "replace": "    AttachForm();\n    MENUFORMPARTS_TYPE *monica_back = form->GetPartInfo(\"fcb1\");\n\n    if (monica_back != NULL && monica_back->y == 158.0f && monica_back->h == 100.0f) {\n        monica_back->y = 181.0f;\n        monica_back->h = 121.0f;\n    }\n\n    AttachMessageForm();\n"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "void mgSetRenderInfo(float fov, float clip_near, float clip_far) {\n    mgRenderInfo.SetRenderInfo(fov, mgScreenWidth, mgScreenHeight, clip_near, clip_far,",
+    "replace": "void mgSetRenderInfo(float fov, float clip_near, float clip_far) {\n    mgRenderInfo.SetRenderInfo(fov, port_screen_width(), mgScreenHeight, clip_near, clip_far,"
+  },
+  {
+    "file": "ps2/include/mglib.hpp",
+    "find": "extern int mgScreenWidth;",
+    "replace": "extern int mgScreenWidth;\nextern \"C\" int port_screen_width(void);\nextern \"C\" void port_outline_span(const void *key, float *min_xy, float *max_xy);"
+  },
+  {
+    "file": "ps2/src/editloop.cpp",
+    "find": "textures->EnterTexture(159, \"shadow_work\", NULL, mgScreenWidth, mgScreenHeight,",
+    "replace": "textures->EnterTexture(159, \"shadow_work\", NULL, port_screen_width(), mgScreenHeight,"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "        int width = shadow->width;\n        int height = shadow->height;\n\n        if (width % 64 != 0) {\n            width += 64 - width % 64;\n        }\n",
+    "replace": "        int width = shadow->width;\n        int height = shadow->height;\n"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "        prim.TextureCrd(1, 1);\n        prim.Vertex(0, 0, 0);\n        prim.TextureCrd(texture.width - 1, texture.height - 1);\n        prim.Vertex(mgScreenWidth, mgScreenHeight, 0);",
+    "replace": "        prim.TextureCrd(1, 1);\n        prim.Vertex((mgScreenWidth - port_screen_width()) / 2, 0, 0);\n        prim.TextureCrd(texture.width - 1, texture.height - 1);\n        prim.Vertex((mgScreenWidth + port_screen_width()) / 2, mgScreenHeight, 0);"
+  },
+  {
+    "file": "ps2/src/editloop.cpp",
+    "find": "static int LoopMode;",
+    "replace": "static int LoopMode;\n\nextern \"C\" int port_town_shows_world(void) {\n    return LoopMode == EDIT_LOOP_WALK || LoopMode == EDIT_LOOP_EDIT || LoopMode == EDIT_LOOP_WAIT_READ;\n}"
+  },
+  {
+    "file": "ps2/src/mainloop.cpp",
+    "find": "            frame_border.Vertex(0, 0, 0);\n            frame_border.Vertex(mgScreenWidth - 1, 0, 0);\n            frame_border.Vertex(mgScreenWidth - 1, mgScreenHeight - 1, 0);\n            frame_border.Vertex(0, mgScreenHeight - 1, 0);\n            frame_border.Vertex(0, 0, 0);",
+    "replace": "            int border_left = (mgScreenWidth - port_screen_width()) / 2;\n            int border_right = (mgScreenWidth + port_screen_width()) / 2 - 1;\n            frame_border.Vertex(border_left, 0, 0);\n            frame_border.Vertex(border_right, 0, 0);\n            frame_border.Vertex(border_right, mgScreenHeight - 1, 0);\n            frame_border.Vertex(border_left, mgScreenHeight - 1, 0);\n            frame_border.Vertex(border_left, 0, 0);"
+  },
+  {
+    "file": "ps2/src/effectlist.cpp",
+    "find": "    for (x = 0; x < mgScreenWidth; x += 64) {\n        for (y = 0; y < mgScreenHeight; y += 32) {\n            *(u_long128 *) vertex = *(u_long128 *) offset;\n            uv[0] = x * 16;\n            uv[1] = y * 16;\n            prim.Data(uv);\n            vertex[0] = uv[0] + offset[0];\n            vertex[1] = uv[1] + offset[1];\n            prim.Data(vertex);\n            uv[0] = (x + 64) * 16;\n            uv[1] = (y + 32) * 16;\n            prim.Data(uv);\n            vertex[0] = uv[0] + offset[0];\n            vertex[1] = uv[1] + offset[1];\n            prim.Data(vertex);\n        }\n    }",
+    "replace": "    int side = (port_screen_width() - mgScreenWidth) / 2;\n\n    for (x = -side; x < mgScreenWidth + side; x += 64) {\n        for (y = 0; y < mgScreenHeight; y += 32) {\n            *(u_long128 *) vertex = *(u_long128 *) offset;\n            uv[0] = (x < 0 ? 0 : x > mgScreenWidth ? mgScreenWidth : x) * 16;\n            uv[1] = y * 16;\n            prim.Data(uv);\n            vertex[0] = x * 16 + offset[0];\n            vertex[1] = uv[1] + offset[1];\n            prim.Data(vertex);\n            uv[0] = (x + 64 < 0 ? 0 : x + 64 > mgScreenWidth ? mgScreenWidth : x + 64) * 16;\n            uv[1] = (y + 32) * 16;\n            prim.Data(uv);\n            vertex[0] = (x + 64) * 16 + offset[0];\n            vertex[1] = uv[1] + offset[1];\n            prim.Data(vertex);\n        }\n    }"
+  },
+  {
+    "file": "ps2/src/dng_main.cpp",
+    "find": "DNG_STATUS            DngStatus;",
+    "replace": "DNG_STATUS            DngStatus;\n\nextern \"C\" int port_dungeon_shows_world(void) {\n    return DngStatus.mode == DNG_STATUS_FIELD || DngStatus.mode == DNG_STATUS_EVENT || DngStatus.mode == DNG_STATUS_EXIT;\n}"
+  },
+  {
+    "file": "ps2/src/mainloop.cpp",
+    "find": "int GetNowLoopNo() {\n    return LoopNo;\n}",
+    "replace": "int GetNowLoopNo() {\n    return LoopNo;\n}\n\nextern \"C\" int port_town_shows_world(void);\nextern \"C\" int port_dungeon_shows_world(void);\n\nextern \"C\" int port_world_shown(void) {\n    switch (LoopNo) {\n        case LOOP_EDIT: return port_town_shows_world();\n        case LOOP_DUNGEON: return port_dungeon_shows_world();\n        default: return 0;\n    }\n}"
+  },
+  {
+    "file": "ps2/src/outline.cpp",
+    "find": "    float screen_width = mgScreenWidth;\n    float screen_height = mgScreenHeight;\n\n    if (min_xy[0] < 0.0f) {\n        min_xy[0] = 0.0f;\n    }",
+    "replace": "    int side = (port_screen_width() - mgScreenWidth) / 2;\n    float screen_width = mgScreenWidth + side;\n    float screen_height = mgScreenHeight;\n\n    if (min_xy[0] < (float) -side) {\n        min_xy[0] = (float) -side;\n    }"
+  },
+  {
+    "file": "ps2/src/outline.cpp",
+    "find": "    if (left < 0) {\n        left = 0;\n    }\n\n    if (top < 0) {\n        top = 0;\n    }\n\n    if (mgScreenWidth * 16 < right) {\n        right = mgScreenWidth * 16;\n    }",
+    "count": 2,
+    "replace": "    if (left < -side * 16) {\n        left = -side * 16;\n    }\n\n    if (top < 0) {\n        top = 0;\n    }\n\n    if ((mgScreenWidth + side) * 16 < right) {\n        right = (mgScreenWidth + side) * 16;\n    }"
+  },
+  {
+    "file": "ps2/src/outline.cpp",
+    "find": "    int max_corner[4];\n    int min_corner[4];\n    mgFotI4(max_corner, max_xy);",
+    "replace": "    port_outline_span(this, min_xy, max_xy);\n\n    int max_corner[4];\n    int min_corner[4];\n    mgFotI4(max_corner, max_xy);"
   }
 ]

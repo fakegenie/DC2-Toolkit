@@ -491,7 +491,7 @@ fn link(objects: &[PathBuf], output: &Path, libraries: &[String]) -> Result<Outp
         for (alias, target) in ALIASES {
             command.arg(format!("-Wl,-alias,_{target},_{alias}"));
         }
-        command.args(["-Wl,-segaddr,__PS2,0x110000000", "-Wl,-segprot,__PS2,rw,rw"]);
+        command.args(["-lobjc", "-Wl,-segaddr,__PS2,0x110000000", "-Wl,-segprot,__PS2,rw,rw"]);
         command.args(["-Wl,-segaddr,__PS2SPR,0x170000000", "-Wl,-segprot,__PS2SPR,rw,rw"]);
     } else {
         command.args(["-no-pie", "-Wl,--no-demangle"]);

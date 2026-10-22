@@ -38,6 +38,9 @@ void port_present_frame(void) {
     while (SDL_PollEvent(&event)) {
         if (port_mods_event(&event)) continue;
         if (event.type == SDL_EVENT_QUIT) exit(0);
+        if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
+            (event.key.key == SDLK_F11 || (event.key.key == SDLK_RETURN && (event.key.mod & SDL_KMOD_ALT))))
+            render_toggle_fullscreen();
         if (event.type == SDL_EVENT_DID_ENTER_BACKGROUND) wait_for_foreground();
         if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(render_window()))
             exit(0);

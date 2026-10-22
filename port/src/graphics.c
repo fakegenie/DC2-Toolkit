@@ -7,6 +7,8 @@
 #include <time.h>
 #include "port_present.h"
 #include "port_stats.h"
+#include "port_mod.h"
+#include "smooth.h"
 
 extern void port_kernel_vblank(void);
 
@@ -56,7 +58,8 @@ void port_graphics_tick(void) {
 void port_graphics_wait(void) {
     uint64_t now = monotonic_ns();
     if (!next_field) next_field = now + port_field_period;
-    sleep_until(next_field);
+    if (render_smoothing()) smooth_until(next_field);
+    else sleep_until(next_field);
     port_graphics_tick();
 }
 

@@ -3,10 +3,12 @@
 #include "imgui.h"
 #include "port_graphics.h"
 #include "render.h"
+#include "port_mod.h"
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <sys/stat.h>
 #include <vector>
 
 struct Draw {
@@ -324,6 +326,63 @@ static int command_grab(const DebugArgs *args, DebugReply *reply) {
     return 0;
 }
 
+static int command_between(const DebugArgs *args, DebugReply *reply) {
+    if (!render_smoothing()) return debug_fail(reply, "smoothing is off: start with --smooth HZ or the dc2tk.smooth mod");
+    if (!render_replay((float)debug_arg_number(args, "alpha", 0.5))) return debug_fail(reply, "no recorded frame yet");
+    return command_grab(args, reply);
+}
+
+static std::vector<std::vector<uint32_t>> presents;
+static std::vector<float> present_alphas;
+static int presents_wanted;
+static int presents_full;
+static int present_width;
+static int present_height;
+
+static void write_presents() {
+    mkdir("build/port/presents", 0755);
+    for (size_t i = 0; i < presents.size(); ++i) {
+        char path[96];
+        snprintf(path, sizeof path, "build/port/presents/%03zu_%.3f.png", i, present_alphas[i]);
+        size_t length = 0;
+        unsigned char *png = debug_png(presents[i].data(), present_width, present_height, &length);
+        FILE *file = fopen(path, "wb");
+        if (file) {
+            fwrite(png, 1, length, file);
+            fclose(file);
+        }
+        free(png);
+    }
+}
+
+extern "C" void port_debug_replayed(float alpha) {
+    if ((int)presents.size() >= presents_wanted || !shown_target) return;
+    int scale = render_scale(shown_target);
+    std::vector<uint32_t> full((size_t)(shown_width * scale) * (size_t)(shown_height * scale));
+    render_download_full(shown_target, shown_width, shown_height, full.data());
+    int step = presents_full ? 1 : scale;
+    present_width = shown_width * scale / step;
+    present_height = shown_height * scale / step;
+    std::vector<uint32_t> kept((size_t)present_width * (size_t)present_height);
+    for (int y = 0; y < present_height; ++y)
+        for (int x = 0; x < present_width; ++x)
+            kept[(size_t)y * present_width + x] = full[(size_t)(y * step) * (size_t)(shown_width * scale) + (size_t)(x * step)];
+    presents.push_back(kept);
+    present_alphas.push_back(alpha);
+    if ((int)presents.size() == presents_wanted) write_presents();
+}
+
+static int command_presents(const DebugArgs *args, DebugReply *reply) {
+    int count = (int)debug_arg_int(args, "count", 60);
+    if (count < 1 || count > 240) return debug_fail(reply, "count 1..240");
+    presents.clear();
+    present_alphas.clear();
+    presents_wanted = count;
+    presents_full = (int)debug_arg_int(args, "full", 0);
+    debug_print(reply, "{\"armed\": %d, \"folder\": \"build/port/presents\"}", count);
+    return 0;
+}
+
 static int command_depth(const DebugArgs *args, DebugReply *reply) {
     int x = (int)debug_arg_int(args, "x", 252), y = (int)debug_arg_int(args, "y", 204);
     int size = (int)debug_arg_int(args, "size", 8);
@@ -352,6 +411,11 @@ extern const DebugCommand debug_capture_commands[] = {
     {"msaa", command_msaa, 0, "multisampling value=1|2|4|8, lowered to what the GPU supports; applied at the next frame"},
     {"depth", command_depth, 0, "reads the depth buffer like the game's photo and pick-z; x=N y=N size=N (8)"},
     {"grab", command_grab, 0, "the shown picture as PNG at the full internal resolution"},
+    {"presents", command_presents, 0,
+     "save the next count=N (60) pictures put on screen, in-between frames included, to build/port/presents; full=1 keeps the internal resolution"},
+    {"between", command_between, 0,
+     "an in-between frame as PNG at the full internal resolution: alpha=0..1 from the game frame before the last to "
+     "the last (needs --smooth)"},
     {NULL, NULL, 0, NULL},
 };
 

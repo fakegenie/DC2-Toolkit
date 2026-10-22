@@ -117,10 +117,14 @@ extern int render_highlight;
 int render_init(void);
 void render_shutdown(void);
 int render_poll(void);
-void render_set_quality(int scale, int samples);
 void render_quality(int *scale, int *samples);
+int render_replay(float alpha);
+int render_refresh_rate(void);
+void render_set_camera(const float *eye, const float (*pose)[4], const float (*view)[4]);
+void port_debug_replayed(float alpha);
 
 int render_target(uint32_t base, int width, int height);
+int render_target_at(uint32_t base);
 int render_texture(int width, int height);
 int render_texture_at_scale(int width, int height, int scale);
 void render_upload_full(int texture, const uint32_t *pixels);
@@ -143,6 +147,11 @@ void render_mesh(const RenderState *state, int cull, const MeshUniforms *uniform
                  const MeshVertex *vertices, int count, int resident);
 int render_mesh_store(const MeshVertex *vertices, int count);
 void render_mesh_forget(int first, int count);
+void render_shadow_place(RenderVertex *vertex, const float *clip, const float *screen, const float *mapping, float depth);
+int render_shadow_setup(const void *key, const float *world, const float *camera, const float *light, const float *screen,
+                        const float *mapping, float depth, const float (*shape)[4], int count);
+void render_sprite(const RenderState *state, const RenderVertex *vertices, int count, const float *mapping, float depth);
+void render_shadow(const RenderState *state, const RenderVertex *vertices, const float (*points)[4], int count, int setup);
 void render_present(int target, int width, int height);
 
 void render_capture_begin(void);

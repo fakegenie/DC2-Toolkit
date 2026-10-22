@@ -4,6 +4,7 @@
 #include "port_mod.h"
 #include "sce/eekernel.h"
 #include "sce/libgraph.h"
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 
@@ -11,6 +12,8 @@ void mgInitRetail(int screen_mode, int video_mode);
 void mgEndFrameRetail(mgCDrawManager *manager);
 void mgSetPkTextureRepeatRetail(sceGsClamp clamp);
 void mgSetPkFrameBufferRetail(int fbp, int width, int height, int psm);
+
+enum { LAYOUT_WIDTH = 512 };
 
 static int rotate_priority = -1;
 static int display_target;
@@ -37,11 +40,52 @@ extern int DebugFlag;
 extern "C" int port_debug;
 int port_debug;
 
+enum { OUTLINE_LIMIT = 64 };
+
+static struct {
+    const void *key;
+    float low[2];
+    float high[2];
+    u_int frame;
+} outlines[OUTLINE_LIMIT];
+static u_int outline_frame;
+
+extern "C" void port_outline_span(const void *key, float *min_xy, float *max_xy) {
+    int slot = 0;
+    for (int i = 0; i < OUTLINE_LIMIT; ++i) {
+        if (outlines[i].key == key) {
+            slot = i;
+            break;
+        }
+        if (outlines[i].frame < outlines[slot].frame) slot = i;
+    }
+    float low[2] = {min_xy[0], min_xy[1]}, high[2] = {max_xy[0], max_xy[1]};
+    int seen = outlines[slot].key == key && outlines[slot].frame + 1 == outline_frame;
+    int side = (port_screen_width() - mgScreenWidth) / 2;
+    if (render_smoothing() && !seen) {
+        min_xy[0] = (float)-side;
+        min_xy[1] = 0.0f;
+        max_xy[0] = (float)(mgScreenWidth + side);
+        max_xy[1] = (float)mgScreenHeight;
+    }
+    if (render_smoothing() && seen)
+        for (int k = 0; k < 2; ++k) {
+            min_xy[k] = std::fmin(min_xy[k], outlines[slot].low[k]);
+            max_xy[k] = std::fmax(max_xy[k], outlines[slot].high[k]);
+        }
+    outlines[slot].key = key;
+    outlines[slot].frame = outline_frame;
+    memcpy(outlines[slot].low, low, sizeof low);
+    memcpy(outlines[slot].high, high, sizeof high);
+}
+
 PORT_OVERRIDE void mgEndFrame(mgCDrawManager *manager) {
+    outline_frame++;
     if (port_debug) DebugFlag = 1;
     port_mods_frame_enter();
     mgEndFrameRetail(manager);
     port_mods_frame_drawn();
+    render_set_camera(mgRenderInfo.camera_pos, mgRenderInfo.camera_pose, mgRenderInfo.world_screen);
     port_present_show(display_target, display_width, display_height);
     gs_next_frame();
     visual_next_frame();
@@ -54,12 +98,20 @@ PORT_OVERRIDE void mgSetPkTextureRepeat(sceGsClamp clamp) {
     gs_write(SCE_GS_CLAMP_1, *(u_long *)&clamp);
 }
 
+extern "C" int port_world_shown(void);
+
+extern "C" int port_screen_width(void) {
+    return mgScreenWidth == LAYOUT_WIDTH && port_world_shown() ? render_frame_width() : mgScreenWidth;
+}
+
 PORT_OVERRIDE void mgSetPkFrameBuffer(int fbp, int width, int height, int psm) {
     mgSetPkFrameBufferRetail(fbp, width, height, psm);
-    gs_frame((int)mgFRAME_1.FBP, mgScreenWidth, mgScreenHeight, (int)mgFRAME_1.PSM);
+    int wide = mgScreenWidth == LAYOUT_WIDTH ? port_screen_width() : mgScreenWidth;
+    gs_frame((int)mgFRAME_1.FBP, wide, mgScreenHeight, (int)mgFRAME_1.PSM);
+    gs_frame_shift((wide - mgScreenWidth) / 2);
     if (fbp >= 0) return;
     display_target = gs_frame_target();
-    display_width = mgScreenWidth;
+    display_width = wide;
     display_height = mgScreenHeight;
 }
 
@@ -82,8 +134,9 @@ PORT_OVERRIDE void mgSetPkClearScreen(u_char red, u_char green, u_char blue, u_c
     gs_write(SCE_GS_TEX1_1, 1);
     gs_write(SCE_GS_PRIM, 0x146);
     gs_write(SCE_GS_RGBAQ, (u_long)red | (u_long)green << 8 | (u_long)blue << 16 | (u_long)alpha << 24);
-    gs_write(SCE_GS_XYZF2, (u_long)(mgScreenOffx << 4) | (u_long)(mgScreenOffy << 4) << 16);
-    gs_write(SCE_GS_XYZF2, (u_long)((mgScreenOffx + mgScreenWidth) << 4) |
+    int left = mgScreenOffx - (port_screen_width() - mgScreenWidth) / 2;
+    gs_write(SCE_GS_XYZF2, (u_long)(left << 4) | (u_long)(mgScreenOffy << 4) << 16);
+    gs_write(SCE_GS_XYZF2, (u_long)((left + port_screen_width()) << 4) |
                                (u_long)((mgScreenOffy + mgScreenHeight) << 4) << 16);
 }
 
@@ -144,7 +197,7 @@ PORT_OVERRIDE int mgStoreImage(mgCTexture *texture, u_long128 *buffer) {
     int width = texture->width, height = texture->height;
     int source = gs_texture(texture->tex0_bits, width, height);
     u_int *pixels = (u_int *)std::malloc((size_t)width * (size_t)height * 4);
-    render_download(source, 0, 0, width, height, pixels);
+    render_download(source, gs_read_shift((u_int)texture->tex0.TBP0), 0, width, height, pixels);
     unsigned char *out = (unsigned char *)buffer;
     for (int i = 0; i < width * height; ++i) {
         u_int color = pixels[i];

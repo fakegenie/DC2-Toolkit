@@ -20,6 +20,8 @@ static int callbacks;
 
 void port_present_frame(void) {}
 void audio_frame(void) {}
+int render_smoothing(void) { return 0; }
+void smooth_until(uint64_t deadline) { (void)deadline; }
 
 void port_depth_download(int x, int y, int width, int height, unsigned *pixels) {
     (void)x;
