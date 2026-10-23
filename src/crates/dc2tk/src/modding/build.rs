@@ -50,6 +50,10 @@ pub struct BuildArgs {
     /// set's lock file beside it (the mods folder's mods.lock for --mod).
     #[arg(long, value_name = "FILE")]
     set: Option<PathBuf>,
+    /// Put a built mod (.dc2pak, from dc2tk mod build) on the image; repeat for several, which may
+    /// not change the same file or use the same number as each other or the mods built from source.
+    #[arg(long = "pak", value_name = "FILE")]
+    paks: Vec<PathBuf>,
     #[command(flatten)]
     mods: ModsDir,
     /// Use what the chosen mods' "dev" section asks for: a new game starts at its start_at.
@@ -148,6 +152,10 @@ pub fn run_build(args: &BuildArgs) -> Result<ExitCode> {
         Some(path) => Some(std::fs::read(path).with_context(|| format!("cannot read {}", path.display()))?),
         None => engine.or_else(|| made.data.executable.clone()),
     };
+    if !args.paks.is_empty() {
+        let ids: Vec<String> = mod_dirs.iter().map(|dir| mods::name(dir)).collect::<Result<_, _>>()?;
+        super::pak::add_paks(&args.paks, &mut made.data.files, &numbers::read_lock(Some(&lock_file(args)))?, &ids)?;
+    }
     let native_tables = made.data.executable.clone();
     if prepared.is_some() {
         made.data.executable = executable.clone();
@@ -230,6 +238,7 @@ pub fn build_native_binary(
         mod_names: Vec::new(),
         set: Some(set.to_path_buf()),
         mods: mods.clone(),
+        paks: Vec::new(),
         dev: false,
         play: false,
         pcsx2: None,
@@ -267,6 +276,7 @@ pub fn built_game_files(
         mod_names: mod_names.to_vec(),
         set: set.map(Path::to_path_buf),
         mods: mods.clone(),
+        paks: Vec::new(),
         dev: false,
         play: false,
         pcsx2: None,

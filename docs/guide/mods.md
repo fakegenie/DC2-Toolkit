@@ -6,10 +6,12 @@ A mod is a folder inside `mods/` (for example, `mods/castle/`) with a `mod.json`
 dc2tk build extracted/scripts dc2.iso -o modded.iso --mod andrew.castle --mod someone.another-mod
 ```
 
-See two complete example mods in `docs/scripting/examples/` (copy one into `mods/` to build it):
+See four complete example mods in `docs/scripting/examples/` (copy one into `mods/` to build it):
 
 - **[calculator](../scripting/examples/calculator/calculator.c)**: In-game calculator with a custom 3D model, 2D UI sprites, and sound effects.
 - **[spinning-cult](../scripting/examples/spinning-cult/README.md)**: Quest mod with a custom Blender room, a door in Palm Brinks, a custom NPC, a custom item, and new music.
+- **[hard-mode](../scripting/examples/hard-mode/README.md)**: Tougher monsters, fragile weapons and pricier shops, made only of data tables, with settings and mod sets that choose them.
+- **[boss-rush](../scripting/examples/boss-rush/README.md)**: Six of the game's boss fights back to back from the Palm Brinks dungeon entrance, timed, with a best time in the save.
 
 ## Mod folder layout and `mod.json`
 
@@ -300,7 +302,25 @@ dc2tk mod build extracted/scripts dc2.iso andrew.my-mod -o build/port/mods
 
 This writes `andrew.my-mod-1.0.0.dc2pak`: an uncompressed zip of `pak.cfg` (the mod's id, name, version, description, authors, the save flags, counters and programs it was given, and the game files it changes) and those files under `files/`, including its port settings and HD textures. Mods it depends on are built into it. A mod with engine or port code, or that changes the executable's tables, needs its own game binary and is refused; play it with `dc2tk play --native --set`.
 
-Put `.dc2pak` files in the `mods` folder beside the game, or drop one on the launcher. The launcher's Mods page turns each one on and off, and the game reads their files straight from the zips. Built mods replace whole game files, so two mods that change the same file, or were given the same number, can't both be on: the launcher won't turn the second on and says which mod and which file it clashes with. Files in the override folder (`dc2tk mod watch`, the Blender add-on's Play in Game) still come first. `--mods ID,ID` turns built mods on when the game is started with a disc and no launcher.
+Put `.dc2pak` files in the `mods` folder beside the game (on iOS, the `mods` folder in the app's folder in Files), or drop one on the launcher. The launcher's Mods page turns each one on and off, and the game reads their files straight from the zips. Built mods replace whole game files, so two mods that change the same file, or were given the same number, can't both be on: the launcher won't turn the second on and says which mod and which file it clashes with. Files in the override folder (`dc2tk mod watch`, the Blender add-on's Play in Game) still come first. `--mods ID,ID` turns built mods on when the game is started with a disc and no launcher.
+
+Built mods go on disc images too. `--pak` adds one to a build, and can be given more than once:
+
+```sh
+dc2tk build extracted/scripts dc2.iso -o modded.iso --mod andrew.my-mod --pak someone.other-mod-1.2.0.dc2pak
+```
+
+A pak can't change a file, or use a number, that a mod built from source or another pak does; the build stops and names both. Its port settings and HD textures stay off the image, since only the native port reads them.
+
+### Upgrading an old mod
+
+A mod from before format 2 (with `"title"`, `"requires"`, `"start_at"`, a `disc/` folder, and its numbers in `mods/numbers.json`) can be upgraded in place:
+
+```sh
+dc2tk mod upgrade my-old-mod --id andrew.my-old-mod
+```
+
+This rewrites its `mod.json` as format 2: `"title"` becomes `"name"`, `"requires"` becomes `"dependencies"`, `data:`, `text:` and `file:` entries move to `"data"`, `"text"` and `"files"` (`file:mods/<folder>/NAME` becomes `mod:NAME`), `"additions"` moves under `"scripts"`, whole files in `files/` and `disc/` files get their lines, and `"start_at"` moves under `"dev"`. The record of whole files goes to `mod.lock`, and the mod's numbers move from `numbers.json` to `mods.lock` under its id, so saves keep working. Its `.c` and `.h` files load their new files through `MOD_DIR` and include other mods' headers by id. Without `--id` the id is `local.<folder>`. After that, `mod build` makes a `.dc2pak` of it like any other mod.
 
 ## Mod sets
 

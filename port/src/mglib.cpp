@@ -1,6 +1,7 @@
 #include "mglib.hpp"
 #include "draw.hpp"
 #include "port_present.h"
+#include "port_state.h"
 #include "port_mod.h"
 #include "sce/eekernel.h"
 #include "sce/libgraph.h"
@@ -90,6 +91,7 @@ PORT_OVERRIDE void mgEndFrame(mgCDrawManager *manager) {
     gs_next_frame();
     visual_next_frame();
     sprite_next_frame();
+    port_state_frame();
     port_mods_frame_exit();
 }
 

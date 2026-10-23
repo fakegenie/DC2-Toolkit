@@ -8,6 +8,7 @@
 #include "port_overrides.h"
 #include "render.h"
 #include "launcher.h"
+#include "touch.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,27 +19,22 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include <unistd.h>
+#include "ios_files.h"
 #endif
 
 extern int port_game_main(void);
 extern int port_debug;
 
 #if TARGET_OS_IPHONE
-void port_ios_saves(void);
-
-static const char *bundled_disc(void) {
-    static char path[2048];
-    const char *documents = SDL_GetUserFolder(SDL_FOLDER_DOCUMENTS);
-    if (!documents || chdir(documents)) return NULL;
-    snprintf(path, sizeof path, "%sdc2.iso", SDL_GetBasePath());
-    return path;
+static void enter_documents(void) {
+    if (chdir(port_ios_documents())) fprintf(stderr, "cannot enter %s\n", port_ios_documents());
 }
 
-static int launched(void) { return 0; }
+static int touch_default(void) { return TOUCH_SMART; }
 #else
-static const char *bundled_disc(void) { return NULL; }
+static void enter_documents(void) {}
 static void port_ios_saves(void) {}
-static int launched(void) { return 1; }
+static int touch_default(void) { return TOUCH_OFF; }
 #endif
 
 static int scale_of(const char *text) {
@@ -73,18 +69,17 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[first], "--msaa") && first + 1 < argc) samples = atoi(argv[++first]);
         else if (strcmp(argv[first], "--graphics")) break;
     }
-    int launcher = first == argc && launched();
+    enter_documents();
+    int launcher = first == argc;
     if (launcher && !port_launcher()) return 0;
-    const char *disc = first == argc - 1 ? argv[first] : first < argc ? NULL : launcher ? port_setting("disc") : bundled_disc();
+    const char *disc = first == argc - 1 ? argv[first] : launcher ? port_setting("disc") : NULL;
     if (launcher) {
         port_debug |= setting_number("debug.menus", 0);
         mute |= setting_number("sound.mute", 0);
-    } else if (first == argc && port_mod_loaded("dc2tk.debug-tools")) {
-        port_debug = 1;
     }
     if (!disc) {
         fprintf(stderr,
-                "usage: %s [--debug] [--mute] [--background] [--fullscreen] [--vsync] [--smooth HZ] [--aspect W:H] [--window WxH] [--scale 1-4|auto] "
+                "usage: %s [--debug] [--mute] [--background] [--fullscreen] [--vsync] [--smooth HZ] [--aspect W:H|fill] [--window WxH] [--scale 1-4|auto] "
                 "[--msaa 1|2|4|8] [--mods ID,ID] [DISC.iso]\n"
                 "Without a disc the launcher opens.\n",
                 argv[0]);
@@ -103,7 +98,8 @@ int main(int argc, char **argv) {
     render_set_vsync(vsync >= 0 ? vsync : setting_number("render.vsync", 0));
     render_set_filter(port_setting("render.filter") && !strcmp(port_setting("render.filter"), "nearest"));
     int numerator = 0, denominator = 0;
-    if (aspect && sscanf(aspect, "%d:%d", &numerator, &denominator) == 2) render_set_aspect(numerator, denominator);
+    if (aspect && !strcmp(aspect, "fill")) render_fill_screen();
+    else if (aspect && sscanf(aspect, "%d:%d", &numerator, &denominator) == 2) render_set_aspect(numerator, denominator);
     const char *set_smooth = port_setting("render.smooth");
     if (smooth < 0 && set_smooth && strcmp(set_smooth, "false")) smooth = atoi(set_smooth);
     if (smooth >= 0) {
@@ -111,6 +107,12 @@ int main(int argc, char **argv) {
         render_set_smoothing(1);
     }
     render_set_background(background);
+    const char *touch = port_setting("input.touch");
+    port_touch_set_mode(!touch                    ? touch_default()
+                        : !strcmp(touch, "smart") ? TOUCH_SMART
+                        : !strcmp(touch, "true")  ? TOUCH_ON
+                                                  : TOUCH_OFF);
+    port_touch_set_haptics(setting_number("input.haptics", 1));
     if (!port_cdvd_init(disc) || !port_executable_check() || !port_split_data_init()) return 1;
     if (!port_present_init(1)) return 1;
     port_ios_saves();

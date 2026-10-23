@@ -19,6 +19,7 @@ void port_graphics_wait(void) {
 }
 
 void port_mods_host(void) {}
+void port_state_host(void) {}
 static void worker(void *argument) {
     assert((uintptr_t)&argument - PORT_WINDOW < 0x10000000);
     assert(argument == &trace);

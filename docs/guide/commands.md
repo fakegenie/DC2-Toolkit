@@ -15,6 +15,7 @@ Run `dc2tk help <command>` to see all options for any command.
 | `dc2tk build extracted/scripts dc2.iso -o test.iso --mod local.mymod --play` | Build with a mod and launch the ISO in PCSX2. |
 | `dc2tk build extracted/scripts dc2.iso -o test.iso --start-at s51:story_50` | Build an ISO where **New Game** jumps directly to map `s51` at program `story_50`. |
 | `dc2tk build extracted/scripts dc2.iso --dry-run --mod local.mymod` | Validate that a mod compiles and fits in memory without writing an ISO file. |
+| `dc2tk build extracted/scripts dc2.iso -o modded.iso --pak other-mod-1.0.0.dc2pak` | Put a built mod on the image; repeat `--pak` for more (see [Playing built mods](mods.md#playing-built-mods)). |
 | `dc2tk build extracted/scripts dc2.iso -o modded.iso --set my-game.json` | Build the mods a [mod set](mods.md#mod-sets) chooses, with its settings; its numbers go in `my-game.lock`. |
 | `dc2tk play modded.iso` | Launch an ISO in PCSX2 (skips PS2 boot logos; pass `--full-boot` to keep them). |
 | `dc2tk play dc2.iso --native --set my-game.json` | Run the native port over the retail disc with a mod set's game files (`--build-only` prints the command instead). |
@@ -34,7 +35,9 @@ off (see [Playing built mods](mods.md#playing-built-mods)). It keeps them in `la
 the user's settings folder (`~/Library/Application Support/DC2 Toolkit/Dark Chronicle/` on macOS,
 `~/.local/share/DC2 Toolkit/Dark Chronicle/` on Linux), and options given with it still win. For MPEG2 movies, run
 `python3 -I tools/movie_sdk.py` (or install FFmpeg for `pkg-config`) and add `--movies` to the native build. Engine mods are checked
-with clang as well as MWCC by `mod check --native`. A mod cannot override a function supplied by `port/src`. A chosen mod's `"port"` sources are compiled into the binary too (see [Native port mods](mods.md#native-port-mods)); `python3 -I tools/port.py --mod mods/<name>` does the same for the port's own build.
+with clang as well as MWCC by `mod check --native`.
+
+`python3 -I tools/port.py --ios simulator` (or `--ios device --team TEAM`, signed for an iPhone or iPad) builds `DarkChronicle.app` from SDKs `python3 -I tools/ios_sdk.py` installs. The app opens on the launcher. Its Disc row picks a disc image anywhere the Files app reaches; without one it uses the first `.iso` in the app's own folder (Files, On My iPhone, Dark Chronicle). Built mods go in that folder's `mods`, which the Mods page's Open mods folder shows in Files. The Saves row chooses where saves are kept: `saves` in that same folder by default, or a folder anywhere Files reaches, such as iCloud Drive, where they go in a `Dark Chronicle` folder. Picking the app's own folder goes back to the default. Its settings leave out the window, vsync and the debug panel, offer high frame rates up to 120 Hz and an aspect ratio of Fill screen (the screen's own shape, `--aspect fill`), and add On-screen controls: a touch D-pad, both sticks, the face and shoulder buttons, Select and Start, drawn over the game. They are Off, On, or Smart (the default), which shows them only while no controller is connected. The sticks float: a touch on the left half of the screen that misses every button becomes the movement stick where it lands, and one on the right half the camera stick. A pressed button glows in its colour and taps the phone (Haptics turns that off), and the controls dim after a few seconds without a touch. A mod cannot override a function supplied by `port/src`. A chosen mod's `"port"` sources are compiled into the binary too (see [Native port mods](mods.md#native-port-mods)); `python3 -I tools/port.py --mod mods/<name>` does the same for the port's own build.
 
 ## The engine
 
@@ -79,6 +82,7 @@ The first build makes the container image, which takes a while; later builds reu
 | `dc2tk mod watch extracted/scripts dc2.iso <id>...` | Rebuild mods into the native port's override folder whenever they change and make the running debug build reload them (see [Hot reloading](mods.md#hot-reloading-in-the-native-port)). |
 | `dc2tk mod pack <id> [-o DIR] [--disc dc2.iso]` | Pack a mod into `<id>-<version>.dc2mod`, a zip of its files that is the same bytes every time (see [Sharing a mod](mods.md#sharing-a-mod)). |
 | `dc2tk mod install <file>.dc2mod` | Copy a packed mod into the mods folder, replacing an older version of it. |
+| `dc2tk mod upgrade <folder> [--id ID]` | Turn a mod from before format 2 into a format 2 mod in place, numbers included (see [Upgrading an old mod](mods.md#upgrading-an-old-mod)). |
 | `dc2tk mod build <tree> <disc> <id> [-o DIR]` | Build a mod into `<id>-<version>.dc2pak`, the game files it changes, for the native port's launcher (see [Playing built mods](mods.md#playing-built-mods)). |
 
 ## Searching and inspecting the game

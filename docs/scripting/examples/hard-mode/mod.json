@@ -1,0 +1,18 @@
+{
+  "$schema": "../../../../definitions/mod.schema.json",
+  "format": 2,
+  "id": "dc2tk.hard-mode",
+  "version": "1.0.0",
+  "name": "Hard Mode",
+  "description": "Monsters have half again as much life and hit 40% harder. Weapons can wear out sooner, and shops can charge more.",
+  "authors": ["dc2tk"],
+  "settings": {
+    "fragile_weapons": {"type": "bool", "default": true, "label": "Weapons start with less WHP"},
+    "tight_wallet": {"type": "bool", "default": false, "label": "Shops charge half as much again"}
+  },
+  "data": {
+    "monsters": "data/monsters.json",
+    "items": {"file": "data/items.json", "when": "fragile_weapons"},
+    "shops": {"file": "data/shops.json", "when": "tight_wallet"}
+  }
+}

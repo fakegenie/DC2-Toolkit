@@ -54,6 +54,7 @@ void render_set_vsync(int enabled);
 void render_set_filter(int nearest);
 void render_display(RenderDisplay *display);
 void render_set_aspect(int numerator, int denominator);
+void render_fill_screen(void);
 void render_set_smoothing(int enabled);
 int render_smoothing(void);
 void smooth_set_rate(int hz);

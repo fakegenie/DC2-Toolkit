@@ -11,6 +11,7 @@
 #include <unistd.h>
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
+#include <TargetConditionals.h>
 #endif
 
 enum { OVERRIDE_LIMIT = 4096, OVERRIDE_PATH = 256, PAK_LIMIT = 32, PAK_PATH = 1024, PAK_TEXT = 256 };
@@ -73,6 +74,14 @@ const char *port_overrides_folder(void) {
     return folder;
 }
 
+#if TARGET_OS_IPHONE
+#include "ios_files.h"
+
+const char *port_paks_folder(void) {
+    if (!paks_folder[0]) snprintf(paks_folder, sizeof paks_folder, "%smods", port_ios_documents());
+    return paks_folder;
+}
+#else
 const char *port_paks_folder(void) {
     if (paks_folder[0]) return paks_folder;
     char binary[1024];
@@ -80,6 +89,7 @@ const char *port_paks_folder(void) {
     snprintf(paks_folder, sizeof paks_folder, "%smods", binary);
     return paks_folder;
 }
+#endif
 
 static uint32_t read32(const unsigned char *at) {
     return (uint32_t)at[0] | (uint32_t)at[1] << 8 | (uint32_t)at[2] << 16 | (uint32_t)at[3] << 24;

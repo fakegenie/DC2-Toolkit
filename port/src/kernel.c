@@ -1,6 +1,7 @@
 #include "port_fiber.h"
 #include "port_kernel.h"
 #include "port_mod.h"
+#include "port_state.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -332,6 +333,7 @@ int port_kernel_run(int (*entry)(void)) {
     port_fiber_switch(&host_context, &threads[1].context);
     while (host_requested) {
         host_requested = 0;
+        port_state_host();
         port_mods_host();
         port_fiber_switch(&host_context, &threads[running].context);
     }

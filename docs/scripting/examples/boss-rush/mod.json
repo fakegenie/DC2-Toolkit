@@ -1,0 +1,10 @@
+{
+  "$schema": "../../../../definitions/mod.schema.json",
+  "format": 2,
+  "id": "dc2tk.boss-rush",
+  "version": "1.0.0",
+  "name": "Boss Rush",
+  "description": "Six boss fights back to back from the Palm Brinks dungeon entrance, timed, with a best time kept in the save.",
+  "authors": ["dc2tk"],
+  "dev": {"start_at": "m01:RUSH_START"}
+}

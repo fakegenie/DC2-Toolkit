@@ -4,6 +4,7 @@
 #include <string.h>
 #include "input.h"
 #include "port_graphics.h"
+#include "touch.h"
 
 static struct port_input_state input;
 
@@ -70,7 +71,7 @@ void port_input_close(void) {
     initialized = 0;
 }
 
-void port_input_poll(void) {
+static void read_devices(void) {
     static const SDL_Scancode keys[16] = {
         SDL_SCANCODE_1, SDL_SCANCODE_3, SDL_SCANCODE_Q, SDL_SCANCODE_E,
         SDL_SCANCODE_I, SDL_SCANCODE_L, SDL_SCANCODE_K, SDL_SCANCODE_J,
@@ -87,8 +88,6 @@ void port_input_poll(void) {
         SDL_GAMEPAD_BUTTON_DPAD_UP, SDL_GAMEPAD_BUTTON_DPAD_RIGHT,
         SDL_GAMEPAD_BUTTON_DPAD_DOWN, SDL_GAMEPAD_BUTTON_DPAD_LEFT
     };
-    memset(&input, 0, sizeof(input));
-    if (!initialized) return;
     if (gamepad && !SDL_GamepadConnected(gamepad)) {
         SDL_CloseGamepad(gamepad);
         gamepad = NULL;
@@ -123,6 +122,13 @@ void port_input_poll(void) {
     y = keyboard[SDL_SCANCODE_G] - keyboard[SDL_SCANCODE_T];
     if (keyboard[SDL_SCANCODE_H] || keyboard[SDL_SCANCODE_F]) input.right_x = x * 32767;
     if (keyboard[SDL_SCANCODE_G] || keyboard[SDL_SCANCODE_T]) input.right_y = y * 32767;
+}
+
+void port_input_poll(void) {
+    memset(&input, 0, sizeof(input));
+    if (!initialized) return;
+    read_devices();
+    port_touch_read(&input);
 }
 #else
 int port_input_init(void) {

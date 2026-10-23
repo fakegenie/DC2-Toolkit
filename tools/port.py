@@ -10,7 +10,7 @@ aborts, and build/port/missing.txt lists them by library.
     python3 -I tools/port.py --debug    also link build/port/darkchronicle-debug with the debug tools mod (port/debug) and Dear ImGui
     python3 -I tools/port.py --mod DIR  link a mod's port code (its mod.json's "port" sources) into the binaries
     python3 -I tools/port.py --ios simulator
-                                        build build/port/ios-simulator/DarkChronicle.app with dc2.iso inside
+                                        build build/port/ios-simulator/DarkChronicle.app
     python3 -I tools/port.py --ios device
                                         build build/port/ios-device/DarkChronicle.app, signed for an iPhone
 """
@@ -373,6 +373,7 @@ def ios_flags(kind):
 def app_info(kind, identifier):
     settings = IOS[kind]
     return {
+        "CADisableMinimumFrameDurationOnPhone": True,
         "CFBundleDevelopmentRegion": "en",
         "CFBundleDisplayName": "Dark Chronicle",
         "CFBundleExecutable": "DarkChronicle",
@@ -398,18 +399,15 @@ def app_info(kind, identifier):
     }
 
 
-def bundle(kind, executable, disc, identifier):
+def bundle(kind, executable, identifier):
     app = OUT / "DarkChronicle.app"
-    app.mkdir(parents=True, exist_ok=True)
+    shutil.rmtree(app, ignore_errors=True)
+    app.mkdir(parents=True)
     shutil.copy2(executable, app / "DarkChronicle")
     (app / "Info.plist").write_bytes(plistlib.dumps(app_info(kind, identifier), fmt=plistlib.FMT_BINARY))
     for name, pixels in IOS_ICONS.items():
         subprocess.run(["sips", "-z", str(pixels), str(pixels), str(PORT / "launcher" / "icon-ios.png"), "--out", str(app / name)],
                        check=True, capture_output=True)
-    copy = app / "dc2.iso"
-    if not copy.exists() or copy.stat().st_size != disc.stat().st_size or copy.stat().st_mtime < disc.stat().st_mtime:
-        copy.unlink(missing_ok=True)
-        subprocess.run(["cp", "-c", str(disc), str(copy)], check=True)
     if kind == "simulator":
         subprocess.run(["codesign", "--force", "--sign", "-", "--timestamp=none", str(app)], check=True)
     return app
@@ -476,7 +474,6 @@ def main():
     parser.add_argument("--mod", type=Path, action="append", default=[], help="a mod folder whose port code goes into the binaries")
     parser.add_argument("--sdl", type=Path, default=OUT / "sdk", help="local SDL3 installation prefix")
     parser.add_argument("--ios", choices=sorted(IOS), help="build DarkChronicle.app for the iOS simulator or an iPhone")
-    parser.add_argument("--disc", type=Path, default=ROOT / "dc2.iso", help="the disc image bundled into the iOS app")
     parser.add_argument("--bundle-id", default="dc2toolkit.darkchronicle", help="the iOS app's bundle identifier")
     parser.add_argument("--team", help="the Apple development team that signs the iPhone app, as Xcode lists it")
     parser.add_argument("arguments", nargs="*", help="arguments for the port, with --run")
@@ -530,7 +527,7 @@ def main():
     if options.debug:
         print(f"linked {DEBUG_BINARY.relative_to(ROOT)}")
     if options.ios:
-        app = bundle(options.ios, DEBUG_BINARY if options.debug else BINARY, options.disc.resolve(), options.bundle_id)
+        app = bundle(options.ios, DEBUG_BINARY if options.debug else BINARY, options.bundle_id)
         print(f"bundled {app.relative_to(ROOT)}")
         if options.ios == "device":
             print(f"signed for team {options.team}; the profile expires {sign_for_device(app, options.team, options.bundle_id)}")

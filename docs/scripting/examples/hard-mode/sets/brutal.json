@@ -1,0 +1,7 @@
+{
+  "format": 2,
+  "game": "dc2-pal",
+  "mods": [
+    {"id": "dc2tk.hard-mode", "settings": {"tight_wallet": true}}
+  ]
+}

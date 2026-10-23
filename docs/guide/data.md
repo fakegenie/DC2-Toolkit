@@ -127,4 +127,4 @@ Monster `168` is the Golem. `dc2tk build` patches the changed bytes into the gam
 
 Monsters, floor medals, race fish, prizes, Georama conditions, and the tables in the executable (`data:characters`, `data:gifts`, `data:spheda`, `data:breeding`, Donny's shop) are fixed-size: edit them, but do not add rows. A floor's `monsters` holds at most 32 entries.
 
-The [spinning-cult example](../scripting/examples/spinning-cult/README.md) adds an item with its own icon and model, three ideas, and a recipe.
+The [spinning-cult example](../scripting/examples/spinning-cult/README.md) adds an item with its own icon and model, three ideas, and a recipe. The [hard-mode example](../scripting/examples/hard-mode/README.md) scales every monster, weapon and price, with settings that switch its tables on and off.

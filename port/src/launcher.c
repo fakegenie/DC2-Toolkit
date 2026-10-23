@@ -8,17 +8,30 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
+
+#if TARGET_OS_IPHONE
+#include "ios_files.h"
+enum { DESKTOP = 0 };
+#define WINDOW_FLAGS (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY)
+#else
+enum { DESKTOP = 1 };
+#define WINDOW_FLAGS (SDL_WINDOW_BORDERLESS | SDL_WINDOW_TRANSPARENT | SDL_WINDOW_HIGH_PIXEL_DENSITY)
+#endif
 
 enum { CANVAS_WIDTH = 960, CANVAS_HEIGHT = 600, HERO_WIDTH = 520, PANEL_LEFT = 520, PANEL_WIDTH = 440, PAD = 48 };
 enum { OPTION_CHOICES = 8, OPTION_LIMIT = 16, PATH_SIZE = 1024, LINE_SIZE = 512 };
 enum { GLOW_SIZE = 64, WINDOW_RADIUS = 14 };
 enum { MENU_TOP = 175, MENU_STEP = 50 };
-enum { LARGEST_HEIGHT = 720 };
+enum { LARGEST_HEIGHT = 720, DRAG_START = 10, REVEAL_ABOVE = 60, REVEAL_BELOW = 50 };
+#define BODY_POINTS 20.0f
 enum { ROWS_TOP = 96, ROW_HEIGHT = 30, HEADING_HEIGHT = 28, TOGGLE_WIDTH = 34, TOGGLE_HEIGHT = 20 };
 enum { PAGE_MAIN, PAGE_SETTINGS, PAGE_MODS, PAGE_COUNT };
 enum { MOD_LIMIT = 32, MOD_ROWS = 7, MOD_TOP = 96, MOD_HEIGHT = 50, ENABLED_SIZE = 2048 };
 enum { DISC_NONE, DISC_GOOD, DISC_WRONG };
-enum { MENU_PLAY, MENU_MODS, MENU_SETTINGS, MENU_DISC, MENU_QUIT, MENU_COUNT };
+enum { MENU_PLAY, MENU_MODS, MENU_SETTINGS, MENU_DISC, MENU_LAST, MENU_COUNT };
 enum { KEY_NONE, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_ACCEPT, KEY_BACK, KEY_PLAY };
 enum { STYLE_MENU, STYLE_BODY, STYLE_CAPTION, STYLE_SMALL, STYLE_BADGE, STYLE_COUNT };
 enum { SHAPE_ROW, SHAPE_PILL, SHAPE_RING, SHAPE_WINDOW, SHAPE_COUNT };
@@ -48,6 +61,22 @@ typedef struct {
     int inverted;
 } ShapeKind;
 
+#if TARGET_OS_IPHONE
+static Option options[] = {
+    {"DISPLAY", "Aspect ratio", "render.aspect", 5, {"4:3", "16:10", "16:9", "21:9", "Fill screen"},
+     {"4:3", "16:10", "16:9", "21:9", "fill"}, 0, 0, 0, 1},
+    {NULL, "Render scale", "render.scale", 5, {"Match screen", "1×", "2×", "3×", "4×"}, {"auto", "1", "2", "3", "4"}, 1,
+     0, 0, 0},
+    {NULL, "Anti-aliasing", "render.msaa", 4, {"Off", "2×", "4×", "8×"}, {"1", "2", "4", "8"}, 0, 0, 0, 0},
+    {NULL, "Texture filtering", "render.filter", 2, {"Smooth", "Sharp"}, {"smooth", "nearest"}, 0, 0, 0, 0},
+    {"MOTION", "High frame rate", "render.smooth", 4, {"Off", "Match display", "60 Hz", "120 Hz"},
+     {"false", "display", "60", "120"}, 0, 0, 0, 1},
+    {"CONTROLS", "On-screen controls", "input.touch", 3, {"Off", "Smart", "On"}, {"false", "smart", "true"}, 1, 0, 0, 0},
+    {NULL, "Haptics", "input.haptics", 2, {"Off", "On"}, {"false", "true"}, 1, 0, 1, 0},
+    {"GAME", "Sound", "sound.mute", 2, {"Off", "On"}, {"true", "false"}, 1, 0, 1, 0},
+    {NULL, "In-Game Debug Menu", "debug.menus", 2, {"Off", "On"}, {"false", "true"}, 0, 0, 1, 0},
+};
+#else
 static Option options[] = {
     {"DISPLAY", "Window size", "render.window", 8,
      {"640 × 480", "960 × 720", "1280 × 720", "1280 × 960", "1600 × 900", "1920 × 1080", "2560 × 1440", "3840 × 2160"},
@@ -67,6 +96,7 @@ static Option options[] = {
     {NULL, "In-Game Debug Menu", "debug.menus", 2, {"Off", "On"}, {"false", "true"}, 0, 0, 1, 0},
     {NULL, "Port Developer Panel", "debug.window", 2, {"Hidden", "Shown"}, {"false", "true"}, 0, 1, 1, 0},
 };
+#endif
 
 static const Style styles[STYLE_COUNT] = {
     {LAUNCHER_REGULAR, 26, 0},
@@ -101,6 +131,17 @@ static LauncherFont fonts[STYLE_COUNT];
 static SDL_Cursor *arrow_cursor;
 static SDL_Cursor *hand_cursor;
 static float pixel_scale = 1;
+static SDL_Texture *canvas;
+static float view_width = CANVAS_WIDTH;
+static float view_height = CANVAS_HEIGHT;
+static float view_left;
+static float scroll;
+static float scroll_goal;
+static int scrolled_page = -1;
+static float press_x = -1;
+static float press_y;
+static float press_scroll;
+static int dragging;
 static int shown[OPTION_LIMIT];
 static int standard[OPTION_LIMIT];
 static int shown_count;
@@ -120,6 +161,7 @@ static float pointer_y = -1;
 static float page_mix[PAGE_COUNT] = {1};
 static float bar_middle = MENU_TOP + MENU_STEP / 2.0f;
 static float item_shift[MENU_COUNT];
+static char saves_name[LINE_SIZE];
 static float row_middle = ROWS_TOP;
 static float toggle_mix[OPTION_LIMIT];
 static float row_focus[OPTION_LIMIT];
@@ -184,6 +226,10 @@ static void read_options(void) {
     }
     const char *disc = port_setting("disc");
     snprintf(disc_path, sizeof disc_path, "%s", disc ? disc : "");
+#if TARGET_OS_IPHONE
+    port_ios_disc(disc_path, sizeof disc_path);
+    port_ios_saves_name(saves_name, sizeof saves_name);
+#endif
 }
 
 static void save_options(void) {
@@ -408,7 +454,7 @@ static const char *menu_name(int item) {
     if (item == MENU_MODS) return "Mods";
     if (item == MENU_SETTINGS) return "Settings";
     if (item == MENU_DISC) return "Disc";
-    return "Quit";
+    return DESKTOP ? "Quit" : "Saves";
 }
 
 static SDL_FRect menu_box(int item) {
@@ -485,6 +531,7 @@ static void draw_main(float now) {
     draw_value(MENU_MODS, mods_value, ink, alpha, shift);
     draw_value(MENU_DISC, disc_state == DISC_NONE ? "None" : base_name(disc_path), disc_state == DISC_WRONG ? bad : ink,
                alpha, shift);
+    if (!DESKTOP) draw_value(MENU_LAST, saves_name, ink, alpha, shift);
 }
 
 static void draw_switch(float mix, float right, float middle, float alpha, float focus) {
@@ -567,8 +614,10 @@ static void draw_mods(void) {
     for (int row = mod_first; row <= mod_count && row < mod_first + MOD_ROWS; row++) draw_mod_row(row, alpha, shift);
     if (mod_count) return;
     float x = PANEL_LEFT + PAD + shift, top = MOD_TOP + MOD_HEIGHT + 6;
-    text_top(STYLE_SMALL, "Built mods (.dc2pak files) go in the mods folder", x, top, faded(ink, 0.5f * alpha));
-    text_top(STYLE_SMALL, "next to the game. Drop one here to add it.", x, top + 18, faded(ink, 0.5f * alpha));
+    text_top(STYLE_SMALL, DESKTOP ? "Built mods (.dc2pak files) go in the mods folder" : "Put built mods (.dc2pak files) in the mods folder:",
+             x, top, faded(ink, 0.5f * alpha));
+    text_top(STYLE_SMALL, DESKTOP ? "next to the game. Drop one here to add it." : "Files, On My iPhone, Dark Chronicle, mods.", x,
+             top + 18, faded(ink, 0.5f * alpha));
 }
 
 static int at_defaults(void) {
@@ -620,8 +669,8 @@ static void draw_close(void) {
                                  turn ? 45 : -45, NULL, SDL_FLIP_NONE);
 }
 
-static void draw(float now) {
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+static void draw_canvas(float now) {
+    SDL_SetRenderDrawColorFloat(renderer, panel.r, panel.g, panel.b, DESKTOP ? 0 : 1);
     SDL_RenderClear(renderer);
     fill((SDL_FRect){0, 0, CANVAS_WIDTH, CANVAS_HEIGHT}, panel);
     draw_hero(now);
@@ -630,17 +679,65 @@ static void draw(float now) {
     draw_main(now);
     draw_settings();
     draw_mods();
-    draw_close();
+    if (DESKTOP) draw_close();
     float fade = 1 - ease_out(now / 0.6f);
     if (leaving_at >= 0) fade = fmaxf(fade, ease_out((now - leaving_at) / 0.22f));
     if (fade > 0) fill((SDL_FRect){0, 0, CANVAS_WIDTH, CANVAS_HEIGHT}, faded(panel, fade));
-    SDL_RenderTexture9Grid(renderer, shape_textures[SHAPE_WINDOW], NULL, ceilf(WINDOW_RADIUS * pixel_scale),
+    if (DESKTOP)
+        SDL_RenderTexture9Grid(renderer, shape_textures[SHAPE_WINDOW], NULL, ceilf(WINDOW_RADIUS * pixel_scale),
                            ceilf(WINDOW_RADIUS * pixel_scale), ceilf(WINDOW_RADIUS * pixel_scale),
                            ceilf(WINDOW_RADIUS * pixel_scale), WINDOW_RADIUS / ceilf(WINDOW_RADIUS * pixel_scale),
                            &(SDL_FRect){0, 0, CANVAS_WIDTH, CANVAS_HEIGHT});
 }
 
+static void draw(float now) {
+    if (DESKTOP) {
+        draw_canvas(now);
+        return;
+    }
+    SDL_SetRenderTarget(renderer, canvas);
+    SDL_SetRenderLogicalPresentation(renderer, CANVAS_WIDTH, CANVAS_HEIGHT, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+    draw_canvas(now);
+    SDL_SetRenderTarget(renderer, NULL);
+    SDL_SetRenderLogicalPresentation(renderer, (int)view_width, (int)view_height, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+    SDL_SetRenderDrawColorFloat(renderer, panel.r, panel.g, panel.b, 1);
+    SDL_RenderClear(renderer);
+    float hero_width = SDL_max(0, HERO_WIDTH - view_left), hero_top = (CANVAS_HEIGHT - view_height) / 2;
+    SDL_FRect hero = {view_left * pixel_scale, hero_top * pixel_scale, hero_width * pixel_scale, view_height * pixel_scale};
+    SDL_FRect side = {(CANVAS_WIDTH - (view_width - hero_width)) * pixel_scale, scroll * pixel_scale,
+                      (view_width - hero_width) * pixel_scale, view_height * pixel_scale};
+    SDL_RenderTexture(renderer, canvas, &hero, &(SDL_FRect){0, 0, hero_width, view_height});
+    SDL_RenderTexture(renderer, canvas, &side, &(SDL_FRect){hero_width, 0, view_width - hero_width, view_height});
+}
+
+static float page_top(void) { return page == PAGE_MAIN ? MENU_TOP - 20 : 0; }
+
+static float page_bottom(void) {
+    if (page == PAGE_SETTINGS) return row_top(shown_count) + ROW_HEIGHT + 24;
+    if (page == PAGE_MODS) return mod_box(SDL_min(mod_count, mod_first + MOD_ROWS - 1)).y + MOD_HEIGHT + 60;
+    return MENU_TOP + MENU_COUNT * MENU_STEP + 20;
+}
+
+static int overflows(void) { return page_bottom() - page_top() > view_height; }
+
+static void reveal(float middle) {
+    if (middle - REVEAL_ABOVE < scroll_goal) scroll_goal = middle - REVEAL_ABOVE;
+    if (middle + REVEAL_BELOW > scroll_goal + view_height) scroll_goal = middle + REVEAL_BELOW - view_height;
+}
+
+static void follow_page(float step) {
+    float top = page_top(), bottom = SDL_min(page_bottom(), (float)CANVAS_HEIGHT);
+    int changed = page != scrolled_page;
+    scrolled_page = page;
+    if (changed) scroll_goal = top;
+    if (overflows()) scroll_goal = SDL_clamp(scroll_goal, top, bottom - view_height);
+    else scroll_goal = SDL_clamp((top + bottom - view_height) / 2, 0, CANVAS_HEIGHT - view_height);
+    if (changed || dragging > 0) scroll = scroll_goal;
+    else approach(&scroll, scroll_goal, 18, step);
+}
+
 static void animate(float step) {
+    follow_page(step);
     for (int which = 0; which < PAGE_COUNT; which++) approach(&page_mix[which], page == which, 12, step);
     approach(&mod_middle, mod_box(mod_selected).y + mod_box(mod_selected).h / 2, 20, step);
     for (int row = 0; row <= mod_count; row++) approach(&mod_focus[row], row == mod_selected, 18, step);
@@ -654,6 +751,20 @@ static void animate(float step) {
     for (int index = 0; index < (int)SDL_arraysize(options); index++)
         approach(&badge_mix[index], options[index].experimental && options[index].chosen, 14, step);
 }
+
+#if TARGET_OS_IPHONE
+static void choose_saves(void) {
+    port_ios_pick_saves(window);
+    port_ios_saves_name(saves_name, sizeof saves_name);
+}
+
+static void choose_disc(void) {
+    char path[PATH_SIZE] = "";
+    port_ios_pick_disc(window, path, sizeof path);
+    if (path[0]) check_disc(path);
+}
+#else
+static void choose_saves(void) {}
 
 static void picked_file(void *data, const char *const *files, int filter) {
     (void)data;
@@ -669,6 +780,7 @@ static void choose_disc(void) {
     choosing = 1;
     SDL_ShowOpenFileDialog(picked_file, NULL, window, filters, 1, disc_path[0] ? disc_path : NULL, false);
 }
+#endif
 
 static void leave(int play, float now) {
     if (leaving_at >= 0) return;
@@ -700,7 +812,7 @@ static void select_mod(int row) {
 static void open_mods_folder(void) {
     char url[PATH_SIZE + 16];
     SDL_CreateDirectory(port_paks_folder());
-    snprintf(url, sizeof url, "file://%s", port_paks_folder());
+    snprintf(url, sizeof url, "%s%s", DESKTOP ? "file://" : "shareddocuments://", port_paks_folder());
     SDL_OpenURL(url);
 }
 
@@ -723,7 +835,8 @@ static void activate_main(int item, float now) {
     if (item == MENU_MODS) open_mods();
     if (item == MENU_SETTINGS) open_settings();
     if (item == MENU_DISC) choose_disc();
-    if (item == MENU_QUIT) leave(0, now);
+    if (item == MENU_LAST && DESKTOP) leave(0, now);
+    if (item == MENU_LAST && !DESKTOP) choose_saves();
 }
 
 static void press(int key, float now) {
@@ -732,18 +845,20 @@ static void press(int key, float now) {
         if (key == KEY_UP) menu_selected = (menu_selected + MENU_COUNT - 1) % MENU_COUNT;
         if (key == KEY_DOWN) menu_selected = (menu_selected + 1) % MENU_COUNT;
         if (key == KEY_ACCEPT) activate_main(menu_selected, now);
-        if (key == KEY_BACK) leave(0, now);
+        if (key == KEY_BACK && DESKTOP) leave(0, now);
         return;
     }
     if (page == PAGE_MODS) {
         if (key == KEY_UP) select_mod((mod_selected + mod_count) % (mod_count + 1));
         if (key == KEY_DOWN) select_mod((mod_selected + 1) % (mod_count + 1));
+        reveal(mod_box(mod_selected).y + MOD_HEIGHT / 2.0f);
         if (key == KEY_ACCEPT || key == KEY_LEFT || key == KEY_RIGHT) toggle_mod(mod_selected);
         if (key == KEY_BACK) page = PAGE_MAIN;
         return;
     }
     if (key == KEY_UP) focus_row((row_selected + shown_count) % (shown_count + 1));
     if (key == KEY_DOWN) focus_row((row_selected + 1) % (shown_count + 1));
+    reveal(row_top(row_selected) + ROW_HEIGHT / 2.0f);
     if (key == KEY_LEFT) change(row_selected, -1);
     if (key == KEY_RIGHT || key == KEY_ACCEPT) change(row_selected, 1);
     if (key == KEY_ACCEPT && row_selected == shown_count) restore_defaults();
@@ -791,7 +906,7 @@ static int mod_at(float x, float y) {
 }
 
 static int clickable(float x, float y) {
-    return inside(close_box(), x, y) || menu_item_at(x, y) >= 0 || row_at(x, y) >= 0 || mod_at(x, y) >= 0 ||
+    return (DESKTOP && inside(close_box(), x, y)) || menu_item_at(x, y) >= 0 || row_at(x, y) >= 0 || mod_at(x, y) >= 0 ||
            (page != PAGE_MAIN && inside(back_box(), x, y));
 }
 
@@ -810,12 +925,12 @@ static void click_row(int row, float x) {
         return;
     }
     const Option *option = &options[shown[row]];
-    float value_left = control_right() - 18 - measure(STYLE_BODY, option->names[option->chosen]) - 20;
-    change(row, !option->toggle && x < value_left ? -1 : 1);
+    float value_middle = control_right() - 20 - measure(STYLE_BODY, option->names[option->chosen]) / 2;
+    change(row, !option->toggle && x < value_middle ? -1 : 1);
 }
 
 static void click(float x, float y, int backwards, float now) {
-    if (inside(close_box(), x, y)) leave(0, now);
+    if (DESKTOP && inside(close_box(), x, y)) leave(0, now);
     else if (menu_item_at(x, y) >= 0) activate_main(menu_item_at(x, y), now);
     else if (page != PAGE_MAIN && inside(back_box(), x, y)) page = PAGE_MAIN;
     else if (mod_at(x, y) >= 0) toggle_mod(mod_selected = mod_at(x, y));
@@ -878,12 +993,39 @@ static void dropped(const char *path) {
     page = PAGE_MODS;
 }
 
+static void touch(SDL_Event *event, float now) {
+    float x = event->button.x, y = event->button.y;
+    if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+        press_x = x;
+        press_y = y;
+        press_scroll = scroll_goal;
+        dragging = 0;
+    }
+    if (event->type == SDL_EVENT_MOUSE_MOTION && press_x >= 0) {
+        float moved = event->motion.y - press_y;
+        if (fabsf(moved) > DRAG_START || fabsf(event->motion.x - press_x) > DRAG_START) dragging = overflows() ? 1 : -1;
+        if (dragging > 0) scroll_goal = press_scroll - moved;
+    }
+    if (event->type == SDL_EVENT_MOUSE_BUTTON_UP && press_x >= 0) {
+        if (!dragging) {
+            hover(view_left + press_x, scroll + press_y);
+            click(view_left + press_x, scroll + press_y, 0, now);
+        }
+        press_x = -1;
+        dragging = 0;
+    }
+}
+
 static void handle(SDL_Event *event, float now) {
     SDL_ConvertEventToRenderCoordinates(renderer, event);
     if (event->type == SDL_EVENT_QUIT || event->type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) leave(0, now);
     if (event->type == SDL_EVENT_KEY_DOWN) press(key_of(event->key.key), now);
     if (event->type == SDL_EVENT_GAMEPAD_ADDED) SDL_OpenGamepad(event->gdevice.which);
     if (event->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) press(pad_key_of(event->gbutton.button), now);
+    if (!DESKTOP) {
+        touch(event, now);
+        return;
+    }
     if (event->type == SDL_EVENT_MOUSE_MOTION) hover(event->motion.x, event->motion.y);
     if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN)
         click(event->button.x, event->button.y, event->button.button == SDL_BUTTON_RIGHT, now);
@@ -902,7 +1044,7 @@ static void make_textures(void) {
     static const float bar_points[] = {1, 6, 11, 6};
     int width = 0, height = 0;
     SDL_GetRenderOutputSize(renderer, &width, &height);
-    pixel_scale = width > 0 ? (float)width / CANVAS_WIDTH : 1;
+    pixel_scale = width > 0 ? SDL_min((float)width / view_width, (float)height / view_height) : 1;
     SDL_Surface *painting = SDL_LoadPNG_IO(SDL_IOFromConstMem(backdrop_png, sizeof backdrop_png), true);
     backdrop = painting ? SDL_CreateTextureFromSurface(renderer, painting) : NULL;
     SDL_DestroySurface(painting);
@@ -925,27 +1067,42 @@ static void forget(SDL_Texture **texture) {
     *texture = NULL;
 }
 
+static void fit_view(void) {
+    int width = 0, height = 0;
+    SDL_GetWindowSize(window, &width, &height);
+    if (width <= 0 || height <= 0) return;
+    float unit = BODY_POINTS / styles[STYLE_BODY].size;
+    view_height = SDL_min(height / unit, (float)CANVAS_HEIGHT);
+    view_width = SDL_min(view_height * width / height, (float)CANVAS_WIDTH);
+    view_left = CANVAS_WIDTH - view_width;
+}
+
 static int open_window(int hidden) {
     float zoom = window_zoom();
-    SDL_WindowFlags flags = SDL_WINDOW_BORDERLESS | SDL_WINDOW_TRANSPARENT | SDL_WINDOW_HIGH_PIXEL_DENSITY |
-                            (hidden ? SDL_WINDOW_HIDDEN : 0);
+    SDL_WindowFlags flags = WINDOW_FLAGS | (hidden ? SDL_WINDOW_HIDDEN : 0);
     if (!SDL_CreateWindowAndRenderer("Dark Chronicle", (int)(CANVAS_WIDTH * zoom), (int)(CANVAS_HEIGHT * zoom), flags,
                                      &window, &renderer)) {
         fprintf(stderr, "launcher: %s\n", SDL_GetError());
         return 0;
     }
-    SDL_SetRenderLogicalPresentation(renderer, CANVAS_WIDTH, CANVAS_HEIGHT, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+    if (!DESKTOP) fit_view();
+    SDL_SetRenderLogicalPresentation(renderer, (int)view_width, (int)view_height, SDL_LOGICAL_PRESENTATION_LETTERBOX);
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
     SDL_SetRenderVSync(renderer, 1);
-    SDL_SetWindowHitTest(window, hit_test, NULL);
+    if (DESKTOP) SDL_SetWindowHitTest(window, hit_test, NULL);
     port_window_icon(window);
     arrow_cursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_DEFAULT);
     hand_cursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_POINTER);
     make_textures();
+    if (!DESKTOP)
+        canvas = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET,
+                                   (int)ceilf(CANVAS_WIDTH * pixel_scale), (int)ceilf(CANVAS_HEIGHT * pixel_scale));
+    if (canvas) SDL_SetTextureScaleMode(canvas, SDL_SCALEMODE_LINEAR);
     return 1;
 }
 
 static void close_window(void) {
+    forget(&canvas);
     forget(&backdrop);
     forget(&glow);
     forget(&chevron);
@@ -976,7 +1133,7 @@ static void take_picture(const char *path, const char *keys, float now) {
     leaving_at = -1;
     SDL_SetRenderTarget(renderer, canvas);
     SDL_SetRenderLogicalPresentation(renderer, CANVAS_WIDTH, CANVAS_HEIGHT, SDL_LOGICAL_PRESENTATION_LETTERBOX);
-    draw(now);
+    draw_canvas(now);
     SDL_Surface *surface = SDL_RenderReadPixels(renderer, NULL);
     if (!surface || !SDL_SaveBMP(surface, path)) fprintf(stderr, "launcher: no picture: %s\n", SDL_GetError());
     SDL_DestroySurface(surface);
@@ -991,6 +1148,7 @@ int port_launcher(void) {
     else snprintf(settings_path, sizeof settings_path, "%slauncher.cfg", folder ? folder : "");
     SDL_free(folder);
     port_settings_file(settings_path);
+    if (!DESKTOP) SDL_CreateDirectory(port_paks_folder());
     read_options();
     read_mods();
     const char *picture = SDL_getenv("DC2TK_LAUNCHER_PICTURE");

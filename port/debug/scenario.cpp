@@ -6,6 +6,7 @@
 #include "imgui.h"
 #include "mainloop.hpp"
 #include "mapselect.hpp"
+#include "monster.hpp"
 #include "savedata.hpp"
 #include "vlgr_info.hpp"
 #include <cctype>
@@ -324,6 +325,26 @@ static int command_event(const DebugArgs *args, DebugReply *reply) {
     return enter(loop, arg, reply);
 }
 
+static int command_defeat(const DebugArgs *args, DebugReply *reply) {
+    if (GetNowLoopNo() != LOOP_DUNGEON || ActiveMonster == NULL) return debug_fail(reply, "not in a dungeon");
+    int listing = debug_arg_int(args, "list", 0) != 0;
+    int defeated = 0;
+    debug_print(reply, "{\"monsters\": [");
+    for (int slot = 0; slot < MONSTER_ACTIVE_MAX; ++slot) {
+        CActiveMonster *monster = ActiveMonster->active[slot];
+        if (!monster || monster->state != ACTIVE_MONSTER_LIVE || monster->life <= 0) continue;
+        debug_print(reply, "%s{\"slot\": %d, \"life\": %d, \"max_life\": %d}", defeated ? ", " : "", slot, monster->life,
+                    monster->max_life);
+        if (!listing) {
+            monster->life = 0;
+            monster->damage_req = ACTION_DAMAGE_REQ_DEAD;
+        }
+        ++defeated;
+    }
+    debug_print(reply, "], \"defeated\": %d}", listing ? 0 : defeated);
+    return 0;
+}
+
 static int command_character(const DebugArgs *args, DebugReply *reply) {
     if (!ready()) return debug_fail(reply, "the game is still starting");
     const char *who = debug_arg(args, "who", "");
@@ -618,6 +639,7 @@ extern const DebugCommand debug_scenario_commands[] = {
     {"town", command_town, 0, "map=<number|name> [event=N] [init=N] warps to a town map; works from title, town and dungeon"},
     {"dungeon", command_dungeon, 0, "dungeon=0..6 [floor=N, -1 saved] [event=N] [init=N] warps to a dungeon floor"},
     {"event", command_event, 0, "no=N [map=<number|name>] starts an event here, or on the given map"},
+    {"defeat", command_defeat, 0, "[list=1] defeats every living monster on the dungeon floor through its own death program, or lists them"},
     {"character", command_character, 0, "who=max|monica switches the playable character and re-enters the current place"},
     {"item", command_item, 0, "id=N [count=1] gives an item"},
     {"itemset", command_itemset, 0, "set=0|1|2|6 gives one of the engine's debug item sets"},

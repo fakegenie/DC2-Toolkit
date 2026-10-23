@@ -469,6 +469,14 @@ key, once the port API is stable enough to keep a binary interface.
    other setting. The launcher's Mods page toggles them and refuses a mod that shares a file or a
    number with one already on. Mod sets left the launcher, with `mods.txt` and the `--launched`
    re-exec.
+8. **Done.** `build --pak FILE` (repeatable) puts built mods on a disc image: their files join
+   the built ones before the memory check and read-back, minus `dc2tk-port.cfg` and `dc2tk-hd/`.
+   A pak whose id is built from source, or that shares a file or number with the build or another
+   pak, is refused. `mod upgrade FOLDER [--id ID]` turns a format 1 mod into format 2 in place:
+   the keys move as section 1 lists, `disc/` files and `files/` whole files get their lines, the
+   old `files` and `includes` state goes to `mod.lock`, the folder's `numbers.json` entries move to
+   `mods.lock` under the id, and its sources get `MOD_DIR` for the `file:mods/...` paths and ids
+   for other mods' includes. A key format 1 never had is refused rather than dropped.
 
 Left out, for later:
 

@@ -7,6 +7,7 @@ mod check;
 mod pak;
 mod pcsx2;
 mod play;
+mod upgrade;
 mod watch;
 
 use std::path::{Path, PathBuf};
@@ -104,6 +105,17 @@ pub enum ModCommand {
         mods: ModsDir,
         #[command(flatten)]
         common: Common,
+    },
+    /// Turn a format 1 mod (title, requires, start_at, disc/, numbers.json) into a format 2 one in
+    /// place: its mod.json, mod.lock, its numbers in mods.lock, and MOD_DIR and mod ids in its sources.
+    Upgrade {
+        /// The mod's folder in the mods folder.
+        name: String,
+        /// The mod's id, author.name; local.<folder> when left out.
+        #[arg(long)]
+        id: Option<String>,
+        #[command(flatten)]
+        mods: ModsDir,
     },
     /// Copy a .dc2mod into the mods folder, replacing an older zip of the same mod.
     Install {
@@ -260,6 +272,7 @@ pub fn run_mod(command: &ModCommand) -> Result<ExitCode> {
         ModCommand::Build { source, disc, name, output, mods, common } => {
             pak::run_mod_build(source, disc, name, output, mods, common)
         }
+        ModCommand::Upgrade { name, id, mods } => upgrade::run_mod_upgrade(name, id.as_deref(), mods),
         ModCommand::Install { file, mods } => run_mod_install(file, mods),
         ModCommand::List { source, mods } => {
             println!("{}", mods::listing(mods.path(), source, &default_constants(source)?)?);
