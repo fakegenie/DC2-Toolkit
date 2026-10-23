@@ -31,7 +31,7 @@ typedef struct {
     LauncherGlyph glyphs[LAUNCHER_GLYPHS];
 } LauncherFont;
 
-int port_launcher(int count, char **values, int show);
+int port_launcher(void);
 int launcher_font_bake(int face, float pixels, LauncherFont *font);
 float launcher_font_kern(const LauncherFont *font, int first, int second);
 

@@ -104,14 +104,15 @@ pub fn read_zip(data: &[u8]) -> Result<BTreeMap<String, Vec<u8>>> {
     Ok(found)
 }
 
-pub fn write_zip(members: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>> {
+pub fn write_zip(members: &BTreeMap<String, Vec<u8>>, deflate: bool) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     let mut central = Vec::new();
     for (name, bytes) in members {
         let mut encoder = DeflateEncoder::new(Vec::new(), Compression::best());
         encoder.write_all(bytes)?;
         let deflated = encoder.finish()?;
-        let (method, stored) = if deflated.len() < bytes.len() { (8u16, deflated) } else { (0u16, bytes.clone()) };
+        let (method, stored) =
+            if deflate && deflated.len() < bytes.len() { (8u16, deflated) } else { (0u16, bytes.clone()) };
         let crc = crc32fast::hash(bytes);
         let offset = out.len() as u32;
         let header = |signature: u32, out: &mut Vec<u8>| {
@@ -304,7 +305,7 @@ pub fn pack(mod_dir: &Path, out_dir: &Path, disc_files: Option<&HashSet<[u8; 32]
     let path = out_dir.join(file_name(&own));
     if refused.is_empty() {
         files::create_dir_all(out_dir)?;
-        files::write(&path, write_zip(&members)?)?;
+        files::write(&path, write_zip(&members, true)?)?;
     }
     Ok(Packed { path, members: members.len(), refused })
 }
@@ -372,19 +373,19 @@ mod tests {
             ("mod.json".to_string(), b"{}".to_vec()),
             ("a/b.txt".to_string(), b"hello hello hello hello hello".to_vec()),
         ]);
-        let written = write_zip(&members).unwrap();
+        let written = write_zip(&members, true).unwrap();
         assert_eq!(read_zip(&written).unwrap(), members);
-        assert_eq!(write_zip(&members).unwrap(), written);
+        assert_eq!(write_zip(&members, true).unwrap(), written);
     }
 
     #[test]
     fn unsafe_names_are_refused() {
         for name in ["/etc/passwd", "../x", "a/../b", "c:\\x", "a\\b"] {
             let members = BTreeMap::from([(name.to_string(), b"x".to_vec())]);
-            assert!(read_zip(&write_zip(&members).unwrap()).is_err(), "{name}");
+            assert!(read_zip(&write_zip(&members, true).unwrap()).is_err(), "{name}");
         }
         let members = BTreeMap::from([("A.txt".to_string(), b"x".to_vec()), ("a.txt".to_string(), b"y".to_vec())]);
-        assert!(read_zip(&write_zip(&members).unwrap()).unwrap_err().to_string().contains("differ only in case"));
+        assert!(read_zip(&write_zip(&members, true).unwrap()).unwrap_err().to_string().contains("differ only in case"));
     }
 
     #[test]

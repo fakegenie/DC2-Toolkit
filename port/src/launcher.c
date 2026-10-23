@@ -1,14 +1,13 @@
-#define _POSIX_C_SOURCE 200809L
 #include "launcher.h"
 #include "cdvd.h"
 #include "icon.h"
 #include "port_mod.h"
+#include "port_overrides.h"
 #include <SDL3/SDL.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 enum { CANVAS_WIDTH = 960, CANVAS_HEIGHT = 600, HERO_WIDTH = 520, PANEL_LEFT = 520, PANEL_WIDTH = 440, PAD = 48 };
 enum { OPTION_CHOICES = 8, OPTION_LIMIT = 16, PATH_SIZE = 1024, LINE_SIZE = 512 };
@@ -17,7 +16,7 @@ enum { MENU_TOP = 175, MENU_STEP = 50 };
 enum { LARGEST_HEIGHT = 720 };
 enum { ROWS_TOP = 96, ROW_HEIGHT = 30, HEADING_HEIGHT = 28, TOGGLE_WIDTH = 34, TOGGLE_HEIGHT = 20 };
 enum { PAGE_MAIN, PAGE_SETTINGS, PAGE_MODS, PAGE_COUNT };
-enum { SET_LIMIT = 9, SET_NAME = 128, SET_TOP = 96, SET_HEIGHT = 50 };
+enum { MOD_LIMIT = 32, MOD_ROWS = 7, MOD_TOP = 96, MOD_HEIGHT = 50, ENABLED_SIZE = 2048 };
 enum { DISC_NONE, DISC_GOOD, DISC_WRONG };
 enum { MENU_PLAY, MENU_MODS, MENU_SETTINGS, MENU_DISC, MENU_QUIT, MENU_COUNT };
 enum { KEY_NONE, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_ACCEPT, KEY_BACK, KEY_PLAY };
@@ -36,12 +35,6 @@ typedef struct {
     int toggle;
     int experimental;
 } Option;
-
-typedef struct {
-    char name[SET_NAME];
-    char mods[LINE_SIZE];
-    int own_binary;
-} ModSet;
 
 typedef struct {
     int face;
@@ -131,18 +124,13 @@ static float row_middle = ROWS_TOP;
 static float toggle_mix[OPTION_LIMIT];
 static float row_focus[OPTION_LIMIT];
 static float badge_mix[OPTION_LIMIT];
-static ModSet mod_sets[SET_LIMIT];
-static int set_count;
-static int set_chosen;
-static int set_selected;
-static char set_wanted[SET_NAME];
-static char sets_folder[PATH_SIZE];
-static char executable[PATH_SIZE];
-static char **arguments;
-static int argument_count;
-static float set_middle = SET_TOP;
-static float set_focus[SET_LIMIT];
-static float set_mark[SET_LIMIT];
+static int mod_count;
+static int mod_on[MOD_LIMIT];
+static int mod_selected;
+static int mod_first;
+static float mod_middle = MOD_TOP;
+static float mod_focus[MOD_LIMIT + 1];
+static float mod_mark[MOD_LIMIT];
 
 static float clamp_unit(float value) { return value < 0 ? 0 : value > 1 ? 1 : value; }
 
@@ -196,8 +184,6 @@ static void read_options(void) {
     }
     const char *disc = port_setting("disc");
     snprintf(disc_path, sizeof disc_path, "%s", disc ? disc : "");
-    const char *wanted = port_setting("mods");
-    snprintf(set_wanted, sizeof set_wanted, "%s", wanted ? wanted : "");
 }
 
 static void save_options(void) {
@@ -207,9 +193,14 @@ static void save_options(void) {
         port_setting_set(option->setting, option->values[option->chosen]);
         if (file) fprintf(file, "%s=%s\n", option->setting, option->values[option->chosen]);
     }
+    char enabled[ENABLED_SIZE] = "";
+    for (int index = 0; index < mod_count; index++) {
+        size_t used = strlen(enabled);
+        if (mod_on[index]) snprintf(enabled + used, sizeof enabled - used, "%s%s", used ? "," : "", port_pak_text(index, "id"));
+    }
     port_setting_set("disc", disc_path);
-    port_setting_set("mods", set_chosen ? mod_sets[set_chosen].name : "");
-    if (file) fprintf(file, "disc=%s\nmods=%s\n", disc_path, set_chosen ? mod_sets[set_chosen].name : "");
+    port_setting_set("mods.enabled", enabled);
+    if (file) fprintf(file, "disc=%s\nmods.enabled=%s\n", disc_path, enabled);
     if (file) fclose(file);
     else fprintf(stderr, "launcher: cannot save %s\n", settings_path);
 }
@@ -424,8 +415,9 @@ static SDL_FRect menu_box(int item) {
     return (SDL_FRect){PANEL_LEFT + PAD - 20, MENU_TOP + item * (float)MENU_STEP, PANEL_WIDTH - 2 * PAD + 40, MENU_STEP};
 }
 
-static SDL_FRect set_box(int row) {
-    return (SDL_FRect){PANEL_LEFT + PAD - 14, SET_TOP + row * (float)SET_HEIGHT, PANEL_WIDTH - 2 * PAD + 28, SET_HEIGHT - 4};
+static SDL_FRect mod_box(int row) {
+    return (SDL_FRect){PANEL_LEFT + PAD - 14, MOD_TOP + (row - mod_first) * (float)MOD_HEIGHT, PANEL_WIDTH - 2 * PAD + 28,
+                       MOD_HEIGHT - 4};
 }
 
 static SDL_FRect close_box(void) { return (SDL_FRect){CANVAS_WIDTH - 46, 16, 30, 30}; }
@@ -486,13 +478,16 @@ static void draw_main(float now) {
         text_middle(STYLE_MENU, menu_name(item), PANEL_LEFT + PAD + 10 * lit + shift, box.y + box.h / 2,
                     faded(colour, alpha));
     }
-    draw_value(MENU_MODS, set_chosen ? mod_sets[set_chosen].name : "None", ink, alpha, shift);
+    int on = 0;
+    for (int index = 0; index < mod_count; index++) on += mod_on[index];
+    char mods_value[32];
+    snprintf(mods_value, sizeof mods_value, on ? "%d on" : "None", on);
+    draw_value(MENU_MODS, mods_value, ink, alpha, shift);
     draw_value(MENU_DISC, disc_state == DISC_NONE ? "None" : base_name(disc_path), disc_state == DISC_WRONG ? bad : ink,
                alpha, shift);
 }
 
-static void draw_toggle(int index, float right, float middle, float alpha, float focus) {
-    float mix = toggle_mix[index];
+static void draw_switch(float mix, float right, float middle, float alpha, float focus) {
     SDL_FRect track = {right - TOGGLE_WIDTH, middle - TOGGLE_HEIGHT / 2.0f, TOGGLE_WIDTH, TOGGLE_HEIGHT};
     rounded(SHAPE_PILL, track, 10, faded(mixed(faded(ink, 0.14f + 0.08f * focus), accent, mix), alpha));
     float knob_x = track.x + 10 + mix * (TOGGLE_WIDTH - 20);
@@ -524,32 +519,56 @@ static void draw_header(const char *title, float alpha, float shift) {
     text_middle(STYLE_MENU, title, back.x + 40 + shift, back.y + back.h / 2, faded(ink, alpha));
 }
 
+static int mod_clash(int index, char *why, size_t size) {
+    char reason[LINE_SIZE];
+    for (int other = 0; other < mod_count; other++)
+        if (mod_on[other] && other != index && port_pak_clash(index, other, reason, sizeof reason)) {
+            snprintf(why, size, "Clashes with %s: %s", port_pak_text(other, "name"), reason);
+            return 1;
+        }
+    return 0;
+}
+
+static void mod_detail(int index, char *out, size_t size) {
+    const char *description = port_pak_text(index, "description");
+    const char *authors = port_pak_text(index, "authors");
+    if (*description) snprintf(out, size, "%s", description);
+    else if (*authors) snprintf(out, size, "By %s", authors);
+    else snprintf(out, size, port_pak_files(index) == 1 ? "%d game file" : "%d game files", port_pak_files(index));
+}
+
+static void draw_mod_row(int row, float alpha, float shift) {
+    SDL_FRect box = mod_box(row);
+    float middle = box.y + box.h / 2, x = PANEL_LEFT + PAD + shift, right = control_right() + shift;
+    float focus = mod_focus[row];
+    if (row == mod_count) {
+        text_middle(STYLE_BODY, "Open mods folder", x, middle, faded(accent, (0.75f + 0.25f * focus) * alpha));
+        return;
+    }
+    char title[LINE_SIZE], detail[LINE_SIZE], line[LINE_SIZE];
+    snprintf(title, sizeof title, "%s  %s", port_pak_text(row, "name"), port_pak_text(row, "version"));
+    int blocked = !mod_on[row] && mod_clash(row, detail, sizeof detail);
+    if (!blocked) mod_detail(row, detail, sizeof detail);
+    shorten(STYLE_BODY, title, right - x - TOGGLE_WIDTH - 16, line, sizeof line);
+    text_middle(STYLE_BODY, line, x, middle - 9, faded(ink, (blocked ? 0.45f : 0.72f + 0.28f * focus) * alpha));
+    shorten(STYLE_SMALL, detail, right - x - TOGGLE_WIDTH - 16, line, sizeof line);
+    text_middle(STYLE_SMALL, line, x, middle + 11, faded(blocked ? bad : ink, (blocked ? 0.9f : 0.45f) * alpha));
+    draw_switch(mod_mark[row], right, middle, alpha * (blocked ? 0.4f : 1), focus);
+}
+
 static void draw_mods(void) {
     float alpha = page_mix[PAGE_MODS], shift = 18 * (1 - alpha);
     if (alpha <= 0.01f) return;
     draw_header("Mods", alpha, shift);
-    SDL_FRect highlight = set_box(0);
-    highlight.y = set_middle - highlight.h / 2;
+    SDL_FRect highlight = mod_box(mod_first);
+    highlight.y = mod_middle - highlight.h / 2;
     highlight.x += shift;
     rounded(SHAPE_ROW, highlight, 8, faded(ink, 0.065f * alpha));
-    for (int row = 0; row < set_count; row++) {
-        SDL_FRect box = set_box(row);
-        float middle = box.y + box.h / 2, x = PANEL_LEFT + PAD + shift, right = control_right() + shift;
-        float focus = set_focus[row], mark = set_mark[row];
-        char line[LINE_SIZE];
-        shorten(STYLE_SMALL, mod_sets[row].mods, right - x - 40, line, sizeof line);
-        text_middle(STYLE_BODY, row ? mod_sets[row].name : "No mods", x, middle - 9,
-                    faded(ink, (0.72f + 0.28f * focus) * alpha));
-        text_middle(STYLE_SMALL, line, x, middle + 11, faded(ink, 0.45f * alpha));
-        SDL_FRect ring = {right - 18, middle - 9, 18, 18};
-        rounded(SHAPE_RING, ring, 9, faded(mixed(faded(ink, 0.35f), accent, mark), alpha));
-        if (mark > 0.01f)
-            rounded(SHAPE_PILL, (SDL_FRect){right - 9 - 5 * mark, middle - 5 * mark, 10 * mark, 10 * mark}, 5 * mark,
-                    faded(accent, alpha));
-    }
-    if (set_count == 1)
-        text_top(STYLE_SMALL, "Mod sets built with dc2tk play --native --set appear here.", PANEL_LEFT + PAD + shift,
-                 SET_TOP + SET_HEIGHT + 16, faded(ink, 0.45f * alpha));
+    for (int row = mod_first; row <= mod_count && row < mod_first + MOD_ROWS; row++) draw_mod_row(row, alpha, shift);
+    if (mod_count) return;
+    float x = PANEL_LEFT + PAD + shift, top = MOD_TOP + MOD_HEIGHT + 6;
+    text_top(STYLE_SMALL, "Built mods (.dc2pak files) go in the mods folder", x, top, faded(ink, 0.5f * alpha));
+    text_top(STYLE_SMALL, "next to the game. Drop one here to add it.", x, top + 18, faded(ink, 0.5f * alpha));
 }
 
 static int at_defaults(void) {
@@ -581,7 +600,7 @@ static void draw_settings(void) {
                         faded(ink, 0.38f * alpha));
         text_middle(STYLE_BODY, option->label, x, middle, faded(ink, (0.72f + 0.28f * focus) * alpha));
         if (badge_mix[index] > 0.01f) draw_badge(x + measure(STYLE_BODY, option->label) + 10, middle, alpha * badge_mix[index]);
-        if (option->toggle) draw_toggle(index, right, middle, alpha, focus);
+        if (option->toggle) draw_switch(toggle_mix[index], right, middle, alpha, focus);
         else draw_choice(option, right, middle, alpha, focus);
     }
     SDL_FRect restore = row_box(shown_count);
@@ -623,11 +642,9 @@ static void draw(float now) {
 
 static void animate(float step) {
     for (int which = 0; which < PAGE_COUNT; which++) approach(&page_mix[which], page == which, 12, step);
-    approach(&set_middle, set_box(set_selected).y + set_box(set_selected).h / 2, 20, step);
-    for (int row = 0; row < set_count; row++) {
-        approach(&set_focus[row], row == set_selected, 18, step);
-        approach(&set_mark[row], row == set_chosen, 16, step);
-    }
+    approach(&mod_middle, mod_box(mod_selected).y + mod_box(mod_selected).h / 2, 20, step);
+    for (int row = 0; row <= mod_count; row++) approach(&mod_focus[row], row == mod_selected, 18, step);
+    for (int row = 0; row < mod_count; row++) approach(&mod_mark[row], (float)mod_on[row], 16, step);
     approach(&bar_middle, MENU_TOP + menu_selected * (float)MENU_STEP + MENU_STEP / 2.0f, 16, step);
     for (int item = 0; item < MENU_COUNT; item++) approach(&item_shift[item], item == menu_selected, 14, step);
     approach(&row_middle, row_top(row_selected) + ROW_HEIGHT / 2.0f, 20, step);
@@ -670,7 +687,28 @@ static void open_settings(void) { page = PAGE_SETTINGS; }
 
 static void open_mods(void) {
     page = PAGE_MODS;
-    set_selected = set_chosen;
+    mod_selected = 0;
+    mod_first = 0;
+}
+
+static void select_mod(int row) {
+    mod_selected = row;
+    if (mod_selected < mod_first) mod_first = mod_selected;
+    if (mod_selected >= mod_first + MOD_ROWS) mod_first = mod_selected - MOD_ROWS + 1;
+}
+
+static void open_mods_folder(void) {
+    char url[PATH_SIZE + 16];
+    SDL_CreateDirectory(port_paks_folder());
+    snprintf(url, sizeof url, "file://%s", port_paks_folder());
+    SDL_OpenURL(url);
+}
+
+static void toggle_mod(int row) {
+    char why[LINE_SIZE];
+    if (row == mod_count) open_mods_folder();
+    else if (mod_on[row]) mod_on[row] = 0;
+    else if (!mod_clash(row, why, sizeof why)) mod_on[row] = 1;
 }
 
 static void change(int row, int step) {
@@ -698,9 +736,9 @@ static void press(int key, float now) {
         return;
     }
     if (page == PAGE_MODS) {
-        if (key == KEY_UP) set_selected = (set_selected + set_count - 1) % set_count;
-        if (key == KEY_DOWN) set_selected = (set_selected + 1) % set_count;
-        if (key == KEY_ACCEPT) set_chosen = set_selected;
+        if (key == KEY_UP) select_mod((mod_selected + mod_count) % (mod_count + 1));
+        if (key == KEY_DOWN) select_mod((mod_selected + 1) % (mod_count + 1));
+        if (key == KEY_ACCEPT || key == KEY_LEFT || key == KEY_RIGHT) toggle_mod(mod_selected);
         if (key == KEY_BACK) page = PAGE_MAIN;
         return;
     }
@@ -746,14 +784,14 @@ static int row_at(float x, float y) {
     return -1;
 }
 
-static int set_at(float x, float y) {
-    for (int row = 0; page == PAGE_MODS && row < set_count; row++)
-        if (inside(set_box(row), x, y)) return row;
+static int mod_at(float x, float y) {
+    for (int row = mod_first; page == PAGE_MODS && row <= mod_count && row < mod_first + MOD_ROWS; row++)
+        if (inside(mod_box(row), x, y)) return row;
     return -1;
 }
 
 static int clickable(float x, float y) {
-    return inside(close_box(), x, y) || menu_item_at(x, y) >= 0 || row_at(x, y) >= 0 || set_at(x, y) >= 0 ||
+    return inside(close_box(), x, y) || menu_item_at(x, y) >= 0 || row_at(x, y) >= 0 || mod_at(x, y) >= 0 ||
            (page != PAGE_MAIN && inside(back_box(), x, y));
 }
 
@@ -762,7 +800,7 @@ static void hover(float x, float y) {
     pointer_y = y;
     if (menu_item_at(x, y) >= 0) menu_selected = menu_item_at(x, y);
     if (row_at(x, y) >= 0) focus_row(row_at(x, y));
-    if (set_at(x, y) >= 0) set_selected = set_at(x, y);
+    if (mod_at(x, y) >= 0) mod_selected = mod_at(x, y);
     SDL_SetCursor(clickable(x, y) ? hand_cursor : arrow_cursor);
 }
 
@@ -780,7 +818,7 @@ static void click(float x, float y, int backwards, float now) {
     if (inside(close_box(), x, y)) leave(0, now);
     else if (menu_item_at(x, y) >= 0) activate_main(menu_item_at(x, y), now);
     else if (page != PAGE_MAIN && inside(back_box(), x, y)) page = PAGE_MAIN;
-    else if (set_at(x, y) >= 0) set_chosen = set_selected = set_at(x, y);
+    else if (mod_at(x, y) >= 0) toggle_mod(mod_selected = mod_at(x, y));
     else if (row_at(x, y) >= 0 && backwards) change(row_at(x, y), -1);
     else if (row_at(x, y) >= 0) click_row(row_at(x, y), x);
 }
@@ -795,6 +833,51 @@ static SDL_HitTestResult hit_test(SDL_Window *where, const SDL_Point *point, voi
     return SDL_HITTEST_NORMAL;
 }
 
+static int ends_with(const char *text, const char *end) {
+    size_t length = strlen(text), wanted = strlen(end);
+    return length >= wanted && !SDL_strcasecmp(text + length - wanted, end);
+}
+
+static void read_mods(void) {
+    mod_count = SDL_min(port_paks_list(), MOD_LIMIT);
+    char why[LINE_SIZE];
+    for (int index = 0; index < mod_count; index++) {
+        mod_on[index] = 0;
+        mod_on[index] = port_pak_enabled(index) && !mod_clash(index, why, sizeof why);
+        mod_mark[index] = (float)mod_on[index];
+    }
+}
+
+static void dropped(const char *path) {
+    if (!ends_with(path, ".dc2pak")) {
+        check_disc(path);
+        return;
+    }
+    char target[PATH_SIZE];
+    const char *slash = strrchr(path, '/');
+    SDL_CreateDirectory(port_paks_folder());
+    snprintf(target, sizeof target, "%s/%s", port_paks_folder(), slash ? slash + 1 : path);
+    int was[MOD_LIMIT];
+    char ids[MOD_LIMIT][128];
+    int count = mod_count;
+    for (int index = 0; index < count; index++) {
+        was[index] = mod_on[index];
+        snprintf(ids[index], sizeof ids[index], "%s", port_pak_text(index, "id"));
+    }
+    if (!SDL_CopyFile(path, target)) {
+        fprintf(stderr, "launcher: cannot copy %s: %s\n", path, SDL_GetError());
+        return;
+    }
+    mod_count = SDL_min(port_paks_list(), MOD_LIMIT);
+    for (int index = 0; index < mod_count; index++) {
+        mod_on[index] = 0;
+        for (int old = 0; old < count; old++)
+            if (was[old] && !strcmp(ids[old], port_pak_text(index, "id"))) mod_on[index] = 1;
+        mod_mark[index] = (float)mod_on[index];
+    }
+    page = PAGE_MODS;
+}
+
 static void handle(SDL_Event *event, float now) {
     SDL_ConvertEventToRenderCoordinates(renderer, event);
     if (event->type == SDL_EVENT_QUIT || event->type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) leave(0, now);
@@ -804,7 +887,7 @@ static void handle(SDL_Event *event, float now) {
     if (event->type == SDL_EVENT_MOUSE_MOTION) hover(event->motion.x, event->motion.y);
     if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN)
         click(event->button.x, event->button.y, event->button.button == SDL_BUTTON_RIGHT, now);
-    if (event->type == SDL_EVENT_DROP_FILE && event->drop.data) check_disc(event->drop.data);
+    if (event->type == SDL_EVENT_DROP_FILE && event->drop.data) dropped(event->drop.data);
 }
 
 static float window_zoom(void) {
@@ -877,87 +960,6 @@ static void close_window(void) {
     window = NULL;
 }
 
-static void find_sets(const char *program) {
-    const char *base = SDL_GetBasePath();
-    const char *name = strrchr(program, '/');
-    snprintf(executable, sizeof executable, "%s%s", base ? base : "", name ? name + 1 : program);
-    char parent[PATH_SIZE];
-    snprintf(parent, sizeof parent, "%s", base ? base : "./");
-    parent[strlen(parent) - 1] = 0;
-    char *slash = strrchr(parent, '/');
-    if (slash) *slash = 0;
-    slash = strrchr(parent, '/');
-    if (!strcmp(slash ? slash + 1 : parent, "sets")) snprintf(sets_folder, sizeof sets_folder, "%s", parent);
-    else snprintf(sets_folder, sizeof sets_folder, "%s/sets", parent);
-}
-
-static int is_folder(const char *path) {
-    SDL_PathInfo info;
-    return SDL_GetPathInfo(path, &info) && info.type == SDL_PATHTYPE_DIRECTORY;
-}
-
-static int is_file(const char *path) {
-    SDL_PathInfo info;
-    return SDL_GetPathInfo(path, &info) && info.type == SDL_PATHTYPE_FILE;
-}
-
-static void describe_set(ModSet *set) {
-    char path[PATH_SIZE];
-    snprintf(path, sizeof path, "%s/%s/mods.txt", sets_folder, set->name);
-    char *names = SDL_LoadFile(path, NULL);
-    set->mods[0] = 0;
-    for (char *line = names ? strtok(names, "\r\n") : NULL; line; line = strtok(NULL, "\r\n")) {
-        size_t used = strlen(set->mods);
-        snprintf(set->mods + used, sizeof set->mods - used, "%s%s", used ? ", " : "", line);
-    }
-    if (!set->mods[0]) snprintf(set->mods, sizeof set->mods, "Built by dc2tk");
-    snprintf(path, sizeof path, "%s/%s/darkchronicle", sets_folder, set->name);
-    set->own_binary = is_file(path);
-    SDL_free(names);
-}
-
-static void read_sets(void) {
-    set_count = 1;
-    snprintf(mod_sets[0].name, SET_NAME, "%s", "");
-    snprintf(mod_sets[0].mods, LINE_SIZE, "%s", "The game as it is on the disc");
-    int count = 0;
-    char **names = SDL_GlobDirectory(sets_folder, "*", 0, &count);
-    for (int index = 0; names && index < count && set_count < SET_LIMIT; index++) {
-        char overrides[PATH_SIZE];
-        snprintf(overrides, sizeof overrides, "%s/%s/overrides", sets_folder, names[index]);
-        if (!strcmp(names[index], "none") || !is_folder(overrides)) continue;
-        int at = set_count++;
-        while (at > 1 && strcmp(mod_sets[at - 1].name, names[index]) > 0) {
-            mod_sets[at] = mod_sets[at - 1];
-            at--;
-        }
-        snprintf(mod_sets[at].name, SET_NAME, "%s", names[index]);
-    }
-    SDL_free(names);
-    set_chosen = 0;
-    for (int index = 1; index < set_count; index++) {
-        describe_set(&mod_sets[index]);
-        if (!strcmp(mod_sets[index].name, set_wanted)) set_chosen = index;
-    }
-}
-
-static void start_game(void) {
-    const ModSet *set = &mod_sets[set_chosen];
-    char overrides[PATH_SIZE], binary[PATH_SIZE];
-    snprintf(overrides, sizeof overrides, "%s/%s/overrides", sets_folder, set_chosen ? set->name : "none");
-    if (set->own_binary) snprintf(binary, sizeof binary, "%s/%s/darkchronicle", sets_folder, set->name);
-    else snprintf(binary, sizeof binary, "%s", executable);
-    char *started[64];
-    int count = 0;
-    started[count++] = binary;
-    for (int index = 1; index < argument_count && count < 62; index++) started[count++] = arguments[index];
-    started[count++] = "--launched";
-    started[count] = NULL;
-    setenv("DC2TK_OVERRIDES", overrides, 1);
-    execv(binary, started);
-    fprintf(stderr, "launcher: cannot start %s\n", binary);
-}
-
 static void take_picture(const char *path, const char *keys, float now) {
     SDL_Texture *canvas = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET,
                                             (int)(CANVAS_WIDTH * pixel_scale), (int)(CANVAS_HEIGHT * pixel_scale));
@@ -982,19 +984,15 @@ static void take_picture(const char *path, const char *keys, float now) {
     SDL_DestroyTexture(canvas);
 }
 
-int port_launcher(int count, char **values, int show) {
+int port_launcher(void) {
     const char *chosen = SDL_getenv("DC2TK_LAUNCHER_SETTINGS");
     char *folder = chosen ? NULL : SDL_GetPrefPath("DC2 Toolkit", "Dark Chronicle");
     if (chosen) snprintf(settings_path, sizeof settings_path, "%s", chosen);
     else snprintf(settings_path, sizeof settings_path, "%slauncher.cfg", folder ? folder : "");
     SDL_free(folder);
     port_settings_file(settings_path);
-    if (!show) return 1;
-    argument_count = count;
-    arguments = values;
     read_options();
-    find_sets(values[0]);
-    read_sets();
+    read_mods();
     const char *picture = SDL_getenv("DC2TK_LAUNCHER_PICTURE");
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         fprintf(stderr, "launcher: %s\n", SDL_GetError());
@@ -1032,6 +1030,5 @@ int port_launcher(int count, char **values, int show) {
     SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD);
     if (!playing) return 0;
     save_options();
-    start_game();
-    return 0;
+    return 1;
 }

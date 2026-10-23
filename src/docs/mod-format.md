@@ -459,6 +459,16 @@ key, once the port API is stable enough to keep a binary interface.
    `<overrides>/dc2tk-hd/<picture>_<w>x<h>.rgba` from a PNG a whole multiple of the picture's
    size; the port matches by the picture's name and size, not a hash, when it caches the
    texture, and uploads the larger picture in its place.
+7. **Done.** Built mods: `dc2tk mod build TREE DISC ID` writes `<id>-<version>.dc2pak`, an
+   uncompressed zip of `pak.cfg` (`key=value` lines: id, name, version, description, authors,
+   game, a `number=<kind> <n> <name>` line per number the mods folder's lock gave the mod, a
+   `file=` line per game file) and the built game files under `files/`. Mods with engine or port
+   code, or executable changes, are refused. The port reads `.dc2pak` files from `mods/` beside
+   the binary; `mods.enabled` (launcher.cfg, or `--mods ID,ID`) layers their members over the
+   override folder, read in place from the zip, and their `dc2tk-port.cfg` goes beneath every
+   other setting. The launcher's Mods page toggles them and refuses a mod that shares a file or a
+   number with one already on. Mod sets left the launcher, with `mods.txt` and the `--launched`
+   re-exec.
 
 Left out, for later:
 

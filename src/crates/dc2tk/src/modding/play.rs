@@ -5,10 +5,9 @@
 use std::path::Path;
 use std::process::{Command, ExitCode};
 
-use anyhow::{bail, Context, Result};
-use dc2tk_script::{manifest, sets};
+use anyhow::{bail, Result};
 
-use super::{build, mod_folders, shown, watch};
+use super::{build, shown, watch};
 use crate::options::{Common, ModsDir};
 
 pub fn run_native(
@@ -33,7 +32,6 @@ pub fn run_native(
         }
         let (written, removed) = watch::write_overlay(&overrides, &built)?;
         println!("{} game files in {} ({written} written, {removed} removed)", built.len(), shown(&overrides));
-        write_mod_names(set, mods, &folder)?;
     }
     if !binary.is_file() {
         bail!("{} is not built: python3 -I tools/port.py --movies", shown(&binary));
@@ -45,18 +43,4 @@ pub fn run_native(
     Command::new(&binary).arg(disc).env("DC2TK_OVERRIDES", &overrides).spawn()?;
     println!("started {} with {}", shown(disc), shown(&binary));
     Ok(ExitCode::SUCCESS)
-}
-
-/// The set's mods by name, one a line, in mods.txt beside its overrides: what the port's launcher
-/// shows for the set.
-fn write_mod_names(set: &Path, mods: &ModsDir, folder: &Path) -> Result<()> {
-    let ids = sets::read(set)?.ids();
-    let mut names = String::new();
-    for dir in mod_folders(mods.path(), &ids)? {
-        let found = manifest::read(&dir)?;
-        names.push_str(if found.name.is_empty() { &found.id } else { &found.name });
-        names.push('\n');
-    }
-    let path = folder.join("mods.txt");
-    std::fs::write(&path, names).with_context(|| format!("cannot write {}", shown(&path)))
 }

@@ -5,6 +5,7 @@
 #include "executable.h"
 #include "audio.h"
 #include "port_mod.h"
+#include "port_overrides.h"
 #include "render.h"
 #include "launcher.h"
 #include <stdio.h>
@@ -55,7 +56,7 @@ static int setting_number(const char *name, int fallback) {
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     int first = 1;
-    int scale = 0, samples = 0, mute = 0, background = 0, fullscreen = -1, vsync = -1, smooth = -1, shown = 1;
+    int scale = 0, samples = 0, mute = 0, background = 0, fullscreen = -1, vsync = -1, smooth = -1;
     const char *aspect = NULL;
     int window_width = 0, window_height = 0;
     for (; first < argc; ++first) {
@@ -64,7 +65,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[first], "--background")) background = 1;
         else if (!strcmp(argv[first], "--fullscreen")) fullscreen = 1;
         else if (!strcmp(argv[first], "--vsync")) vsync = 1;
-        else if (!strcmp(argv[first], "--launched")) shown = 0;
+        else if (!strcmp(argv[first], "--mods") && first + 1 < argc) port_setting_set("mods.enabled", argv[++first]);
         else if (!strcmp(argv[first], "--smooth") && first + 1 < argc) smooth = atoi(argv[++first]);
         else if (!strcmp(argv[first], "--aspect") && first + 1 < argc) aspect = argv[++first];
         else if (!strcmp(argv[first], "--window") && first + 1 < argc) sscanf(argv[++first], "%dx%d", &window_width, &window_height);
@@ -73,7 +74,7 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[first], "--graphics")) break;
     }
     int launcher = first == argc && launched();
-    if (launcher && !port_launcher(argc, argv, shown)) return 0;
+    if (launcher && !port_launcher()) return 0;
     const char *disc = first == argc - 1 ? argv[first] : first < argc ? NULL : launcher ? port_setting("disc") : bundled_disc();
     if (launcher) {
         port_debug |= setting_number("debug.menus", 0);
@@ -84,11 +85,12 @@ int main(int argc, char **argv) {
     if (!disc) {
         fprintf(stderr,
                 "usage: %s [--debug] [--mute] [--background] [--fullscreen] [--vsync] [--smooth HZ] [--aspect W:H] [--window WxH] [--scale 1-4|auto] "
-                "[--msaa 1|2|4|8] [DISC.iso]\n"
+                "[--msaa 1|2|4|8] [--mods ID,ID] [DISC.iso]\n"
                 "Without a disc the launcher opens.\n",
                 argv[0]);
         return 1;
     }
+    port_overrides_scan();
     if (!aspect) aspect = port_setting("render.aspect");
     const char *set_scale = port_setting("render.scale");
     const char *set_samples = port_setting("render.msaa");

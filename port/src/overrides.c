@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "port_overrides.h"
+#include "port_mod.h"
 #include <dirent.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -12,13 +13,43 @@
 #include <mach-o/dyld.h>
 #endif
 
-enum { OVERRIDE_LIMIT = 4096, OVERRIDE_PATH = 256 };
+enum { OVERRIDE_LIMIT = 4096, OVERRIDE_PATH = 256, PAK_LIMIT = 32, PAK_PATH = 1024, PAK_TEXT = 256 };
+enum { PAK_FILE_LIMIT = 512, PAK_NUMBER_LIMIT = 64, ZIP_TAIL = 65557, ZIP_END = 22, ZIP_CENTRAL = 46 };
+enum { ZIP_LOCAL = 30, ZIP_STORED = 0, FROM_FOLDER = -1 };
+
+typedef struct {
+    char file[PAK_PATH];
+    char id[PAK_TEXT];
+    char name[PAK_TEXT];
+    char version[PAK_TEXT];
+    char description[PAK_TEXT];
+    char authors[PAK_TEXT];
+    char game[PAK_TEXT];
+    char settings[PAK_TEXT];
+    int file_count;
+    char files[PAK_FILE_LIMIT][OVERRIDE_PATH];
+    uint32_t sizes[PAK_FILE_LIMIT];
+    uint32_t offsets[PAK_FILE_LIMIT];
+    int number_count;
+    char numbers[PAK_NUMBER_LIMIT][PAK_TEXT];
+} Pak;
+
+static const char *const settings_file = "dc2tk-port.cfg";
+static const char *const config_member = "pak.cfg";
+static const char *const files_prefix = "files/";
 
 static char folder[1024];
+static char paks_folder[1024];
 static char paths[OVERRIDE_LIMIT][OVERRIDE_PATH];
 static uint32_t sizes[OVERRIDE_LIMIT];
+static uint32_t offsets[OVERRIDE_LIMIT];
+static int sources[OVERRIDE_LIMIT];
 static int count;
 static int scanned;
+static Pak paks[PAK_LIMIT];
+static int pak_count;
+static int paks_listed;
+static int settings_applied;
 
 static void binary_folder(char *out, uint32_t size) {
 #ifdef __APPLE__
@@ -42,6 +73,213 @@ const char *port_overrides_folder(void) {
     return folder;
 }
 
+const char *port_paks_folder(void) {
+    if (paks_folder[0]) return paks_folder;
+    char binary[1024];
+    binary_folder(binary, sizeof binary);
+    snprintf(paks_folder, sizeof paks_folder, "%smods", binary);
+    return paks_folder;
+}
+
+static uint32_t read32(const unsigned char *at) {
+    return (uint32_t)at[0] | (uint32_t)at[1] << 8 | (uint32_t)at[2] << 16 | (uint32_t)at[3] << 24;
+}
+
+static uint32_t read16(const unsigned char *at) { return (uint32_t)at[0] | (uint32_t)at[1] << 8; }
+
+static int read_at(int file, uint64_t offset, void *buffer, size_t size) {
+    unsigned char *out = buffer;
+    while (size) {
+        ssize_t result = pread(file, out, size, (off_t)offset);
+        if (result <= 0) return 0;
+        out += result;
+        offset += (uint64_t)result;
+        size -= (size_t)result;
+    }
+    return 1;
+}
+
+static void copy_text(char *out, const char *text) { snprintf(out, PAK_TEXT, "%s", text); }
+
+static void read_config(Pak *pak, char *text) {
+    for (char *line = strtok(text, "\r\n"); line; line = strtok(NULL, "\r\n")) {
+        char *equals = strchr(line, '=');
+        if (!equals) continue;
+        *equals = 0;
+        const char *value = equals + 1;
+        if (!strcmp(line, "id")) copy_text(pak->id, value);
+        if (!strcmp(line, "name")) copy_text(pak->name, value);
+        if (!strcmp(line, "version")) copy_text(pak->version, value);
+        if (!strcmp(line, "description")) copy_text(pak->description, value);
+        if (!strcmp(line, "authors")) copy_text(pak->authors, value);
+        if (!strcmp(line, "game")) copy_text(pak->game, value);
+        if (!strcmp(line, "number") && pak->number_count < PAK_NUMBER_LIMIT) copy_text(pak->numbers[pak->number_count++], value);
+    }
+}
+
+static int member_data(int file, uint32_t local, uint32_t *offset) {
+    unsigned char header[ZIP_LOCAL];
+    if (!read_at(file, local, header, sizeof header) || read32(header) != 0x04034b50) return 0;
+    *offset = local + ZIP_LOCAL + read16(header + 26) + read16(header + 28);
+    return 1;
+}
+
+static void add_member(Pak *pak, int file, const char *name, uint32_t size, uint32_t local) {
+    uint32_t offset;
+    if (!member_data(file, local, &offset)) return;
+    if (!strcmp(name, config_member)) {
+        char *text = calloc(1, (size_t)size + 1);
+        if (text && read_at(file, offset, text, size)) read_config(pak, text);
+        free(text);
+        return;
+    }
+    size_t prefix = strlen(files_prefix);
+    if (strncmp(name, files_prefix, prefix) || pak->file_count == PAK_FILE_LIMIT) return;
+    if (!strcmp(name + prefix, settings_file)) {
+        snprintf(pak->settings, sizeof pak->settings, "%u %u", offset, size);
+        return;
+    }
+    snprintf(pak->files[pak->file_count], OVERRIDE_PATH, "%s", name + prefix);
+    pak->sizes[pak->file_count] = size;
+    pak->offsets[pak->file_count] = offset;
+    pak->file_count++;
+}
+
+static int read_pak(Pak *pak, const char *path) {
+    memset(pak, 0, sizeof *pak);
+    snprintf(pak->file, sizeof pak->file, "%s", path);
+    int file = open(path, O_RDONLY);
+    if (file < 0) return 0;
+    struct stat info;
+    unsigned char tail[ZIP_TAIL];
+    size_t tail_size = fstat(file, &info) || info.st_size < ZIP_END ? 0
+                       : info.st_size < ZIP_TAIL               ? (size_t)info.st_size
+                                                               : ZIP_TAIL;
+    uint64_t tail_at = (uint64_t)info.st_size - tail_size;
+    int found = tail_size && read_at(file, tail_at, tail, tail_size);
+    size_t end = tail_size >= ZIP_END ? tail_size - ZIP_END + 1 : 0;
+    while (found && end-- > 0 && read32(tail + end) != 0x06054b50) {}
+    if (!found || read32(tail + end) != 0x06054b50) {
+        close(file);
+        return 0;
+    }
+    uint32_t entries = read16(tail + end + 10), central_size = read32(tail + end + 12), central_at = read32(tail + end + 16);
+    unsigned char *central = malloc(central_size ? central_size : 1);
+    int ok = central && read_at(file, central_at, central, central_size);
+    for (uint32_t i = 0, at = 0; ok && i < entries && at + ZIP_CENTRAL <= central_size; i++) {
+        const unsigned char *entry = central + at;
+        uint32_t name_length = read16(entry + 28), extra = read16(entry + 30), comment = read16(entry + 32);
+        if (read32(entry) != 0x02014b50 || at + ZIP_CENTRAL + name_length > central_size) break;
+        char name[OVERRIDE_PATH + 16];
+        snprintf(name, sizeof name, "%.*s", (int)name_length, (const char *)entry + ZIP_CENTRAL);
+        if (read16(entry + 10) == ZIP_STORED) add_member(pak, file, name, read32(entry + 24), read32(entry + 42));
+        at += ZIP_CENTRAL + name_length + extra + comment;
+    }
+    free(central);
+    close(file);
+    return ok && pak->id[0];
+}
+
+static int has_extension(const char *name, const char *extension) {
+    size_t length = strlen(name), wanted = strlen(extension);
+    return length > wanted && !strcasecmp(name + length - wanted, extension);
+}
+
+int port_paks_list(void) {
+    paks_listed = 1;
+    pak_count = 0;
+    DIR *listing = opendir(port_paks_folder());
+    struct dirent *item;
+    while (listing && (item = readdir(listing)) && pak_count < PAK_LIMIT) {
+        if (item->d_name[0] == '.' || !has_extension(item->d_name, ".dc2pak")) continue;
+        char path[PAK_PATH];
+        snprintf(path, sizeof path, "%s/%s", port_paks_folder(), item->d_name);
+        if (!read_pak(&paks[pak_count], path)) continue;
+        int at = pak_count++;
+        while (at > 0 && strcasecmp(paks[at - 1].name, paks[at].name) > 0) {
+            Pak swap = paks[at];
+            paks[at] = paks[at - 1];
+            paks[at - 1] = swap;
+            at--;
+        }
+    }
+    if (listing) closedir(listing);
+    return pak_count;
+}
+
+const char *port_pak_text(int index, const char *key) {
+    if (!paks_listed) port_paks_list();
+    if (index < 0 || index >= pak_count) return "";
+    const Pak *pak = &paks[index];
+    if (!strcmp(key, "id")) return pak->id;
+    if (!strcmp(key, "name")) return pak->name[0] ? pak->name : pak->id;
+    if (!strcmp(key, "version")) return pak->version;
+    if (!strcmp(key, "description")) return pak->description;
+    if (!strcmp(key, "authors")) return pak->authors;
+    if (!strcmp(key, "file")) return pak->file;
+    return "";
+}
+
+int port_pak_files(int index) {
+    if (!paks_listed) port_paks_list();
+    return index >= 0 && index < pak_count ? paks[index].file_count : 0;
+}
+
+static int same_number(const char *a, const char *b) {
+    char kind_a[64], kind_b[64];
+    long number_a, number_b;
+    return sscanf(a, "%63s %ld", kind_a, &number_a) == 2 && sscanf(b, "%63s %ld", kind_b, &number_b) == 2 &&
+           !strcmp(kind_a, kind_b) && number_a == number_b;
+}
+
+int port_pak_clash(int a, int b, char *why, size_t size) {
+    if (!paks_listed) port_paks_list();
+    if (a < 0 || b < 0 || a >= pak_count || b >= pak_count || a == b) return 0;
+    const Pak *first = &paks[a], *second = &paks[b];
+    if (!strcmp(first->id, second->id)) {
+        snprintf(why, size, "another version of it is on");
+        return 1;
+    }
+    for (int i = 0; i < first->file_count; i++)
+        for (int j = 0; j < second->file_count; j++)
+            if (!strcasecmp(first->files[i], second->files[j])) {
+                snprintf(why, size, "both change %s", first->files[i]);
+                return 1;
+            }
+    for (int i = 0; i < first->number_count; i++)
+        for (int j = 0; j < second->number_count; j++)
+            if (same_number(first->numbers[i], second->numbers[j])) {
+                snprintf(why, size, "both use %s", first->numbers[i]);
+                return 1;
+            }
+    return 0;
+}
+
+int port_pak_enabled(int index) {
+    if (!paks_listed) port_paks_list();
+    const char *enabled = port_setting("mods.enabled");
+    if (index < 0 || index >= pak_count || !enabled) return 0;
+    size_t length = strlen(paks[index].id);
+    for (const char *at = enabled; *at;) {
+        const char *end = strchr(at, ',');
+        size_t span = end ? (size_t)(end - at) : strlen(at);
+        if (span == length && !strncmp(at, paks[index].id, length)) return 1;
+        at += span + (end ? 1 : 0);
+    }
+    return 0;
+}
+
+static void add_override(const char *path, uint32_t size, uint32_t offset, int source) {
+    for (int i = 0; i < count; i++)
+        if (!strcasecmp(paths[i], path)) return;
+    if (count == OVERRIDE_LIMIT) return;
+    snprintf(paths[count], OVERRIDE_PATH, "%s", path);
+    sizes[count] = size;
+    offsets[count] = offset;
+    sources[count] = source;
+    count++;
+}
+
 static void scan_folder(const char *relative) {
     char directory[2048];
     snprintf(directory, sizeof directory, "%s/%s", port_overrides_folder(), relative);
@@ -62,18 +300,38 @@ static void scan_folder(const char *relative) {
             continue;
         }
         if (!S_ISREG(info.st_mode) || info.st_size > UINT32_MAX) continue;
-        memcpy(paths[count], inside, (size_t)length + 1);
-        sizes[count] = (uint32_t)info.st_size;
-        count++;
+        add_override(inside, (uint32_t)info.st_size, 0, FROM_FOLDER);
     }
     closedir(listing);
+}
+
+static void apply_settings(const Pak *pak) {
+    uint32_t offset, size;
+    if (sscanf(pak->settings, "%u %u", &offset, &size) != 2) return;
+    int file = open(pak->file, O_RDONLY);
+    char *text = calloc(1, (size_t)size + 1);
+    if (file >= 0 && text && read_at(file, offset, text, size)) port_settings_beneath(text);
+    free(text);
+    if (file >= 0) close(file);
 }
 
 void port_overrides_scan(void) {
     count = 0;
     scanned = 1;
     scan_folder("");
-    if (count) fprintf(stderr, "overrides: %d files in %s\n", count, port_overrides_folder());
+    int folder_files = count, enabled = 0;
+    port_paks_list();
+    for (int index = 0; index < pak_count; index++) {
+        if (!port_pak_enabled(index)) continue;
+        enabled++;
+        for (int i = 0; i < paks[index].file_count; i++)
+            add_override(paks[index].files[i], paks[index].sizes[i], paks[index].offsets[i], index);
+        if (!settings_applied) apply_settings(&paks[index]);
+        fprintf(stderr, "mods: %s %s on\n", paks[index].id, paks[index].version);
+    }
+    settings_applied = 1;
+    if (folder_files) fprintf(stderr, "overrides: %d files in %s\n", folder_files, port_overrides_folder());
+    if (enabled) fprintf(stderr, "mods: %d on, %d files\n", enabled, count - folder_files);
 }
 
 int port_overrides_count(void) {
@@ -110,19 +368,12 @@ uint32_t port_overrides_size(int index) {
 int port_overrides_read(int index, uint32_t offset, void *buffer, size_t size) {
     if (index < 0 || index >= count || offset > sizes[index] || size > sizes[index] - offset) return 0;
     char full[2048];
-    snprintf(full, sizeof full, "%s/%s", port_overrides_folder(), paths[index]);
+    if (sources[index] == FROM_FOLDER) snprintf(full, sizeof full, "%s/%s", port_overrides_folder(), paths[index]);
+    else snprintf(full, sizeof full, "%s", paks[sources[index]].file);
     int file = open(full, O_RDONLY);
     if (file < 0) return 0;
-    unsigned char *out = buffer;
-    uint32_t start = offset;
-    while (size) {
-        ssize_t result = pread(file, out, size, (off_t)offset);
-        if (result <= 0) break;
-        out += result;
-        offset += (uint32_t)result;
-        size -= (size_t)result;
-    }
+    int read = read_at(file, (uint64_t)offsets[index] + offset, buffer, size);
     close(file);
-    if (!size && !start) fprintf(stderr, "override: %s (%u bytes)\n", paths[index], sizes[index]);
-    return !size;
+    if (read && !offset) fprintf(stderr, "override: %s (%u bytes)\n", paths[index], sizes[index]);
+    return read;
 }

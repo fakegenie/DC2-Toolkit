@@ -52,6 +52,25 @@ static void read_settings(void) {
     read_file(path);
 }
 
+void port_settings_beneath(const char *text) {
+    if (!settings_read) read_settings();
+    char line[SETTING_TEXT * 2];
+    for (const char *at = text; *at && setting_count < SETTING_LIMIT;) {
+        size_t length = strcspn(at, "\r\n");
+        snprintf(line, sizeof line, "%.*s", (int)length, at);
+        at += length;
+        while (*at == '\r' || *at == '\n') at++;
+        char *equals = strchr(line, '=');
+        if (!equals || line[0] == '#') continue;
+        *equals = 0;
+        memmove(setting_names + 1, setting_names, sizeof setting_names[0] * (size_t)setting_count);
+        memmove(setting_values + 1, setting_values, sizeof setting_values[0] * (size_t)setting_count);
+        snprintf(setting_names[0], SETTING_TEXT, "%s", line);
+        snprintf(setting_values[0], SETTING_TEXT, "%s", equals + 1);
+        setting_count++;
+    }
+}
+
 void port_settings_file(const char *path) {
     if (!settings_read) read_settings();
     read_file(path);

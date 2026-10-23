@@ -70,7 +70,7 @@ def main():
     with tempfile.TemporaryDirectory() as temporary:
         folder = pathlib.Path(temporary)
         library = folder / 'cdvd.so'
-        subprocess.run(['clang', '-std=c11', '-Wall', '-Wextra', '-Werror', '-shared', '-fPIC', '-I' + str(root / 'port/include'), str(root / 'port/src/cdvd.c'), str(root / 'port/src/overrides.c'), str(root / 'port/src/split_data.c'), str(root / 'port/src/hooks.c'), '-o', str(library)], check=True)
+        subprocess.run(['clang', '-std=c11', '-Wall', '-Wextra', '-Werror', '-shared', '-fPIC', '-I' + str(root / 'port/include'), str(root / 'port/src/cdvd.c'), str(root / 'port/src/overrides.c'), str(root / 'port/src/mods.c'), str(root / 'port/src/split_data.c'), str(root / 'port/src/hooks.c'), '-o', str(library)], check=True)
         os.environ['DC2TK_OVERRIDES'] = str(folder / 'overrides')
         iso = folder / 'test.iso'
         iso.write_bytes(image())

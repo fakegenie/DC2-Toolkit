@@ -122,7 +122,7 @@ def main():
         movie_cflags, movie_libraries = port.movie_flags(root / "build/port/movie-sdk")
         movie_flags = ["-DPORT_MOVIES", *movie_cflags]
     subprocess.run([*c_flags, "-Wno-unused-parameter", *movie_flags,
-                    "port/tests/movie_decode.c", "port/src/movie_decode.c", "port/src/cdvd.c", "port/src/overrides.c", "port/src/hooks.c",
+                    "port/tests/movie_decode.c", "port/src/movie_decode.c", "port/src/cdvd.c", "port/src/overrides.c", "port/src/mods.c", "port/src/hooks.c",
                     *movie_libraries, "-o", str(movie_test)], cwd=root, check=True)
     subprocess.run([str(movie_test)], cwd=root, check=True, timeout=15)
     if options.iso:

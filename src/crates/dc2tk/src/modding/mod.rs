@@ -4,6 +4,7 @@
 
 mod build;
 mod check;
+mod pak;
 mod pcsx2;
 mod play;
 mod watch;
@@ -85,6 +86,24 @@ pub enum ModCommand {
         disc: Option<PathBuf>,
         #[command(flatten)]
         mods: ModsDir,
+    },
+    /// Build a mod into <id>-<version>.dc2pak, the game files it changes, which the native port's
+    /// launcher turns on and off from the mods folder beside the game; a mod with engine or port code
+    /// cannot be built this way.
+    Build {
+        /// The decompiled source tree.
+        source: PathBuf,
+        /// The retail disc image.
+        disc: PathBuf,
+        /// The mod's id.
+        name: String,
+        /// The folder to write the .dc2pak in.
+        #[arg(short, long, value_name = "DIR", default_value = ".")]
+        output: PathBuf,
+        #[command(flatten)]
+        mods: ModsDir,
+        #[command(flatten)]
+        common: Common,
     },
     /// Copy a .dc2mod into the mods folder, replacing an older zip of the same mod.
     Install {
@@ -238,6 +257,9 @@ pub fn run_mod(command: &ModCommand) -> Result<ExitCode> {
         ModCommand::Save { source, name, id, mods, common } => run_mod_save(source, name, id.as_deref(), mods, common),
         ModCommand::Slim { source, name, mods, common } => run_mod_slim(source, name, mods, common),
         ModCommand::Pack { name, output, disc, mods } => run_mod_pack(name, output, disc.as_deref(), mods),
+        ModCommand::Build { source, disc, name, output, mods, common } => {
+            pak::run_mod_build(source, disc, name, output, mods, common)
+        }
         ModCommand::Install { file, mods } => run_mod_install(file, mods),
         ModCommand::List { source, mods } => {
             println!("{}", mods::listing(mods.path(), source, &default_constants(source)?)?);

@@ -29,9 +29,8 @@ The native build needs clang 21, binutils (llvm-objcopy and llvm-nm on macOS), P
 installs that SDK. Run the binary with a disc image, `build/port/darkchronicle modded.iso`, to start
 the game straight away; it warns when the mounted disc's executable differs from the one used for
 the build. Run it without one to open the launcher, where the disc, window, widescreen, high frame
-rate, sound and, in the debug build, the debug panel are chosen. Its Mods page lists the mod sets
-`dc2tk play DISC --native --set FILE` has built in `build/sets/`, with the mods each holds (the
-`mods.txt` beside its overrides), and Play starts the chosen set's own binary when it has one. It keeps them in `launcher.cfg` in
+rate, sound and, in the debug build, the debug panel are chosen, and built mods are turned on and
+off (see [Playing built mods](mods.md#playing-built-mods)). It keeps them in `launcher.cfg` in
 the user's settings folder (`~/Library/Application Support/DC2 Toolkit/Dark Chronicle/` on macOS,
 `~/.local/share/DC2 Toolkit/Dark Chronicle/` on Linux), and options given with it still win. For MPEG2 movies, run
 `python3 -I tools/movie_sdk.py` (or install FFmpeg for `pkg-config`) and add `--movies` to the native build. Engine mods are checked
@@ -80,6 +79,7 @@ The first build makes the container image, which takes a while; later builds reu
 | `dc2tk mod watch extracted/scripts dc2.iso <id>...` | Rebuild mods into the native port's override folder whenever they change and make the running debug build reload them (see [Hot reloading](mods.md#hot-reloading-in-the-native-port)). |
 | `dc2tk mod pack <id> [-o DIR] [--disc dc2.iso]` | Pack a mod into `<id>-<version>.dc2mod`, a zip of its files that is the same bytes every time (see [Sharing a mod](mods.md#sharing-a-mod)). |
 | `dc2tk mod install <file>.dc2mod` | Copy a packed mod into the mods folder, replacing an older version of it. |
+| `dc2tk mod build <tree> <disc> <id> [-o DIR]` | Build a mod into `<id>-<version>.dc2pak`, the game files it changes, for the native port's launcher (see [Playing built mods](mods.md#playing-built-mods)). |
 
 ## Searching and inspecting the game
 

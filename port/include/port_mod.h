@@ -43,6 +43,7 @@ int port_mod_loaded(const char *id);
 const char *port_setting(const char *name);
 void port_settings_file(const char *path);
 void port_setting_set(const char *name, const char *value);
+void port_settings_beneath(const char *text);
 void port_mod_command(const char *name, PortCommandRun run, const char *help);
 void port_mod_panel(const char *name, PortPanelDraw draw);
 
