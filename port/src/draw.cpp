@@ -12,7 +12,7 @@
 #include <vector>
 
 enum { CACHE_LIMIT = 4096, CACHE_IDLE_FRAMES = 300, COPY_LIMIT = 8 };
-enum { LAYOUT_RIGHT = 511, WIDE_FRAME_LIMIT = 16, UV_WRAP = 1 << 14 };
+enum { LAYOUT_WIDTH = 512, LAYOUT_RIGHT = 511, WIDE_FRAME_LIMIT = 16, UV_WRAP = 1 << 14, HUD_SIDE = 85 };
 enum {
     GS_PRIM = 0x00, GS_RGBAQ = 0x01, GS_ST = 0x02, GS_UV = 0x03, GS_XYZF2 = 0x04, GS_XYZ2 = 0x05, GS_TEX0 = 0x06,
     GS_CLAMP = 0x08, GS_FOG = 0x0a, GS_XYZF3 = 0x0c, GS_XYZ3 = 0x0d, GS_TEX1 = 0x14, GS_XYOFFSET = 0x18,
@@ -112,6 +112,24 @@ int gs_read_shift(u_int base) {
     for (int i = 0; i < WIDE_FRAME_LIMIT; ++i)
         if (wide_frames[i].base == base) return wide_frames[i].shift;
     return 0;
+}
+
+static int hud_spread;
+
+extern "C" void port_hud(int spread) {
+    hud_spread = spread;
+}
+
+static void spread_hud(RenderVertex *vertices, int count) {
+    if (!hud_spread || !frame_shift) return;
+    float middle = (float)(frame_shift + LAYOUT_WIDTH / 2), low = vertices[0].x, high = vertices[0].x;
+    for (int i = 1; i < count; ++i) {
+        low = std::fmin(low, vertices[i].x);
+        high = std::fmax(high, vertices[i].x);
+    }
+    int side = frame_shift < HUD_SIDE ? frame_shift : HUD_SIDE;
+    float move = high <= middle ? (float)-side : low >= middle ? (float)side : 0.0f;
+    for (int i = 0; i < count; ++i) vertices[i].x += move;
 }
 
 static u_long shifted_scissor(u_long value) {
@@ -611,6 +629,7 @@ static void kick(u_int x, u_int y, u_int z, int fog, int draw) {
             out[3] = corner_b, out[4] = b, out[5] = corner_c;
             count = 6;
         }
+        spread_hud(out, count);
         render_source = RENDER_SOURCE_GS;
         render_draw(&state, topology, out, count);
     }

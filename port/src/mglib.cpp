@@ -13,7 +13,7 @@ void mgEndFrameRetail(mgCDrawManager *manager);
 void mgSetPkTextureRepeatRetail(sceGsClamp clamp);
 void mgSetPkFrameBufferRetail(int fbp, int width, int height, int psm);
 
-enum { LAYOUT_WIDTH = 512 };
+enum { LAYOUT_WIDTH = 512, UV_MASK = 0x3fff };
 
 static int rotate_priority = -1;
 static int display_target;
@@ -104,6 +104,12 @@ extern "C" int port_screen_width(void) {
     return mgScreenWidth == LAYOUT_WIDTH && port_world_shown() ? render_frame_width() : mgScreenWidth;
 }
 
+extern "C" int port_texture_shift(unsigned int base) { return gs_read_shift(base); }
+
+extern "C" int port_wide_width(void) {
+    return mgScreenWidth == LAYOUT_WIDTH ? render_frame_width() : mgScreenWidth;
+}
+
 PORT_OVERRIDE void mgSetPkFrameBuffer(int fbp, int width, int height, int psm) {
     mgSetPkFrameBufferRetail(fbp, width, height, psm);
     int wide = mgScreenWidth == LAYOUT_WIDTH ? port_screen_width() : mgScreenWidth;
@@ -183,10 +189,10 @@ PORT_OVERRIDE void mgSetPkMoveImage(sceGsTex0 *src, mgRect<int> src_rect, sceGsT
     gs_write(SCE_GS_TEX0_1, *(u_long *)src);
     gs_write(SCE_GS_PRIM, 0x116);
     gs_write(SCE_GS_RGBAQ, 0x80808080);
-    gs_write(SCE_GS_UV, (u_long)src_rect.left | (u_long)src_rect.top << 16);
+    gs_write(SCE_GS_UV, ((u_long)src_rect.left & UV_MASK) | ((u_long)src_rect.top & UV_MASK) << 16);
     gs_write(SCE_GS_XYZF2, (u_long)((mgScreenOffx << 4) + dst_rect.left) |
                                (u_long)((mgScreenOffy << 4) + dst_rect.top) << 16);
-    gs_write(SCE_GS_UV, (u_long)src_rect.right | (u_long)src_rect.bottom << 16);
+    gs_write(SCE_GS_UV, ((u_long)src_rect.right & UV_MASK) | ((u_long)src_rect.bottom & UV_MASK) << 16);
     gs_write(SCE_GS_XYZF2, (u_long)((mgScreenOffx << 4) + dst_rect.right) |
                                (u_long)((mgScreenOffy << 4) + dst_rect.bottom) << 16);
     mgSetPkFrameBuffer(-1, -1, -1, -1);

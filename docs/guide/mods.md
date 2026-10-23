@@ -339,17 +339,17 @@ A mod with `"targets": ["native"]` may use features only the native port has. Su
 | `render.aspect` | `"16:9"`, `"21:9"` and so on: towns and dungeons widen to it, menus and the title stay 4:3 | `--aspect 16:9` |
 | `render.scale` | `1` to `4`, or `"auto"` to render at the window's resolution | `--scale` |
 | `render.msaa` | `1`, `2`, `4` or `8` samples | `--msaa` |
-| `render.width`, `render.height` | the window's size | |
+| `render.window` | the window's size, `"1920x1080"` | `--window 1920x1080` |
 | `render.fullscreen` | `true` or `false`; Alt+Enter or F11 toggles it while playing | `--fullscreen` |
 | `render.vsync` | `true` waits for the display's refresh | `--vsync` |
 | `render.filter` | `"nearest"` for sharp pixels, else smooth | |
-| `render.smooth`, `render.refresh` | `true` draws frames between the game's updates (below); `render.refresh` caps them a second, `0` for the display's rate | `--smooth 144`, `--smooth 0` |
+| `render.smooth` | `false`, `"display"` to draw frames between the game's updates (below) at the display's rate, or a rate such as `144` | `--smooth 144`, `--smooth 0` |
 
 ```json
 "port": {"settings": {"render.aspect": "16:9", "render.scale": "auto"}}
 ```
 
-The port's options win over these.
+The port's options win over these, and so do the choices made in its launcher.
 
 **The display mod.** `port/display/` is a mod, `dc2tk.display`, that gives players these choices as settings of their own (aspect, window size, fullscreen, vsync, render scale, multisampling, filter) and sets them through `port_mod.h`. Link or copy the folder into the mods folder and choose it in a [mod set](#mod-sets):
 

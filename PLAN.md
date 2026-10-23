@@ -545,7 +545,7 @@ change the second-to-last does not.
 Built: `--scale 1-4|auto` (auto renders at the smallest whole multiple that covers the window and
 scales down to fit it exactly), `--msaa 1|2|4|8`, `--fullscreen` (Alt+Enter or F11 toggles it),
 `--vsync`, a window size, and nearest or linear scaling; each is also a port setting
-(`render.scale`, `render.width`, `render.fullscreen`, ...) and a function of `port_mod.h` 1.1,
+(`render.scale`, `render.window`, `render.fullscreen`, ...) and a function of `port_mod.h` 1.1,
 which the display mod (`port/display/`, `dc2tk.display`) sets from its player-facing settings.
 The window is HiDPI on macOS. Left to do:
 

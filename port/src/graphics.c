@@ -51,7 +51,10 @@ void port_graphics_tick(void) {
     if (!next_field) next_field = now + port_field_period;
     if (now < next_field) return;
     next_field += port_field_period;
-    if (now >= next_field) next_field = now + port_field_period;
+    if (now >= next_field) {
+        next_field = now + port_field_period;
+        port_stats.dropped_fields++;
+    }
     graphics_field();
 }
 

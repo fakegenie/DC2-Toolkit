@@ -1000,7 +1000,7 @@
   {
     "file": "ps2/include/mglib.hpp",
     "find": "extern int mgScreenWidth;",
-    "replace": "extern int mgScreenWidth;\nextern \"C\" int port_screen_width(void);\nextern \"C\" void port_outline_span(const void *key, float *min_xy, float *max_xy);"
+    "replace": "extern int mgScreenWidth;\nextern \"C\" int port_screen_width(void);\nextern \"C\" int port_wide_width(void);\nextern \"C\" int port_texture_shift(unsigned int base);\nextern \"C\" void port_hud(int spread);\nextern \"C\" void port_outline_span(const void *key, float *min_xy, float *max_xy);"
   },
   {
     "file": "ps2/src/editloop.cpp",
@@ -1015,7 +1015,7 @@
   {
     "file": "ps2/src/mglib.cpp",
     "find": "        prim.TextureCrd(1, 1);\n        prim.Vertex(0, 0, 0);\n        prim.TextureCrd(texture.width - 1, texture.height - 1);\n        prim.Vertex(mgScreenWidth, mgScreenHeight, 0);",
-    "replace": "        prim.TextureCrd(1, 1);\n        prim.Vertex((mgScreenWidth - port_screen_width()) / 2, 0, 0);\n        prim.TextureCrd(texture.width - 1, texture.height - 1);\n        prim.Vertex((mgScreenWidth + port_screen_width()) / 2, mgScreenHeight, 0);"
+    "replace": "        int side = (port_screen_width() - mgScreenWidth) / 2;\n        int lift = port_texture_shift(texture.tex0.TBP0);\n        prim.TextureCrd(1 - lift, 1);\n        prim.Vertex(-side, 0, 0);\n        prim.TextureCrd(mgScreenWidth + 2 * side - 1 - lift, texture.height - 1);\n        prim.Vertex(mgScreenWidth + side, mgScreenHeight, 0);"
   },
   {
     "file": "ps2/src/editloop.cpp",
@@ -1040,7 +1040,7 @@
   {
     "file": "ps2/src/mainloop.cpp",
     "find": "int GetNowLoopNo() {\n    return LoopNo;\n}",
-    "replace": "int GetNowLoopNo() {\n    return LoopNo;\n}\n\nextern \"C\" int port_town_shows_world(void);\nextern \"C\" int port_dungeon_shows_world(void);\n\nextern \"C\" int port_world_shown(void) {\n    switch (LoopNo) {\n        case LOOP_EDIT: return port_town_shows_world();\n        case LOOP_DUNGEON: return port_dungeon_shows_world();\n        default: return 0;\n    }\n}"
+    "replace": "int GetNowLoopNo() {\n    return LoopNo;\n}\n\nextern \"C\" int port_town_shows_world(void);\nextern \"C\" int port_dungeon_shows_world(void);\nextern \"C\" int port_title_shows_world(void);\n\nextern \"C\" int port_world_shown(void) {\n    switch (LoopNo) {\n        case LOOP_EDIT: return port_town_shows_world();\n        case LOOP_DUNGEON: return port_dungeon_shows_world();\n        case LOOP_TITLE: return port_title_shows_world();\n        default: return 0;\n    }\n}"
   },
   {
     "file": "ps2/src/outline.cpp",
@@ -1057,5 +1057,40 @@
     "file": "ps2/src/outline.cpp",
     "find": "    int max_corner[4];\n    int min_corner[4];\n    mgFotI4(max_corner, max_xy);",
     "replace": "    port_outline_span(this, min_xy, max_xy);\n\n    int max_corner[4];\n    int min_corner[4];\n    mgFotI4(max_corner, max_xy);"
+  },
+  {
+    "file": "ps2/src/nowload.cpp",
+    "find": "        mgRect<int> source(0, 0, (mgScreenWidth - 1) * 16, (mgScreenHeight - 1) * 16);",
+    "replace": "        int side = (port_screen_width() - mgScreenWidth) / 2;\n        mgRect<int> source(-side * 16, 0, (mgScreenWidth + side - 1) * 16, (mgScreenHeight - 1) * 16);"
+  },
+  {
+    "file": "ps2/src/nowload.cpp",
+    "find": "    prim.TextureCrd(0, 0);\n    prim.Vertex(0, 0, 0);\n    prim.TextureCrd(mgScreenWidth + 1, mgScreenHeight + 1);\n    prim.Vertex(mgScreenWidth, mgScreenHeight, 0);",
+    "replace": "    int side = (port_screen_width() - mgScreenWidth) / 2;\n    prim.TextureCrd(0, 0);\n    prim.Vertex(-side, 0, 0);\n    prim.TextureCrd(mgScreenWidth + 2 * side + 1, mgScreenHeight + 1);\n    prim.Vertex(mgScreenWidth + side, mgScreenHeight, 0);"
+  },
+  {
+    "file": "ps2/src/title.cpp",
+    "find": "static TITLE_INFO *TitleInfo;",
+    "replace": "static TITLE_INFO *TitleInfo;\n\nextern \"C\" int port_title_shows_world(void) {\n    return TitleInfo != NULL && TitleInfo->mode == TITLE_MODE_TITLE;\n}"
+  },
+  {
+    "file": "ps2/src/nowload.cpp",
+    "find": "    tex->EnterTexture(block, \"pause_work\", 0, mgScreenWidth, mgScreenHeight, 0x20, 0, 0, 0);\n\n    if (load_skip_img != 0) {\n        tex->EnterIMGFile(SkipImage, block, 0, 0);\n    }\n",
+    "replace": "    if (load_skip_img != 0) {\n        tex->EnterIMGFile(SkipImage, block, 0, 0);\n    }\n\n    tex->EnterTexture(block, \"pause_work\", 0, port_wide_width(), mgScreenHeight, 0x20, 0, 0, 0);\n"
+  },
+  {
+    "file": "ps2/src/dng_main.cpp",
+    "find": "    if (!NowTakePhoto()) {\n        DrawStatusBord();\n    }",
+    "replace": "    if (!NowTakePhoto()) {\n        port_hud(1);\n        DrawStatusBord();\n        port_hud(0);\n    }"
+  },
+  {
+    "file": "ps2/src/screeneffect.cpp",
+    "find": "    mgRect<int> source(0, 0, mgScreenWidth * 16, mgScreenHeight * 16);\n    mgRect<int> destination(0, 0, mgScreenWidth * 8, mgScreenHeight * 8);",
+    "replace": "    int side = (port_screen_width() - mgScreenWidth) / 2;\n    mgRect<int> source(-side * 16, 0, (mgScreenWidth + side) * 16, mgScreenHeight * 16);\n    mgRect<int> destination(0, 0, mgScreenWidth * 8, mgScreenHeight * 8);"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "        prim.Begin(MG_PRIM_SPRITE);\n        prim.Color(0, 0, 0, 0);\n        prim.Vertex(0, 0, 0);\n        prim.Vertex(shadow->width, shadow->height, 0);\n        prim.End();",
+    "replace": "        int side = (port_screen_width() - mgScreenWidth) / 2;\n        prim.Begin(MG_PRIM_SPRITE);\n        prim.Color(0, 0, 0, 0);\n        prim.Vertex(-side, 0, 0);\n        prim.Vertex(mgScreenWidth + side, shadow->height, 0);\n        prim.End();"
   }
 ]

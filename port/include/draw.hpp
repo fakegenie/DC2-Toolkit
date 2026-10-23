@@ -51,6 +51,8 @@ void gs_screen_mapping(float screen[4], float *depth);
 
 int visual_packet_draw(const void *common, const void *packet);
 void visual_next_frame();
+size_t visual_save(unsigned char *out);
+size_t visual_load(const unsigned char *in);
 void sprite_next_frame();
 
 struct ShadowSetup {

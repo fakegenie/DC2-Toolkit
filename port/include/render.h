@@ -96,6 +96,7 @@ typedef struct {
     uint32_t target_base;
     RenderState state;
     float bounds[4];
+    float uv[4];
     int command;
     int pass;
     int merged;

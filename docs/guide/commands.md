@@ -26,8 +26,14 @@ Run `dc2tk help <command>` to see all options for any command.
 write the ISO too; both builds use the chosen mods, executable tables and native declarations.
 The native build needs clang 21, binutils (llvm-objcopy and llvm-nm on macOS), Python 3 and SDL3 development files. A local SDK in
 `build/port/sdk` takes precedence over `pkg-config sdl3`; `python3 -I tools/port_sdk.py`
-installs that SDK. Run the binary with `--graphics modded.iso`. It warns when the
-mounted disc's executable differs from the one used for the build. For MPEG2 movies, run
+installs that SDK. Run the binary with a disc image, `build/port/darkchronicle modded.iso`, to start
+the game straight away; it warns when the mounted disc's executable differs from the one used for
+the build. Run it without one to open the launcher, where the disc, window, widescreen, high frame
+rate, sound and, in the debug build, the debug panel are chosen. Its Mods page lists the mod sets
+`dc2tk play DISC --native --set FILE` has built in `build/sets/`, with the mods each holds (the
+`mods.txt` beside its overrides), and Play starts the chosen set's own binary when it has one. It keeps them in `launcher.cfg` in
+the user's settings folder (`~/Library/Application Support/DC2 Toolkit/Dark Chronicle/` on macOS,
+`~/.local/share/DC2 Toolkit/Dark Chronicle/` on Linux), and options given with it still win. For MPEG2 movies, run
 `python3 -I tools/movie_sdk.py` (or install FFmpeg for `pkg-config`) and add `--movies` to the native build. Engine mods are checked
 with clang as well as MWCC by `mod check --native`. A mod cannot override a function supplied by `port/src`. A chosen mod's `"port"` sources are compiled into the binary too (see [Native port mods](mods.md#native-port-mods)); `python3 -I tools/port.py --mod mods/<name>` does the same for the port's own build.
 

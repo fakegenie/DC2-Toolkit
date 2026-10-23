@@ -197,7 +197,7 @@ void debug_finish(DebugReply *reply) {
 static const DebugCommand *find_command(const char *name) {
     const DebugCommand *tables[] = {debug_core_commands, debug_scenario_commands, debug_capture_commands,
                                     debug_replay_commands, debug_savestate_commands, debug_reload_commands,
-                                    debug_overlay_commands};
+                                    debug_overlay_commands, debug_clip_commands};
     for (const DebugCommand *table : tables)
         for (const DebugCommand *command = table; command->name; ++command)
             if (!strcmp(command->name, name)) return command;
@@ -466,7 +466,7 @@ static int command_help(const DebugArgs *args, DebugReply *reply) {
     (void)args;
     const DebugCommand *tables[] = {debug_core_commands, debug_scenario_commands, debug_capture_commands,
                                     debug_replay_commands, debug_savestate_commands, debug_reload_commands,
-                                    debug_overlay_commands};
+                                    debug_overlay_commands, debug_clip_commands};
     debug_print(reply, "{\"commands\": [");
     int first = 1;
     for (const DebugCommand *table : tables)
@@ -518,16 +518,16 @@ static void print_stats(DebugReply *reply, const PortStats *s) {
     debug_print(reply,
                 "{\"draw_calls\": %u, \"mesh_calls\": %u, \"gpu_commands\": %u, \"render_passes\": %u, "
                 "\"pipeline_changes\": %u, \"vertices\": %u, \"texture_uploads\": %u, \"upload_bytes\": %u, "
-                "\"downloads\": %u, \"texture_decodes\": %u, \"target_creates\": %u, \"texture_renames\": %u, \"replays\": %u, \"replay_us\": %llu, \"mesh_builds\": %u, "
+                "\"downloads\": %u, \"texture_decodes\": %u, \"target_creates\": %u, \"texture_renames\": %u, \"replays\": %u, \"replay_us\": %llu, \"dropped_fields\": %u, \"mesh_builds\": %u, "
                 "\"sorted_draws\": %u, \"allocations\": %u, \"frees\": %u, \"allocation_bytes\": %u, "
                 "\"disc_reads\": %u, \"disc_bytes\": %u, \"textures_live\": %u, \"pipelines\": %u, "
                 "\"cached_textures\": %u, \"cached_meshes\": %u, \"arena_used\": %llu, \"arena_peak\": %llu, "
-                "\"arena_blocks\": %u}",
+                "\"arena_blocks\": %u, \"audio_ms\": %u}",
                 s->draw_calls, s->mesh_calls, s->gpu_commands, s->render_passes, s->pipeline_changes, s->vertices,
                 s->texture_uploads, s->upload_bytes, s->downloads, s->texture_decodes, s->target_creates, s->texture_renames,
-                s->replays, (unsigned long long)(s->replay_ns / 1000), s->mesh_builds, s->sorted_draws, s->allocations, s->frees, s->allocation_bytes, s->disc_reads,
+                s->replays, (unsigned long long)(s->replay_ns / 1000), s->dropped_fields, s->mesh_builds, s->sorted_draws, s->allocations, s->frees, s->allocation_bytes, s->disc_reads,
                 s->disc_bytes, s->textures_live, s->pipelines, s->cached_textures, s->cached_meshes,
-                (unsigned long long)s->arena_used, (unsigned long long)s->arena_peak, s->arena_blocks);
+                (unsigned long long)s->arena_used, (unsigned long long)s->arena_peak, s->arena_blocks, s->audio_ms);
 }
 
 static int command_stats(const DebugArgs *args, DebugReply *reply) {
@@ -744,7 +744,7 @@ extern const DebugCommand debug_core_commands[] = {
     {"debugflag", command_debug_flag, 1, "value=0|1 sets the engine's DebugFlag (Start+Select opens the debug menu)"},
     {"window", command_window, 1, "show or hide the debug window"},
     {"windowshot", debug_window_shot, 1, "the debug window as PNG, to check the UI"},
-    {"tab", debug_window_tab, 1, "select a debug window tab: name=Performance|Game|Scenario|Capture|Replay|Savestates|Log"},
+    {"tab", debug_window_tab, 1, "select a debug window tab: name=Performance|Game|Scenario|Capture|Clips|Replay|Savestates|Log"},
     {"quit", command_quit, 1, "exit the game"},
     {NULL, NULL, 0, NULL},
 };
@@ -783,6 +783,10 @@ extern "C" int debug_event(const void *event) {
         if (e->key.scancode == SDL_SCANCODE_F6) {
             debug_paused = 1;
             debug_steps = 1;
+            return 1;
+        }
+        if (e->key.scancode == SDL_SCANCODE_F8) {
+            debug_clip_hotkey();
             return 1;
         }
     }
@@ -855,6 +859,7 @@ extern "C" void debug_frame_exit(void) {
     debug_capture_frame();
     debug_replay_frame();
     debug_savestate_frame();
+    debug_clip_frame();
     debug_reload_frame();
     debug_scenario_frame();
     debug_run_queued();

@@ -3,6 +3,7 @@
 #include "midi.h"
 #include "cdvd.h"
 #include "port_mod.h"
+#include "port_stats.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -186,12 +187,13 @@ void audio_render(int16_t *output, size_t frames) {
 int audio_init(int enabled) {
     audio_reset();
 #ifdef PORT_GRAPHICS
-    if (enabled) {
-        SDL_AudioSpec spec = {.format = SDL_AUDIO_S16, .channels = 2, .freq = 48000};
-        if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) { fprintf(stderr, "sound: %s\n", SDL_GetError()); return 0; }
-        audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
-        if (!audio || !SDL_ResumeAudioStreamDevice(audio)) { fprintf(stderr, "sound: %s\n", SDL_GetError()); return 0; }
+    SDL_AudioSpec spec = {.format = SDL_AUDIO_S16, .channels = 2, .freq = 48000};
+    if (SDL_InitSubSystem(SDL_INIT_AUDIO)) audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
+    if (audio && (!SDL_SetAudioStreamGain(audio, enabled ? 1.0f : 0.0f) || !SDL_ResumeAudioStreamDevice(audio))) {
+        SDL_DestroyAudioStream(audio);
+        audio = NULL;
     }
+    if (!audio && enabled) { fprintf(stderr, "sound: %s\n", SDL_GetError()); return 0; }
 #else
     (void)enabled;
 #endif
@@ -205,6 +207,7 @@ void audio_frame(void) {
 #ifdef PORT_GRAPHICS
     if (!audio) return;
     float fill = (float)SDL_GetAudioStreamQueued(audio) / (float)sizeof(samples);
+    port_stats.audio_ms = (uint32_t)(fill * 20);
     if (fill >= AUDIO_LIMIT) return;
     float ratio = 1.0f + (fill - AUDIO_TARGET) * AUDIO_PULL;
     SDL_SetAudioStreamFrequencyRatio(audio, ratio < 1.0f - AUDIO_SWAY ? 1.0f - AUDIO_SWAY : ratio > 1.0f + AUDIO_SWAY ? 1.0f + AUDIO_SWAY : ratio);

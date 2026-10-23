@@ -3,6 +3,7 @@
 #include "port_stats.h"
 #include "smooth.h"
 #include "shaders.h"
+#include "icon.h"
 #include <SDL3/SDL.h>
 #if defined(__APPLE__) && !defined(SDL_PLATFORM_IOS)
 #include <objc/message.h>
@@ -447,6 +448,7 @@ int render_init(void) {
     window = SDL_CreateWindow("Dark Chronicle", window_width, window_height,
                               WINDOW_FLAGS | (fullscreen ? SDL_WINDOW_FULLSCREEN : 0));
     if (!window || !SDL_ClaimWindowForGPUDevice(device, window)) render_error("window");
+    port_window_icon(window);
     if (background) render_send_back(window);
     apply_present_mode();
     depth_format = SDL_GPUTextureSupportsFormat(device, SDL_GPU_TEXTUREFORMAT_D24_UNORM, SDL_GPU_TEXTURETYPE_2D,
@@ -1201,6 +1203,7 @@ static int new_texture(int width, int height, int scale, int samples) {
 
 int render_target(uint32_t base, int width, int height) {
     if (width < TARGET_WIDTH) width = TARGET_WIDTH;
+    if (width < frame_width) width = frame_width;
     if (height < TARGET_HEIGHT) height = TARGET_HEIGHT;
     for (int i = 1; i < TEXTURE_LIMIT; ++i) {
         Texture *texture = &textures[i];
@@ -1584,11 +1587,17 @@ static void record(int source, const RenderState *state, int topology, int cull,
     if (!vertices) return;
     entry->bounds[0] = entry->bounds[2] = vertices[0].x;
     entry->bounds[1] = entry->bounds[3] = vertices[0].y;
+    entry->uv[0] = entry->uv[2] = vertices[0].u;
+    entry->uv[1] = entry->uv[3] = vertices[0].v;
     for (int i = 1; i < count; ++i) {
         if (vertices[i].x < entry->bounds[0]) entry->bounds[0] = vertices[i].x;
         if (vertices[i].y < entry->bounds[1]) entry->bounds[1] = vertices[i].y;
         if (vertices[i].x > entry->bounds[2]) entry->bounds[2] = vertices[i].x;
         if (vertices[i].y > entry->bounds[3]) entry->bounds[3] = vertices[i].y;
+        if (vertices[i].u < entry->uv[0]) entry->uv[0] = vertices[i].u;
+        if (vertices[i].v < entry->uv[1]) entry->uv[1] = vertices[i].v;
+        if (vertices[i].u > entry->uv[2]) entry->uv[2] = vertices[i].u;
+        if (vertices[i].v > entry->uv[3]) entry->uv[3] = vertices[i].v;
     }
 }
 
@@ -1756,6 +1765,20 @@ void render_shadow(const RenderState *state, const RenderVertex *vertices, const
     shadow_points = NULL;
 }
 
+static int extends_last(const Command *command, const MeshUniforms *uniforms, const float *bones) {
+    const Command *last = pending_count ? &pending[pending_count - 1] : NULL;
+    if (!last || last->model < 0 || !command->resident || !last->resident) return 0;
+    if (last->offset + (uint32_t)last->count * sizeof(MeshVertex) != command->offset) return 0;
+    if (last->key != command->key || last->texture != command->texture || last->color != command->color ||
+        last->destination != command->destination || last->sampler != command->sampler ||
+        last->blend_constant != command->blend_constant || memcmp(&last->fragment, &command->fragment, sizeof last->fragment) ||
+        memcmp(&last->scissor, &command->scissor, sizeof last->scissor))
+        return 0;
+    if (memcmp(uniforms, &models[last->model], offsetof(MeshUniforms, flags) + 3 * sizeof(uint32_t))) return 0;
+    if (!bones != !last->bones) return 0;
+    return !bones || !memcmp(bones, bone_sets[last->bones], sizeof bone_sets[0]);
+}
+
 void render_mesh(const RenderState *state, int cull, const MeshUniforms *uniforms, const float *bones,
                  const MeshVertex *vertices, int count, int resident) {
     if (!bound || count <= 0 || render_toggles.no_models) return;
@@ -1783,6 +1806,11 @@ void render_mesh(const RenderState *state, int cull, const MeshUniforms *uniform
     if (!prepared ||
         (resident < 0 && !store_vertices(&command, vertices, (uint32_t)(count * (int)sizeof(MeshVertex)), count, sizeof(MeshVertex)))) {
         if (capturing) record(RENDER_SOURCE_MESH, state, RENDER_TRIANGLES, cull, count, NULL, -1, 0, uniforms);
+        return;
+    }
+    if (extends_last(&command, uniforms, bones)) {
+        pending[pending_count - 1].count += count;
+        if (capturing) record(RENDER_SOURCE_MESH, state, RENDER_TRIANGLES, cull, count, NULL, command_serial - 1, 1, uniforms);
         return;
     }
     command.model = model_count;
@@ -1948,11 +1976,8 @@ static void apply_quality(void) {
     restore_slot = 0;
 }
 
-static void present_texture(SDL_GPUCommandBuffer *buffer, SDL_GPUTexture *color, int scale, int width, int height) {
-    SDL_GPUTexture *swapchain = NULL;
-    Uint32 window_width = 0, window_height = 0;
-    if (!SDL_WaitAndAcquireGPUSwapchainTexture(buffer, window, &swapchain, &window_width, &window_height))
-        render_error("swapchain");
+static void show_texture(SDL_GPUCommandBuffer *buffer, SDL_GPUTexture *swapchain, Uint32 window_width,
+                         Uint32 window_height, SDL_GPUTexture *color, int scale, int width, int height) {
     if (!swapchain || !color) return;
     float aspect = (float)width * PIXEL_ASPECT / (float)height;
     float shown_height = (float)window_width / aspect < (float)window_height ? (float)window_width / aspect
@@ -1970,6 +1995,14 @@ static void present_texture(SDL_GPUCommandBuffer *buffer, SDL_GPUTexture *color,
     blit.filter = nearest ? SDL_GPU_FILTER_NEAREST : SDL_GPU_FILTER_LINEAR;
     SDL_BlitGPUTexture(buffer, &blit);
     if (auto_scale) wanted_scale = clamp_scale(((int)blit.destination.h + height - 1) / height);
+}
+
+static void present_texture(SDL_GPUCommandBuffer *buffer, SDL_GPUTexture *color, int scale, int width, int height) {
+    SDL_GPUTexture *swapchain = NULL;
+    Uint32 window_width = 0, window_height = 0;
+    if (!SDL_WaitAndAcquireGPUSwapchainTexture(buffer, window, &swapchain, &window_width, &window_height))
+        render_error("swapchain");
+    show_texture(buffer, swapchain, window_width, window_height, color, scale, width, height);
 }
 
 static void start_recording(Recording *frame) {
@@ -2691,8 +2724,18 @@ int render_replay(float alpha) {
     blend_models(frame, before, alpha);
     SDL_GPUCommandBuffer *buffer = SDL_AcquireGPUCommandBuffer(device);
     if (!buffer) return 0;
-    if (!upload_replay_vertices(buffer, frame, before, alpha) || !upload_replay_models(buffer, frame)) {
+    SDL_GPUTexture *swapchain = NULL;
+    Uint32 window_width = 0, window_height = 0;
+    int paced = !render_toggles.unpaced;
+    if (paced && (!SDL_AcquireGPUSwapchainTexture(buffer, window, &swapchain, &window_width, &window_height) ||
+                  !swapchain)) {
         SDL_CancelGPUCommandBuffer(buffer);
+        return 0;
+    }
+    if (!upload_replay_vertices(buffer, frame, before, alpha) || !upload_replay_models(buffer, frame)) {
+        show_texture(buffer, swapchain, window_width, window_height, frame->shown, frame->shown_scale,
+                     frame->shown_width, frame->shown_height);
+        SDL_SubmitGPUCommandBuffer(buffer);
         return 0;
     }
     for (int i = 0; i < frame->step_count; ++i) {
@@ -2709,9 +2752,11 @@ int render_replay(float alpha) {
         SDL_CopyGPUTextureToTexture(copy, &step->from, &step->to, step->copy_width, step->copy_height, 1, false);
         SDL_EndGPUCopyPass(copy);
     }
-    if (!render_toggles.unpaced)
-        present_texture(buffer, frame->shown, frame->shown_scale, frame->shown_width, frame->shown_height);
+    if (paced)
+        show_texture(buffer, swapchain, window_width, window_height, frame->shown, frame->shown_scale,
+                     frame->shown_width, frame->shown_height);
     SDL_SubmitGPUCommandBuffer(buffer);
+    smooth_shown();
     port_stats.replays++;
     port_debug_replayed(alpha);
     return 1;
@@ -2748,6 +2793,7 @@ void render_present(int target, int width, int height) {
         return;
     }
     smooth_presented();
+    if (recordings[shown_slot].valid && !smooth_due()) return;
     if (render_replay(0.0f)) return;
     buffer = command_buffer();
     present_texture(buffer, textures[target].color, textures[target].scale, width, height);

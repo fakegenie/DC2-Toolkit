@@ -109,6 +109,11 @@ void debug_window_start(void) {
     info.ColorTargetFormat = canvas_format;
     info.MSAASamples = SDL_GPU_SAMPLECOUNT_1;
     ImGui_ImplSDLGPU3_Init(&info);
+    const char *wanted = port_setting("debug.window");
+    if (wanted && !strcmp(wanted, "false")) {
+        visible = 0;
+        SDL_HideWindow(window);
+    }
     if (render_background()) {
         render_send_back(window);
         render_send_back(render_window());
@@ -459,6 +464,10 @@ void debug_window_draw(void) {
         }
         if (tab("Capture")) {
             debug_capture_panel();
+            ImGui::EndTabItem();
+        }
+        if (tab("Clips")) {
+            debug_clip_panel();
             ImGui::EndTabItem();
         }
         if (tab("Replay")) {

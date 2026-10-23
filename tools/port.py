@@ -100,6 +100,8 @@ PROFILE_PROJECT = """// !$*UTF8*$!
 IOS_FRAMEWORKS = ["AVFoundation", "AudioToolbox", "CoreBluetooth", "CoreGraphics", "CoreHaptics", "CoreMedia",
                   "CoreMotion", "CoreVideo", "Foundation", "GameController", "Metal", "OpenGLES", "QuartzCore", "UIKit",
                   "UniformTypeIdentifiers"]
+IOS_ICONS = {"AppIcon60x60@2x.png": 120, "AppIcon60x60@3x.png": 180, "AppIcon76x76@2x~ipad.png": 152,
+             "AppIcon83.5x83.5@2x~ipad.png": 167}
 LOCALISED = {"mainloop": ["MainBuffer"], "eventedit": ["_Z10VectMatMulPfS_PA4_f"]}
 ALIASES = {
     "BuffWorkData__2": "BuffWorkData",
@@ -375,6 +377,8 @@ def app_info(kind, identifier):
         "CFBundleDisplayName": "Dark Chronicle",
         "CFBundleExecutable": "DarkChronicle",
         "CFBundleIdentifier": identifier,
+        "CFBundleIcons": {"CFBundlePrimaryIcon": {"CFBundleIconFiles": ["AppIcon60x60"]}},
+        "CFBundleIcons~ipad": {"CFBundlePrimaryIcon": {"CFBundleIconFiles": ["AppIcon60x60", "AppIcon76x76", "AppIcon83.5x83.5"]}},
         "CFBundleInfoDictionaryVersion": "6.0",
         "CFBundleName": "DarkChronicle",
         "CFBundlePackageType": "APPL",
@@ -399,6 +403,9 @@ def bundle(kind, executable, disc, identifier):
     app.mkdir(parents=True, exist_ok=True)
     shutil.copy2(executable, app / "DarkChronicle")
     (app / "Info.plist").write_bytes(plistlib.dumps(app_info(kind, identifier), fmt=plistlib.FMT_BINARY))
+    for name, pixels in IOS_ICONS.items():
+        subprocess.run(["sips", "-z", str(pixels), str(pixels), str(PORT / "launcher" / "icon-ios.png"), "--out", str(app / name)],
+                       check=True, capture_output=True)
     copy = app / "dc2.iso"
     if not copy.exists() or copy.stat().st_size != disc.stat().st_size or copy.stat().st_mtime < disc.stat().st_mtime:
         copy.unlink(missing_ok=True)

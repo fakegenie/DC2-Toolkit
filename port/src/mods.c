@@ -29,10 +29,7 @@ int port_mod_loaded(const char *id) {
     return 0;
 }
 
-static void read_settings(void) {
-    settings_read = 1;
-    char path[1280];
-    snprintf(path, sizeof path, "%s/dc2tk-port.cfg", port_overrides_folder());
+static void read_file(const char *path) {
     FILE *file = fopen(path, "r");
     if (!file) return;
     char line[SETTING_TEXT * 2];
@@ -48,11 +45,36 @@ static void read_settings(void) {
     fclose(file);
 }
 
+static void read_settings(void) {
+    settings_read = 1;
+    char path[1280];
+    snprintf(path, sizeof path, "%s/dc2tk-port.cfg", port_overrides_folder());
+    read_file(path);
+}
+
+void port_settings_file(const char *path) {
+    if (!settings_read) read_settings();
+    read_file(path);
+}
+
 const char *port_setting(const char *name) {
     if (!settings_read) read_settings();
-    for (int i = 0; i < setting_count; ++i)
+    for (int i = setting_count - 1; i >= 0; --i)
         if (!strcmp(setting_names[i], name)) return setting_values[i];
     return NULL;
+}
+
+void port_setting_set(const char *name, const char *value) {
+    if (!settings_read) read_settings();
+    for (int i = setting_count - 1; i >= 0; --i)
+        if (!strcmp(setting_names[i], name)) {
+            snprintf(setting_values[i], SETTING_TEXT, "%s", value);
+            return;
+        }
+    if (setting_count == SETTING_LIMIT) return;
+    snprintf(setting_names[setting_count], SETTING_TEXT, "%s", name);
+    snprintf(setting_values[setting_count], SETTING_TEXT, "%s", value);
+    setting_count++;
 }
 
 void port_mods_start(void) {

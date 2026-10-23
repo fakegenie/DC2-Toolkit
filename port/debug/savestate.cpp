@@ -1,4 +1,5 @@
 #include "debug.h"
+#include "draw.hpp"
 #include "imgui.h"
 #include "mainloop.hpp"
 #include "movie.h"
@@ -32,13 +33,13 @@ extern "C" {
 }
 
 enum { SLOT_LIMIT = 8, THUMB_WIDTH = 160, THUMB_HEIGHT = 120, PAGE = 4096, RUN_LIMIT = 1024, SAVE = 1, LOAD = 2 };
-enum { THUMB_BYTES = THUMB_WIDTH * THUMB_HEIGHT * 4, STATE_VERSION = 1 };
+enum { THUMB_BYTES = THUMB_WIDTH * THUMB_HEIGHT * 4, STATE_VERSION = 3 };
 
 typedef struct {
     char magic[8];
     uint32_t version;
     uint32_t regions;
-    unsigned char uuid[16];
+    unsigned char layout[16];
     uint32_t frame;
     int32_t loop;
     int32_t map;
@@ -87,6 +88,10 @@ static const char *const restored_objects[] = {
 static const char *const kept_symbols[][2] = {
     {"port_kernel.o", "_host_context"}, {"port_graphics.o", "_next_field"}, {"port_graphics.o", "_port_field_period"},
     {"port_draw.o", "__ZL5cache"}, {"port_draw.o", "__ZL12frame_target"}, {"port_draw.o", "__ZL12frame_number"},
+    {"port_draw.o", "__ZL8palettes"}, {"port_draw.o", "__ZL6copies"}, {"port_mg_visual.o", "__ZL11face_meshes"},
+    {"port_mg_visual.o", "__ZL12sorted_draws"}, {"port_mg_shadow.o", "__ZL12shadow_faces"},
+    {"port_mg_sprite.o", "__ZL14sprite_packets"}, {"port_mg_sprite.o", "__ZL16previous_packets"},
+    {"port_water.o", "__ZL5grids"},
 };
 
 static const char *const loop_names[] = {"menu", "town", "dungeon", "title", "character viewer", "texture viewer",
@@ -99,7 +104,7 @@ static int run_count;
 static size_t run_bytes;
 static int layout_state;
 static char layout_error[256];
-static unsigned char build_uuid[16];
+static uint64_t layout_id[2];
 static int objects_seen[sizeof restored_objects / sizeof restored_objects[0]];
 static int kept_seen[sizeof kept_symbols / sizeof kept_symbols[0]];
 static uint32_t thumbnail[THUMB_WIDTH * THUMB_HEIGHT];
@@ -133,7 +138,7 @@ static void add_run(uintptr_t start, uintptr_t end) {
 }
 
 static int restored_object(const char *object) {
-    if (strncmp(object, "port_", 5) && strncmp(object, "debug_", 6) && strncmp(object, "imgui_", 6)) return 1;
+    if (strncmp(object, "port_", 5) && strncmp(object, "mod_", 4) && strncmp(object, "imgui_", 6)) return 1;
     for (size_t i = 0; i < sizeof restored_objects / sizeof restored_objects[0]; ++i)
         if (!strcmp(object, restored_objects[i])) {
             objects_seen[i] = 1;
@@ -152,6 +157,17 @@ static int kept_symbol(const char *object, const char *symbol) {
 }
 
 #ifdef __APPLE__
+static int game_object(const char *object) {
+    return strncmp(object, "mod_", 4) && strncmp(object, "imgui_", 6);
+}
+
+static void fingerprint(const char *name, uint64_t address) {
+    uint64_t hash = UINT64_C(14695981039346656037);
+    for (const char *letter = name; *letter; ++letter) hash = (hash ^ (unsigned char)*letter) * UINT64_C(1099511628211);
+    layout_id[0] += hash ^ address;
+    layout_id[1] ^= (hash + address) * UINT64_C(0x9E3779B97F4A7C15);
+}
+
 static int read_layout(void) {
     const struct mach_header_64 *header = (const struct mach_header_64 *)_dyld_get_image_header(0);
     intptr_t slide = _dyld_get_image_vmaddr_slide(0);
@@ -162,11 +178,12 @@ static int read_layout(void) {
     int sections = 0;
     for (uint32_t i = 0; i < header->ncmds; ++i) {
         if (command->cmd == LC_SYMTAB) symtab = (const struct symtab_command *)command;
-        if (command->cmd == LC_UUID) memcpy(build_uuid, ((const struct uuid_command *)command)->uuid, 16);
         if (command->cmd == LC_SEGMENT_64) {
             const struct segment_command_64 *segment = (const struct segment_command_64 *)command;
             if (!strcmp(segment->segname, "__LINKEDIT")) linkedit = (uintptr_t)(segment->vmaddr + slide - segment->fileoff);
             const struct section_64 *section = (const struct section_64 *)(segment + 1);
+            for (uint32_t s = 0; s < segment->nsects; ++s)
+                if (strcmp(section[s].sectname, "__text")) fingerprint(section[s].sectname, section[s].addr);
             for (uint32_t s = 0; s < segment->nsects && sections < 8; ++s) {
                 if (strcmp(section[s].segname, "__DATA")) continue;
                 if (strcmp(section[s].sectname, "__data") && strcmp(section[s].sectname, "__bss") &&
@@ -196,7 +213,9 @@ static int read_layout(void) {
             objects++;
             continue;
         }
+        if (symbols[i].n_type == N_FUN && name[0] && game_object(object)) fingerprint(name, symbols[i].n_value);
         if (symbols[i].n_type != N_STSYM && symbols[i].n_type != N_GSYM) continue;
+        if (game_object(object)) fingerprint(name, symbols[i].n_value);
         uintptr_t address = (uintptr_t)(symbols[i].n_value + slide);
         if (symbols[i].n_type == N_GSYM) {
             void *found = name[0] == '_' ? dlsym(RTLD_MAIN_ONLY, name + 1) : NULL;
@@ -279,12 +298,25 @@ static std::vector<Run> memory_regions(void) {
     return regions;
 }
 
-static int allowed_region(uint64_t start, uint64_t size) {
-    for (int i = 0; i < run_count; ++i)
-        if (start >= runs[i].start && size <= runs[i].size && start - runs[i].start <= runs[i].size - size) return 1;
+static int inside_window(uint64_t start, uint64_t size) {
     uint64_t low = PORT_WINDOW + 0x10000000, high = PORT_WINDOW + 0x20000000;
     if (start >= low && size <= high - low && start - low <= high - low - size) return 1;
     return start == PORT_WINDOW + 0x70000000 && size == 16384;
+}
+
+static void restore_bytes(uint64_t start, const unsigned char *data, size_t size) {
+    if (inside_window(start, size)) {
+        if (data) memcpy((void *)(uintptr_t)start, data, size);
+        else memset((void *)(uintptr_t)start, 0, size);
+        return;
+    }
+    for (int i = 0; i < run_count; ++i) {
+        uint64_t low = start > runs[i].start ? start : runs[i].start;
+        uint64_t high = start + size < runs[i].start + runs[i].size ? start + size : runs[i].start + runs[i].size;
+        if (low >= high) continue;
+        if (data) memcpy((void *)(uintptr_t)low, data + (low - start), (size_t)(high - low));
+        else memset((void *)(uintptr_t)low, 0, (size_t)(high - low));
+    }
 }
 
 static size_t page_length(size_t size, size_t page) {
@@ -314,7 +346,7 @@ static const Header *slot_header(const Slot *slot) {
 static void save_state(Slot *slot) {
     std::vector<Run> regions = memory_regions();
     std::vector<unsigned char> maps;
-    size_t sound = audio_save(NULL);
+    size_t sound = audio_save(NULL) + visual_save(NULL);
     size_t size = sizeof(Header) + THUMB_BYTES + sound;
     for (const Run &region : regions) {
         size_t pages = (region.size + PAGE - 1) / PAGE;
@@ -336,7 +368,7 @@ static void save_state(Slot *slot) {
     memcpy(header.magic, "DC2STATE", 8);
     header.version = STATE_VERSION;
     header.regions = (uint32_t)regions.size();
-    memcpy(header.uuid, build_uuid, 16);
+    memcpy(header.layout, layout_id, 16);
     header.frame = debug_frame_total;
     header.loop = GetNowLoopNo();
     header.map = GetNowInitArg() ? GetNowInitArg()->map_no : -1;
@@ -367,7 +399,7 @@ static void save_state(Slot *slot) {
             at += length;
         }
     }
-    audio_save(at);
+    visual_save(at + audio_save(at));
     free(slot->data);
     slot->data = data;
     slot->size = size;
@@ -380,7 +412,7 @@ static const char *check_state(const unsigned char *data, size_t size) {
     if (size < sizeof(Header) + THUMB_BYTES) return "the savestate is truncated";
     const Header *header = (const Header *)data;
     if (memcmp(header->magic, "DC2STATE", 8) || header->version != STATE_VERSION) return "not a savestate of this version";
-    if (memcmp(header->uuid, build_uuid, 16)) return "the savestate is from a different build";
+    if (memcmp(header->layout, layout_id, 16)) return "the savestate is from a build with the game's code or data in other places";
     if (header->size != size) return "the savestate is truncated";
     const unsigned char *at = data + sizeof(Header) + THUMB_BYTES;
     const unsigned char *end = data + size;
@@ -389,7 +421,6 @@ static const char *check_state(const unsigned char *data, size_t size) {
         if ((size_t)(end - at) < sizeof record) return "the savestate is truncated";
         memcpy(&record, at, sizeof record);
         at += sizeof record;
-        if (!allowed_region(record.start, record.size)) return "the savestate writes outside the game's memory";
         size_t pages = (record.size + PAGE - 1) / PAGE;
         if ((size_t)(end - at) < pages) return "the savestate is truncated";
         const unsigned char *map = at;
@@ -423,17 +454,12 @@ static void load_state(const Slot *slot) {
         const unsigned char *map = at;
         at += pages;
         for (size_t page = 0; page < pages; ++page) {
-            unsigned char *target = (unsigned char *)(uintptr_t)record.start + page * PAGE;
             size_t length = page_length(record.size, page);
-            if (map[page]) {
-                memcpy(target, at, length);
-                at += length;
-            } else {
-                memset(target, 0, length);
-            }
+            restore_bytes(record.start + page * PAGE, map[page] ? at : NULL, length);
+            if (map[page]) at += length;
         }
     }
-    audio_load(at);
+    visual_load(at + audio_load(at));
     port_stats.arena_used = header->arena_used;
     port_stats.arena_peak = header->arena_peak;
     port_stats.arena_blocks = header->arena_blocks;

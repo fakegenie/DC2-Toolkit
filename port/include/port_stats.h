@@ -29,6 +29,7 @@ typedef struct {
     uint32_t disc_bytes;
     uint64_t wait_ns;
     uint64_t replay_ns;
+    uint32_t dropped_fields;
     uint32_t textures_live;
     uint32_t pipelines;
     uint32_t cached_textures;
@@ -36,6 +37,7 @@ typedef struct {
     uint64_t arena_used;
     uint64_t arena_peak;
     uint32_t arena_blocks;
+    uint32_t audio_ms;
 } PortStats;
 
 extern PortStats port_stats;

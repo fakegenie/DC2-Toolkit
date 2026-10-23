@@ -161,6 +161,58 @@ void visual_next_frame() {
     }
 }
 
+static size_t put(unsigned char *out, size_t at, const void *data, size_t size) {
+    if (out) memcpy(out + at, data, size);
+    return at + size;
+}
+
+size_t visual_save(unsigned char *out) {
+    uint32_t count = (uint32_t)face_meshes.size();
+    size_t at = put(out, 0, &count, sizeof count);
+    at = put(out, at, &mesh_frame, sizeof mesh_frame);
+    for (const auto &entry : face_meshes) {
+        uint32_t vertices = (uint32_t)entry.second.vertices.size();
+        at = put(out, at, &entry.first, sizeof entry.first);
+        at = put(out, at, &entry.second.type, sizeof entry.second.type);
+        at = put(out, at, &entry.second.used, sizeof entry.second.used);
+        at = put(out, at, &vertices, sizeof vertices);
+        at = put(out, at, entry.second.vertices.data(), vertices * sizeof(MeshVertex));
+    }
+    return at;
+}
+
+size_t visual_load(const unsigned char *in) {
+    for (const auto &entry : face_meshes)
+        render_mesh_forget(entry.second.resident, (int)entry.second.vertices.size());
+    face_meshes.clear();
+    uint32_t count;
+    size_t at = 0;
+    memcpy(&count, in, sizeof count);
+    at += sizeof count;
+    memcpy(&mesh_frame, in + at, sizeof mesh_frame);
+    at += sizeof mesh_frame;
+    for (uint32_t i = 0; i < count; i++) {
+        const mgCFace *face;
+        uint32_t vertices;
+        memcpy(&face, in + at, sizeof face);
+        at += sizeof face;
+        FaceMesh &mesh = face_meshes[face];
+        memcpy(&mesh.type, in + at, sizeof mesh.type);
+        at += sizeof mesh.type;
+        memcpy(&mesh.used, in + at, sizeof mesh.used);
+        at += sizeof mesh.used;
+        memcpy(&vertices, in + at, sizeof vertices);
+        at += sizeof vertices;
+        mesh.vertices.resize(vertices);
+        memcpy(mesh.vertices.data(), in + at, vertices * sizeof(MeshVertex));
+        at += vertices * sizeof(MeshVertex);
+        mesh.resident = vertices ? render_mesh_store(mesh.vertices.data(), (int)vertices) : -1;
+    }
+    sorted_draws.clear();
+    port_stats.cached_meshes = (uint32_t)face_meshes.size();
+    return at;
+}
+
 PORT_OVERRIDE int mgCVisualMDT::CreateFacePacket(u_int *packet, mgCFace *face) {
     (void)packet;
     if (face != NULL) visual_build_face(this, face, NULL);

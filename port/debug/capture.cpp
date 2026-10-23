@@ -138,6 +138,7 @@ static void print_draw(DebugReply *reply, int index) {
     }
     if (r.source != RENDER_SOURCE_MESH)
         debug_print(reply, ", \"bounds\": [%.1f, %.1f, %.1f, %.1f]", r.bounds[0], r.bounds[1], r.bounds[2], r.bounds[3]);
+        debug_print(reply, ", \"uv\": [%.4f, %.4f, %.4f, %.4f]", r.uv[0], r.uv[1], r.uv[2], r.uv[3]);
     debug_print(reply, ", \"command\": %d, \"pass\": %d, \"merged\": %d}", r.command, r.pass, r.merged);
 }
 
