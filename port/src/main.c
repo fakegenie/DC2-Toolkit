@@ -14,6 +14,9 @@
 #include <string.h>
 #ifdef __APPLE__
 #include <TargetConditionals.h>
+#include <mach/mach.h>
+#include <mach/mach_time.h>
+#include <mach/thread_policy.h>
 #endif
 #if TARGET_OS_IPHONE
 #include <SDL3/SDL.h>
@@ -37,6 +40,19 @@ static void port_ios_saves(void) {}
 static int touch_default(void) { return TOUCH_OFF; }
 #endif
 
+#ifdef __APPLE__
+static void keep_time(void) {
+    mach_timebase_info_data_t timebase;
+    mach_timebase_info(&timebase);
+    uint32_t ms = (uint32_t)(UINT64_C(1000000) * timebase.denom / timebase.numer);
+    thread_time_constraint_policy_data_t policy = {20 * ms, 15 * ms, 20 * ms, 1};
+    thread_policy_set(mach_thread_self(), THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t)&policy,
+                      THREAD_TIME_CONSTRAINT_POLICY_COUNT);
+}
+#else
+static void keep_time(void) {}
+#endif
+
 static int scale_of(const char *text) {
     return !strcmp(text, "auto") ? RENDER_SCALE_AUTO : atoi(text);
 }
@@ -51,6 +67,7 @@ static int setting_number(const char *name, int fallback) {
 
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
+    keep_time();
     int first = 1;
     int scale = 0, samples = 0, mute = 0, background = 0, fullscreen = -1, vsync = -1, smooth = -1;
     const char *aspect = NULL;

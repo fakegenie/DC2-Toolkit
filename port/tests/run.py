@@ -74,11 +74,11 @@ def main():
         path = pathlib.Path(temporary) / name
         path.write_text(source)
         sources[name] = str(path)
-    cases.append(("drawprim", [cpp_flags[0], "-I" + str(headers), *cpp_flags[1:], "-ffunction-sections", "-fdata-sections", "port/tests/drawprim.cpp", sources["mg_drawprim.cpp"], sources["mg_texture.cpp"], sources["mg_memory.cpp"], DEAD_STRIP]))
-    cases.append(("texture_anime", [cpp_flags[0], "-I" + str(headers), *cpp_flags[1:], "-ffunction-sections", "-fdata-sections", "port/tests/texture_anime.cpp", sources["mg_tanime.cpp"], sources["mg_memory.cpp"], DEAD_STRIP]))
+    cases.append(("drawprim", [cpp_flags[0], "-I" + str(headers), *cpp_flags[1:], "-ffunction-sections", "-fdata-sections", "port/tests/drawprim.cpp", sources["mg_drawprim.cpp"], sources["mg_texture.cpp"], sources["mg_memory.cpp"], "-x", "c++", "port/src/hooks.c", "-x", "none", DEAD_STRIP]))
+    cases.append(("texture_anime", [cpp_flags[0], "-I" + str(headers), *cpp_flags[1:], "-ffunction-sections", "-fdata-sections", "port/tests/texture_anime.cpp", sources["mg_tanime.cpp"], sources["mg_memory.cpp"], "-x", "c++", "port/src/hooks.c", "-x", "none", DEAD_STRIP]))
     cases.append(("automap", [cpp_flags[0], "-I" + str(headers), *cpp_flags[1:], "-ffunction-sections", "-fdata-sections", "port/tests/automap.cpp", sources["automap.cpp"], DEAD_STRIP]))
-    cases.append(("monster_script", [cpp_flags[0], "-I" + str(headers), *cpp_flags[1:], "-ffunction-sections", "-fdata-sections", "port/tests/monster_script.cpp", sources["runscript.cpp"], sources["runscript_opcodes.cpp"], sources["mg_memory.cpp"], DEAD_STRIP]))
-    cases.append(("effect_heap", [cpp_flags[0], "-I" + str(headers), *cpp_flags[1:], *NO_PIE, "-ffunction-sections", "-fdata-sections", "port/tests/effect_heap.cpp", sources["effscript.cpp"], sources["runscript.cpp"], sources["mg_memory.cpp"], DEAD_STRIP]))
+    cases.append(("monster_script", [cpp_flags[0], "-I" + str(headers), *cpp_flags[1:], "-ffunction-sections", "-fdata-sections", "port/tests/monster_script.cpp", sources["runscript.cpp"], sources["runscript_opcodes.cpp"], sources["mg_memory.cpp"], "-x", "c++", "port/src/hooks.c", "-x", "none", DEAD_STRIP]))
+    cases.append(("effect_heap", [cpp_flags[0], "-I" + str(headers), *cpp_flags[1:], *NO_PIE, "-ffunction-sections", "-fdata-sections", "port/tests/effect_heap.cpp", sources["effscript.cpp"], sources["runscript.cpp"], sources["mg_memory.cpp"], "-x", "c++", "port/src/hooks.c", "-x", "none", DEAD_STRIP]))
     collision_objects = []
     for name in ["mg_math.cpp", "collision_asm.cpp", "gameutil_asm.cpp"]:
         target = pathlib.Path(temporary) / ("collision_" + name + ".o")

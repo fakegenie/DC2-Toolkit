@@ -12,6 +12,8 @@
 #define PS2_UNIMPLEMENTED() Ps2Unimplemented(__func__, __FILE__, __LINE__)
 #define PORT_OVERRIDE
 
+constexpr int PORT_MENU_QUADWORDS = 2 * 200000;
+
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wmacro-redefined"
 #pragma push_macro("NULL")

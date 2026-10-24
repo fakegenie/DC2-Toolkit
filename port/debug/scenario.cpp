@@ -232,6 +232,7 @@ static int warp(int loop, INIT_LOOP_ARG arg, DebugReply *reply) {
         return 0;
     }
     if (loop == LOOP_EDIT) arrive_from_town(arg.map_no);
+    GetMainScene()->SetNowSubMapNo(-1);
     NextLoop(loop, arg);
     GetMainScene()->exit_flag = 1;
     return 0;

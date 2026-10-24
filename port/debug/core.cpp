@@ -66,6 +66,7 @@ static uint64_t wait_exit;
 static uint64_t wait_enter;
 static uint64_t wait_drawn;
 static uint64_t previous_enter;
+static uint64_t previous_tail_wait;
 static pid_t profiler;
 static int profiler_client = DEBUG_CLIENT_NONE;
 static char profiler_path[256];
@@ -197,7 +198,7 @@ void debug_finish(DebugReply *reply) {
 static const DebugCommand *find_command(const char *name) {
     const DebugCommand *tables[] = {debug_core_commands, debug_scenario_commands, debug_capture_commands,
                                     debug_replay_commands, debug_savestate_commands, debug_reload_commands,
-                                    debug_overlay_commands, debug_clip_commands};
+                                    debug_overlay_commands, debug_clip_commands, debug_memory_commands};
     for (const DebugCommand *table : tables)
         for (const DebugCommand *command = table; command->name; ++command)
             if (!strcmp(command->name, name)) return command;
@@ -466,7 +467,7 @@ static int command_help(const DebugArgs *args, DebugReply *reply) {
     (void)args;
     const DebugCommand *tables[] = {debug_core_commands, debug_scenario_commands, debug_capture_commands,
                                     debug_replay_commands, debug_savestate_commands, debug_reload_commands,
-                                    debug_overlay_commands, debug_clip_commands};
+                                    debug_overlay_commands, debug_clip_commands, debug_memory_commands};
     debug_print(reply, "{\"commands\": [");
     int first = 1;
     for (const DebugCommand *table : tables)
@@ -837,10 +838,11 @@ static void record_frame(uint64_t exit_time) {
     frame->frame_ms = previous_enter ? (float)(time_enter - previous_enter) / 1e6f : 0.0f;
     frame->game_ms = time_exit ? (float)((time_enter - time_exit) - (wait_enter - wait_exit)) / 1e6f : 0.0f;
     frame->draw_ms = (float)((time_drawn - time_enter) - (wait_drawn - wait_enter)) / 1e6f;
-    frame->wait_ms = (float)(port_stats.wait_ns - wait_exit) / 1e6f;
+    frame->wait_ms = (float)(previous_tail_wait + wait_enter - wait_exit) / 1e6f;
     frame->present_ms = (float)(exit_time - time_drawn) / 1e6f;
     frame->stats = port_stats;
     previous_enter = time_enter;
+    previous_tail_wait = port_stats.wait_ns - wait_enter;
     debug_frame_total++;
     PortStats kept = port_stats;
     memset(&port_stats, 0, offsetof(PortStats, textures_live));

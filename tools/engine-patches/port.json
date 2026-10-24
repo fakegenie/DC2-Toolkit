@@ -618,7 +618,7 @@
   {
     "file": "ps2/include/runscript.hpp",
     "find": "STATIC_ASSERT(sizeof(RS_CALLDATA) == 0xC);",
-    "replace": "STATIC_ASSERT(sizeof(RS_CALLDATA) == 0xC);\n\nconstexpr int RS_SCRIPT_EXTRA_QUADWORDS = (128 * sizeof(RS_STACKDATA) + 512 * sizeof(RS_CALLDATA) - 7168 + 15) / 16;\nconstexpr int RS_MONSTER_MEMORY_QUADWORDS = 4000 + RS_SCRIPT_EXTRA_QUADWORDS;"
+    "replace": "STATIC_ASSERT(sizeof(RS_CALLDATA) == 0xC);\n\nconstexpr int RS_SCRIPT_EXTRA_QUADWORDS = (128 * sizeof(RS_STACKDATA) + 512 * sizeof(RS_CALLDATA) - 7168 + 15) / 16;\nconstexpr int RS_MONSTER_MEMORY_QUADWORDS = 2 * 4000;\nconstexpr int RS_MAIN_EXTRA_QUADWORDS = RS_SCRIPT_EXTRA_QUADWORDS + 24 * 4000 + PORT_MENU_QUADWORDS - 200000;"
   },
   {
     "file": "ps2/src/mainloop.cpp",
@@ -628,17 +628,17 @@
   {
     "file": "ps2/src/mainloop.cpp",
     "find": "u_long128 main_buffer[0x1A0000];",
-    "replace": "u_long128 main_buffer[0x1A0000 + RS_SCRIPT_EXTRA_QUADWORDS];"
+    "replace": "u_long128 main_buffer[0x1A0000 + RS_MAIN_EXTRA_QUADWORDS];"
   },
   {
     "file": "ps2/src/mainloop.cpp",
     "find": "memory->stSetBuffer(main_buffer, 0x1A0000);",
-    "replace": "memory->stSetBuffer(main_buffer, 0x1A0000 + RS_SCRIPT_EXTRA_QUADWORDS);"
+    "replace": "memory->stSetBuffer(main_buffer, 0x1A0000 + RS_MAIN_EXTRA_QUADWORDS);"
   },
   {
     "file": "ps2/src/mainloop.cpp",
     "find": "memory->stSetBuffer(&main_buffer[5000], 0x1A0000 - 5000);",
-    "replace": "memory->stSetBuffer(&main_buffer[5000], 0x1A0000 + RS_SCRIPT_EXTRA_QUADWORDS - 5000);"
+    "replace": "memory->stSetBuffer(&main_buffer[5000], 0x1A0000 + RS_MAIN_EXTRA_QUADWORDS - 5000);"
   },
   {
     "file": "ps2/src/editloop.cpp",
@@ -1092,5 +1092,133 @@
     "file": "ps2/src/mglib.cpp",
     "find": "        prim.Begin(MG_PRIM_SPRITE);\n        prim.Color(0, 0, 0, 0);\n        prim.Vertex(0, 0, 0);\n        prim.Vertex(shadow->width, shadow->height, 0);\n        prim.End();",
     "replace": "        int side = (port_screen_width() - mgScreenWidth) / 2;\n        prim.Begin(MG_PRIM_SPRITE);\n        prim.Color(0, 0, 0, 0);\n        prim.Vertex(-side, 0, 0);\n        prim.Vertex(mgScreenWidth + side, shadow->height, 0);\n        prim.End();"
+  },
+  {
+    "file": "ps2/src/mg_memory.cpp",
+    "find": "#include \"mg_memory.hpp\"\n",
+    "replace": "#include \"mg_memory.hpp\"\n#include \"port_memory.h\"\n"
+  },
+  {
+    "file": "ps2/src/mg_memory.cpp",
+    "find": "        stack_size = spare;\n        return stack_block->data;",
+    "replace": "        stack_size = spare;\n        port_memory_set(this, __builtin_return_address(0), spare);\n        return stack_block->data;"
+  },
+  {
+    "file": "ps2/src/mg_memory.cpp",
+    "find": "    if (stack_used + size >= stack_size) {\n        printf(\"stack over %d/%d at %s\\n\", stack_used + size, stack_size, name);",
+    "replace": "    port_memory_use(this, stack_used + size, stack_size);\n\n    if (stack_used + size >= stack_size) {\n        printf(\"stack over %d/%d at %s\\n\", stack_used + size, stack_size, name);"
+  },
+  {
+    "file": "ps2/src/mg_memory.cpp",
+    "find": "    int new_used = old_used + size;\n\n    if (new_used >= old_capacity) {\n        printf(\"stack over %d/%d at %s\\n\", new_used, old_capacity, this);",
+    "replace": "    int new_used = old_used + size;\n    port_memory_use(this, new_used, old_capacity);\n\n    if (new_used >= old_capacity) {\n        printf(\"stack over %d/%d at %s\\n\", new_used, old_capacity, this);",
+    "count": 2
+  },
+  {
+    "file": "ps2/src/mg_memory.cpp",
+    "find": "    stack = buffer;\n    stack_used = 0;\n    stack_size = size;\n",
+    "replace": "    stack = buffer;\n    stack_used = 0;\n    stack_size = size;\n    port_memory_set(this, __builtin_return_address(0), size);\n"
+  },
+  {
+    "file": "ps2/src/editloop.cpp",
+    "find": "data_size - 210128",
+    "replace": "data_size - 10128 - PORT_MENU_QUADWORDS",
+    "count": 3
+  },
+  {
+    "file": "ps2/src/editloop.cpp",
+    "find": "MenuBuffer__2.stSetBuffer(read_buffer = main_stack->stAlloc64(200000), 200000);\n    read_buffer_end = read_buffer + 200000;",
+    "replace": "MenuBuffer__2.stSetBuffer(read_buffer = main_stack->stAlloc64(PORT_MENU_QUADWORDS), PORT_MENU_QUADWORDS);\n    read_buffer_end = read_buffer + PORT_MENU_QUADWORDS;"
+  },
+  {
+    "file": "ps2/src/editloop.cpp",
+    "find": "loading.memory.stSetBuffer(read_buffer + 195000, 5000);",
+    "replace": "loading.memory.stSetBuffer(read_buffer + PORT_MENU_QUADWORDS - 5000, 5000);"
+  },
+  {
+    "file": "ps2/src/dng_main.cpp",
+    "find": "BuffReadData = MainBuffer->stAlloc64(200000);",
+    "replace": "BuffReadData = MainBuffer->stAlloc64(PORT_MENU_QUADWORDS);"
+  },
+  {
+    "file": "ps2/src/dng_main.cpp",
+    "find": "nowload.memory.stSetBuffer(BuffReadData + 0x2E630, 10000);",
+    "replace": "nowload.memory.stSetBuffer(BuffReadData + PORT_MENU_QUADWORDS - 10000, 10000);"
+  },
+  {
+    "file": "ps2/src/dng_main.cpp",
+    "find": "stSetBuffer(BuffReadData, 200000);",
+    "replace": "stSetBuffer(BuffReadData, PORT_MENU_QUADWORDS);",
+    "count": 2
+  },
+  {
+    "file": "ps2/src/menuchr.cpp",
+    "find": "static const u16 menu_robo_memorytbl[MENU_CHARA_LOAD_MAX] = {\n    0x5240, 0x4514, 0x6E80, 0x1240, 0x05DC, 0, 0};",
+    "replace": "static const int menu_robo_memorytbl[MENU_CHARA_LOAD_MAX] = {\n    2 * 0x5240, 2 * 0x4514, 2 * 0x6E80, 2 * 0x1240, 2 * 0x05DC, 0, 0};"
+  },
+  {
+    "file": "ps2/src/menuchr.cpp",
+    "find": "static const u16 menu_chr_memorytbl[MENU_CHARA_LOAD_MAX] = {\n    0x1B80, 0x9AC0, 0x1C84, 0x11C0, 0x0BC0, 0x26C0, 0x0708};",
+    "replace": "static const int menu_chr_memorytbl[MENU_CHARA_LOAD_MAX] = {\n    2 * 0x1B80, 2 * 0x9AC0, 2 * 0x1C84, 2 * 0x11C0, 2 * 0x0BC0, 2 * 0x26C0, 2 * 0x0708};"
+  },
+  {
+    "file": "ps2/src/menuchr.cpp",
+    "find": "const u16 *table = menu_chr_memorytbl;",
+    "replace": "const int *table = menu_chr_memorytbl;"
+  },
+  {
+    "file": "ps2/src/menuchr.cpp",
+    "find": "            list[0]->stSetBuffer(buffer, 0x6400);\n            list[5]->stSetBuffer(&buffer[0x6400], 0x3C0);\n            total = 0x67C0;",
+    "replace": "            list[0]->stSetBuffer(buffer, 2 * 0x6400);\n            list[5]->stSetBuffer(&buffer[2 * 0x6400], 2 * 0x3C0);\n            total = 2 * 0x67C0;"
+  },
+  {
+    "file": "ps2/src/menusys.cpp",
+    "find": "MenuActionCharaBuffer[0].stSetBuffer(stack.stGetTop(), 0x5A00);\n            stack.Alloc(0x5000);",
+    "replace": "MenuActionCharaBuffer[0].stSetBuffer(stack.stGetTop(), 2 * 0x5A00);\n            stack.Alloc(2 * 0x5000);"
+  },
+  {
+    "file": "ps2/src/inventmn.cpp",
+    "find": "this->item_model_memory.stSetBuffer(load_stack->stGetTop(), 0x35C0);",
+    "replace": "this->item_model_memory.stSetBuffer(load_stack->stGetTop(), 2 * 0x35C0);"
+  },
+  {
+    "file": "ps2/src/inventmn.cpp",
+    "find": "load_stack->Alloc(0x35C0);",
+    "replace": "load_stack->Alloc(2 * 0x35C0);"
+  },
+  {
+    "file": "ps2/src/inventmn.cpp",
+    "find": "data_stack.stSetBuffer(data_top, 0x1310);\n    stack->Alloc(0x1310);",
+    "replace": "data_stack.stSetBuffer(data_top, 2 * 0x1310);\n    stack->Alloc(2 * 0x1310);"
+  },
+  {
+    "file": "ps2/src/inventmn.cpp",
+    "find": "MenuActionCharaBuffer[0].stSetBuffer(stack->stGetTop(), 0x1B80);\n    stack->Alloc(0x1B80);",
+    "replace": "MenuActionCharaBuffer[0].stSetBuffer(stack->stGetTop(), 2 * 0x1B80);\n    stack->Alloc(2 * 0x1B80);"
+  },
+  {
+    "file": "ps2/src/inventmn.cpp",
+    "find": "MenuActionCharaBuffer[1].stSetBuffer(stack->stGetTop(), 0x9AC0);\n    stack->Alloc(0x9AC0);",
+    "replace": "MenuActionCharaBuffer[1].stSetBuffer(stack->stGetTop(), 2 * 0x9AC0);\n    stack->Alloc(2 * 0x9AC0);"
+  },
+  {
+    "file": "ps2/src/inventmn.cpp",
+    "find": "MenuActionCharaBuffer[4].stSetBuffer(stack->stGetTop(), 0xBC0);\n    stack->Alloc(0xBC0);",
+    "replace": "MenuActionCharaBuffer[4].stSetBuffer(stack->stGetTop(), 2 * 0xBC0);\n    stack->Alloc(2 * 0xBC0);"
+  },
+  {
+    "file": "ps2/src/inventmn.cpp",
+    "find": "MenuActionCharaBuffer[5].stSetBuffer(stack->stGetTop(), 0x26C0);\n    stack->Alloc(0x26C0);",
+    "replace": "MenuActionCharaBuffer[5].stSetBuffer(stack->stGetTop(), 2 * 0x26C0);\n    stack->Alloc(2 * 0x26C0);"
+  },
+  {
+    "file": "ps2/src/inventmn.cpp",
+    "find": "chara_stack.stSetBuffer(stack->stGetTop(), 0x1680);\n        stack->Alloc(0x1680);",
+    "replace": "chara_stack.stSetBuffer(stack->stGetTop(), 2 * 0x1680);\n        stack->Alloc(2 * 0x1680);"
+  },
+  {
+    "file": "ps2/src/inventmn.cpp",
+    "find": "MenuInventCharaStack.stSetBuffer(chara_top, 0xC200);",
+    "replace": "MenuInventCharaStack.stSetBuffer(chara_top, 2 * 0xC200);"
   }
 ]

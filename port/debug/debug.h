@@ -93,6 +93,7 @@ extern const DebugCommand debug_savestate_commands[];
 extern const DebugCommand debug_reload_commands[];
 extern const DebugCommand debug_overlay_commands[];
 extern const DebugCommand debug_clip_commands[];
+extern const DebugCommand debug_memory_commands[];
 
 void debug_scenario_panel(void);
 void debug_capture_panel(void);
