@@ -279,7 +279,44 @@ static int command_helpers(const DebugArgs *args, DebugReply *reply) {
     return 0;
 }
 
+static int command_water(const DebugArgs *args, DebugReply *reply) {
+    CScene *scene = current_scene();
+    alignas(16) float position[4];
+    if (!scene || !player_position(scene, position)) return debug_fail(reply, "not walking in a town or dungeon");
+    float reach = (float)debug_arg_int(args, "reach", 6000);
+    float cell = (float)debug_arg_int(args, "cell", 400);
+    debug_print(reply, "{\"player\": [%.1f, %.1f, %.1f], \"water\": [", position[0], position[1], position[2]);
+    int listed = 0;
+    for (float x = position[0] - reach; x < position[0] + reach; x += cell) {
+        for (float z = position[2] - reach; z < position[2] + reach; z += cell) {
+            mgVu0FBOX box;
+            box.min[0] = x;
+            box.max[0] = x + cell;
+            box.min[2] = z;
+            box.max[2] = z + cell;
+            box.min[1] = position[1] - 4000.0f;
+            box.max[1] = position[1] + 4000.0f;
+            box.min[3] = 1.0f;
+            box.max[3] = 1.0f;
+            int count = scene->GetColPoly(polys, box, POLY_LIMIT);
+            for (int i = 0; i < count; ++i) {
+                const CCPoly *poly = &polys[i];
+                if (poly->area_kind != COL_AREA_FISHING_WATER) continue;
+                float center[3];
+                for (int axis = 0; axis < 3; ++axis)
+                    center[axis] = (poly->vertex[0][axis] + poly->vertex[1][axis] + poly->vertex[2][axis]) / 3.0f;
+                if (center[0] < x || center[0] >= x + cell || center[2] < z || center[2] >= z + cell) continue;
+                debug_print(reply, "%s[%.1f, %.1f, %.1f]", listed++ ? ", " : "", center[0], center[1], center[2]);
+                break;
+            }
+        }
+    }
+    debug_print(reply, "]}");
+    return 0;
+}
+
 extern const DebugCommand debug_overlay_commands[] = {
+    {"water", command_water, 0, "[reach=6000] [cell=400] lists one point of fishing water per cell around the player"},
     {"helpers", command_helpers, 1, "[name=wireframe|hitboxes|hurtboxes|bodies|collision|triggers|xray value=0|1] draws debug helpers; no arguments lists them"},
     {NULL, NULL, 0, NULL},
 };

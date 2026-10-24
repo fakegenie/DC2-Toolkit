@@ -79,6 +79,7 @@ extern "C" void port_memory_use(const void *pool, int used, int size) {
         char name[256];
         site_name(site->site, name, sizeof name);
         fprintf(stderr, "memory over %d/%d in the pool set up at %s\n", used, size, name);
+        if (getenv("DC2TK_MEMORY_STRICT")) abort();
     }
     if (!site->worst_size || (int64_t)used * site->worst_size > (int64_t)site->worst * size) {
         site->worst = used;
@@ -96,6 +97,7 @@ static int fuller(const void *a, const void *b) {
 
 static int command_memory(const DebugArgs *args, DebugReply *reply) {
     double least = debug_arg_number(args, "full", 0.75);
+    int seen = (int)debug_arg_int(args, "seen", 0);
     int order[SITE_LIMIT];
     for (int i = 0; i < site_count; ++i) order[i] = i;
     qsort(order, (size_t)site_count, sizeof order[0], fuller);
@@ -103,7 +105,8 @@ static int command_memory(const DebugArgs *args, DebugReply *reply) {
     int shown = 0;
     for (int i = 0; i < site_count; ++i) {
         Site *site = &sites[order[i]];
-        if (!site->peak_size || ((double)site->peak / site->peak_size < least && !site->overflows)) continue;
+        if (!site->peak_size && !(seen && order[i])) continue;
+        if (site->peak_size && (double)site->peak / site->peak_size < least && !site->overflows) continue;
         Dl_info info;
         char name[256];
         site_name(site->site, name, sizeof name);
@@ -112,7 +115,7 @@ static int command_memory(const DebugArgs *args, DebugReply *reply) {
         debug_print_string(reply, order[i] ? name : "unknown");
         debug_print(reply, ", \"offset\": \"0x%lx\", \"size\": %d, \"peak\": %d, \"peak_size\": %d, \"full\": %.3f, "
                            "\"overflows\": %d, \"worst\": %d, \"worst_size\": %d}",
-                    offset, site->size, site->peak, site->peak_size, (double)site->peak / site->peak_size, site->overflows,
+                    offset, site->size, site->peak, site->peak_size, site->peak_size ? (double)site->peak / site->peak_size : 0.0, site->overflows,
                     site->worst, site->worst_size);
     }
     debug_print(reply, "]}");
@@ -122,7 +125,8 @@ static int command_memory(const DebugArgs *args, DebugReply *reply) {
 }
 
 extern const DebugCommand debug_memory_commands[] = {
-    {"memory", command_memory, 1, "engine memory pools by how full they got: full=0.75 hides emptier ones, reset=1 "
-                                  "clears the counts after replying"},
+    {"memory", command_memory, 1, "engine memory pools by how full they got: full=0.75 hides emptier ones, seen=1 adds pools set "
+                                  "up but never used, reset=1 clears the counts after replying; DC2TK_MEMORY_STRICT=1 stops the "
+                                  "game at the first overflow"},
     {NULL, NULL, 0, NULL},
 };

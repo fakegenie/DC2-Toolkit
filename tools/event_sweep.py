@@ -10,7 +10,8 @@ which ones crash or hang.
 
 It runs its own copy of build/port/darkchronicle-debug on DC2TK_DEBUG_PORT 7791 with throwaway saves, warps
 the way the debug menu does (town map and event, or dungeon floor and event), presses cross now and then to
-get through dialogue, and writes build/port/event-sweep.json plus the top of each crash's backtrace.
+get through dialogue, and writes build/port/event-sweep.json plus the top of each crash's backtrace. It runs
+with DC2TK_MEMORY_STRICT=1, so a memory pool overflow stops the game and shows up as a crash in the pool's code.
 """
 
 import argparse
@@ -43,7 +44,8 @@ def request(command, arguments=None, timeout=60):
 
 def launch(saves, log):
     process = subprocess.Popen([str(BINARY), "--mute", "--background", str(ROOT / "dc2.iso")], cwd=ROOT, stdout=log, stderr=log,
-                               env={**os.environ, "DC2TK_DEBUG_PORT": str(PORT), "DC2_SAVE_ROOT": saves})
+                               env={**os.environ, "DC2TK_DEBUG_PORT": str(PORT), "DC2_SAVE_ROOT": saves,
+                                    "DC2TK_MEMORY_STRICT": "1"})
     for _ in range(300):
         time.sleep(0.1)
         if process.poll() is not None:

@@ -2,12 +2,17 @@
 #include "dataread.hpp"
 #include "dng_main.hpp"
 #include "editdata.hpp"
+#include "editloop.hpp"
 #include "gamedata.hpp"
 #include "imgui.h"
 #include "mainloop.hpp"
 #include "mapselect.hpp"
+#include "menuchr.hpp"
+#include "menumain.hpp"
 #include "monster.hpp"
+#include "port_menu.h"
 #include "savedata.hpp"
+#include "subgame.hpp"
 #include "vlgr_info.hpp"
 #include <cctype>
 #include <cstdarg>
@@ -17,6 +22,7 @@
 
 typedef struct {
     int id;
+    int type;
     char label[80];
 } Entry;
 
@@ -30,12 +36,17 @@ typedef struct {
     const char *label;
 } Place;
 
-enum { MAP_LIMIT = 1024, ITEM_LIMIT = ITEM_NO_MAX, LIST_LIMIT = 64, PARTS_LIMIT = 0x100, CHAPTER_LIMIT = 9 };
+enum { FLOOR_START_EVENT = 1010, MAP_LIMIT = 1024, ITEM_LIMIT = ITEM_NO_MAX, LIST_LIMIT = 64, PARTS_LIMIT = 0x100, CHAPTER_LIMIT = 9 };
 
 static const char *loop_names[LOOP_MODE_NUM] = {"menu",       "town",       "dungeon",    "title",      "chara viewer",
                                                 "tex viewer", "map viewer", "snd viewer", "movie viewer", "save convert"};
 static const char *character_names[USER_CHARA_NUM] = {"max", "monica", "ridepod", "monster"};
 static const int item_sets[] = {0, 1, 2, 6};
+static const char *item_type_names[] = {"none", "max_melee", "max_gun", "monica_melee", "monica_magic", "max_clothes", "max_hat",
+                                        "max_shoes", "monica_clothes", "monica_accessory", "monica_boots", "robo_core",
+                                        "robo_body", "robo_arm", "robo_leg", "robo_energy", "crystal", "spectol", "gem", "coin",
+                                        "georama", "badge_box", "recovery", "throwing", "powder", "amulet", "key", "key_item",
+                                        "gift_box", "aquarium", "fish", "unused", "lure", "etc", "monster_drop", "boiled"};
 static const char *item_set_names[] = {"presentation", "game start", "start debug", "weapons only"};
 
 static const Preset chapter_presets[] = {
@@ -153,6 +164,8 @@ static void build_lists(void) {
             char text[64];
             clean(text, sizeof text, name);
             items[item_total].id = id;
+            CDataCommon *common = GetCommonItemData(id);
+            items[item_total].type = common ? common->type : ITEM_DATA_NONE;
             snprintf(items[item_total].label, sizeof items[0].label, "%d  %s", id, text);
             item_total++;
         }
@@ -193,6 +206,25 @@ int debug_map_number(const char *text) {
     if (!ready()) return -2;
     int map = parse_map(text);
     return map >= 0 && GetMapType(map) >= 0 ? map : -1;
+}
+
+extern int LoopMode;
+extern int CharaMode;
+extern int UkiMode;
+
+static const char *const fishing_steps[] = {"walk", "aim", "cast", "wait", "none", "fight", "lost", "landed"};
+static const char *const float_steps[] = {"wait", "wait", "nibble", "bite", "reeled", "wait", "bite"};
+
+static const char *fishing_step(void) {
+    if (CharaMode == 3 && UkiMode >= 0 && UkiMode < 7) return float_steps[UkiMode];
+    return CharaMode >= 0 && CharaMode < 8 ? fishing_steps[CharaMode] : "unknown";
+}
+
+static int menu_up(void) {
+    int loop = GetNowLoopNo();
+    if (loop == LOOP_EDIT) return LoopMode == EDIT_LOOP_WALK_MENU || LoopMode == EDIT_LOOP_EDIT_MENU;
+    if (loop == LOOP_DUNGEON) return DngStatus.mode == DNG_STATUS_MENU || DngStatus.mode == DNG_STATUS_EVENT_MENU;
+    return 0;
 }
 
 static int in_playable_loop(void) {
@@ -267,6 +299,7 @@ static INIT_LOOP_ARG here(int loop) {
         CSaveDataDungeon *dungeon = &save()->save_dungeon;
         arg.map_no = dungeon->stage_id;
         arg.floor_no = dungeon->floor_id[dungeon->stage_id];
+        arg.event_no = FLOOR_START_EVENT;
     } else arg.map_no = here_map();
     return arg;
 }
@@ -346,14 +379,50 @@ static int command_defeat(const DebugArgs *args, DebugReply *reply) {
     return 0;
 }
 
+static int menu_wanted = -1;
+static int menu_params[16];
+
+static int monster_form(int id, int *row, int *level) {
+    for (int r = 0; r < MONSTER_PROGRESS_NUM; ++r)
+        for (int l = 0; l < MONSTER_PROGRESS_LEVEL_NUM; ++l)
+            if (monster_progress_tbl[r][1 + l] == id) {
+                if (row) *row = r;
+                if (level) *level = l;
+                return 1;
+            }
+    return 0;
+}
+
 static int command_character(const DebugArgs *args, DebugReply *reply) {
     if (!ready()) return debug_fail(reply, "the game is still starting");
     const char *who = debug_arg(args, "who", "");
     int chara = -1;
-    for (int i = 0; i < 2; ++i)
+    for (int i = 0; i < USER_CHARA_NUM; ++i)
         if (!strcmp(who, character_names[i]) || (who[0] == '0' + i && !who[1])) chara = i;
-    if (chara < 0) return debug_fail(reply, "who=max|monica");
+    if (chara < 0) return debug_fail(reply, "who=max|monica|ridepod|monster [monster=id]");
     CUserDataManager *user = &save()->user_data;
+    if (chara == USER_CHARA_MONSTER) {
+        int monster = (int)debug_arg_int(args, "monster", user->monster_id);
+        int row = 0, level = 0;
+        if (!monster_form(monster, &row, &level)) return debug_fail(reply, "monster=%d is no monster form", monster);
+        int no = monster_progress_tbl[row][0] + 1;
+        user->monster_box.EnableChange(no);
+        MOS_CHANGE_PARAM *badge = user->monster_box.GetMonsterBajjiData(no);
+        badge->progress = (s16)row;
+        badge->class_level = (s16)level;
+        badge->monster_id = (s16)monster;
+        user->monster_id = (s16)monster;
+        user->JoinPartyMember(chara);
+        user->EnableCharaChange(chara);
+        if (GetNowLoopNo() != LOOP_DUNGEON || user->active_chr_no != USER_CHARA_MONICA)
+            return debug_fail(reply, "monsters transform from Monica in a dungeon: character who=monica first");
+        memset(menu_params, 0, sizeof menu_params);
+        menu_params[0] = USER_CHARA_MONSTER;
+        menu_wanted = MENU_OPEN_MAIN_CHARA_BG_DUNGEON;
+        debug_hold(1u << 4, 3);
+        debug_print(reply, "{\"ok\": 1, \"active\": \"monster\", \"monster\": %d}", monster);
+        return 0;
+    }
     user->JoinPartyMember(chara);
     user->EnableCharaChange(chara);
     user->SetActiveChrNo(chara);
@@ -380,6 +449,13 @@ static int command_itemset(const DebugArgs *args, DebugReply *reply) {
     if (set != 0 && set != 1 && set != 2 && set != 6) return debug_fail(reply, "set=0|1|2|6");
     DebugGetItem(&save()->user_data, (int)set);
     debug_print(reply, "{\"ok\": 1, \"set\": %ld}", set);
+    return 0;
+}
+
+static int command_seed(const DebugArgs *args, DebugReply *reply) {
+    long value = debug_arg_int(args, "value", 1);
+    srand((unsigned)value);
+    debug_print(reply, "{\"ok\": 1, \"seed\": %ld}", value);
     return 0;
 }
 
@@ -545,6 +621,31 @@ static int command_party(const DebugArgs *args, DebugReply *reply) {
     return 0;
 }
 
+static int command_unlock(const DebugArgs *args, DebugReply *reply) {
+    (void)args;
+    if (!ready()) return debug_fail(reply, "the game is still starting");
+    CUserDataManager *user = &save()->user_data;
+    for (int chara = USER_CHARA_MONICA; chara <= USER_CHARA_MONSTER; ++chara) {
+        user->JoinPartyMember(chara);
+        user->EnableCharaChange(chara);
+    }
+    user->GetItemNotOver(ITEM_ID_CORE, 1);
+    user->GetItemNotOver(ITEM_ID_BADGE_BOX, 1);
+    int medals = 0;
+    for (int row = 0; row < MONSTER_PROGRESS_NUM; ++row) {
+        int no = monster_progress_tbl[row][0] + 1;
+        if (user->monster_box.IsChange(no)) continue;
+        user->monster_box.EnableChange(no);
+        medals++;
+    }
+    debug_print(reply, "{\"ok\": 1, \"party_member\": %d, \"medals\": %d, \"monsters\": [", user->party_member, medals);
+    int shown = 0;
+    for (int id = 0; id < 0x200; ++id)
+        if (monster_form(id, NULL, NULL)) debug_print(reply, "%s%d", shown++ ? ", " : "", id);
+    debug_print(reply, "]}");
+    return 0;
+}
+
 static int command_equip(const DebugArgs *args, DebugReply *reply) {
     if (!ready()) return debug_fail(reply, "the game is still starting");
     long chara = debug_arg_int(args, "chara", -1);
@@ -554,6 +655,13 @@ static int command_equip(const DebugArgs *args, DebugReply *reply) {
     CUserDataManager *user = &save()->user_data;
     if (!user->GetNumSameItem((int)item)) user->GetItem((int)item, 1);
     int result = user->SetChrEquip((int)chara, (int)item);
+    long bait = debug_arg_int(args, "bait", 0);
+    if (bait > 0) {
+        CGameDataUsed *slot = user->GetActiveEsa((int)item);
+        if (!slot) return debug_fail(reply, "bait= needs item= to be a fishing rod");
+        user->CopyGameData(slot, (int)bait);
+        slot->data.item.num = (s16)debug_arg_int(args, "count", 10);
+    }
     debug_print(reply, "{\"ok\": 1, \"chara\": %ld, \"item\": %ld, \"result\": %d}", chara, item, result);
     return 0;
 }
@@ -617,18 +725,84 @@ static int command_geo(const DebugArgs *args, DebugReply *reply) {
     return 0;
 }
 
+typedef struct {
+    const char *name;
+    int open_type;
+} MenuName;
+
+static const MenuName menu_names[] = {
+    {"main_town", MENU_OPEN_MAIN_TOWN},
+    {"main_dungeon", MENU_OPEN_MAIN_DUNGEON},
+    {"georama", MENU_OPEN_GEORAMA},
+    {"floor_map", MENU_OPEN_DNG_TREE_MAP},
+    {"chara_change", MENU_OPEN_CHARA_CHANGE},
+    {"chara_change_dungeon", MENU_OPEN_CHARA_CHANGE_DUNGEON},
+    {"name", MENU_OPEN_NAME_REGIST},
+    {"shop", MENU_OPEN_SHOP},
+    {"save", MENU_OPEN_SAVE},
+    {"use_item", MENU_OPEN_USE_ITEM},
+    {"invent", MENU_OPEN_INVENT},
+    {"chapter", MENU_OPEN_CHAPTER},
+    {"removal", MENU_OPEN_REMOVAL},
+    {"world_move", MENU_OPEN_WORLD_MOVE},
+    {"fish_select", MENU_OPEN_GYORACE_FISH_SEL},
+    {"item_over", MENU_OPEN_MAIN_TOWN_ITEM_OVER},
+    {"option", MENU_OPEN_OPTION},
+    {"costume", MENU_OPEN_COSTUME},
+    {"chara_show", MENU_OPEN_MAIN_CHARA_BG},
+    {"chara_show_dungeon", MENU_OPEN_MAIN_CHARA_BG_DUNGEON},
+    {"fish_race", MENU_OPEN_GYORACE},
+    {"spheda", MENU_OPEN_SPHIDA},
+    {"monster_book", MENU_OPEN_MONSTER_BOOK},
+    {"subgame_save", MENU_OPEN_SUBGAME_SAVE},
+    {"spheda_score", MENU_OPEN_SPHIDA_SCORE_VIEW},
+};
+
+extern "C" int port_menu_open(int open_type, int *param) {
+    if (menu_wanted < 0) return open_type;
+    int wanted = menu_wanted;
+    menu_wanted = -1;
+    memcpy(param, menu_params, sizeof menu_params);
+    return wanted;
+}
+
+static int command_menu(const DebugArgs *args, DebugReply *reply) {
+    if (!ready()) return debug_fail(reply, "the game is still starting");
+    const char *name = debug_arg(args, "open", "");
+    int open_type = -1;
+    for (const MenuName &menu : menu_names)
+        if (!strcmp(menu.name, name)) open_type = menu.open_type;
+    if (open_type < 0) {
+        char known[1024] = "";
+        for (const MenuName &menu : menu_names) snprintf(known + strlen(known), sizeof known - strlen(known), " %s", menu.name);
+        return debug_fail(reply, "open= is one of%s", known);
+    }
+    memset(menu_params, 0, sizeof menu_params);
+    char list[256];
+    snprintf(list, sizeof list, "%s", debug_arg(args, "param", ""));
+    int count = 0;
+    for (char *value = strtok(list, ","); value && count < 16; value = strtok(NULL, ",")) menu_params[count++] = atoi(value);
+    menu_wanted = open_type;
+    debug_hold(1u << 4, 3);
+    debug_print(reply, "{\"ok\": 1, \"open\": \"%s\", \"open_type\": %d, \"params\": %d}", name, open_type, count);
+    return 0;
+}
+
 static int command_names(const DebugArgs *args, DebugReply *reply) {
     if (!ready()) return debug_fail(reply, "the game is still starting");
     build_lists();
     const char *kind = debug_arg(args, "kind", "maps");
     const char *filter = debug_arg(args, "q", "");
     int is_items = !strcmp(kind, "items");
+    int type = -1;
+    for (int i = 0; i < (int)(sizeof item_type_names / sizeof item_type_names[0]); ++i)
+        if (!strcmp(debug_arg(args, "type", ""), item_type_names[i])) type = i;
     const Entry *list = is_items ? items : maps;
     int total = is_items ? item_total : map_total;
     int shown = 0;
     debug_print(reply, "{\"total\": %d, \"names\": [", total);
     for (int i = 0; i < total; ++i) {
-        if (!matches(list[i].label, filter)) continue;
+        if (!matches(list[i].label, filter) || (is_items && type >= 0 && list[i].type != type)) continue;
         debug_print(reply, "%s", shown++ ? ", " : "");
         debug_print_string(reply, list[i].label);
     }
@@ -641,9 +815,10 @@ extern const DebugCommand debug_scenario_commands[] = {
     {"dungeon", command_dungeon, 0, "dungeon=0..6 [floor=N, -1 saved] [event=N] [init=N] warps to a dungeon floor"},
     {"event", command_event, 0, "no=N [map=<number|name>] starts an event here, or on the given map"},
     {"defeat", command_defeat, 0, "[list=1] defeats every living monster on the dungeon floor through its own death program, or lists them"},
-    {"character", command_character, 0, "who=max|monica switches the playable character and re-enters the current place"},
+    {"character", command_character, 0, "who=max|monica|ridepod switches the playable character and re-enters the current place; who=monster monster=id transforms Monica in a dungeon"},
     {"item", command_item, 0, "id=N [count=1] gives an item"},
     {"itemset", command_itemset, 0, "set=0|1|2|6 gives one of the engine's debug item sets"},
+    {"seed", command_seed, 0, "value=N seeds the game's random numbers, so dungeon floors and drops repeat"},
     {"money", command_money, 0, "[amount=N] [add=N] sets or adds money"},
     {"heal", command_heal, 0, "refills the party's health and repairs weapons"},
     {"time", command_time, 0, "[hour=H] [day=D] [freeze=0|1] sets the time of day"},
@@ -651,10 +826,12 @@ extern const DebugCommand debug_scenario_commands[] = {
     {"preset", command_preset, 0, "name=cap1..8|db_cap1..8|game0..22|dbg1..7|geo|pb|sg0..2 or path=dbg/x.cfg [warp=0] [geo=1] [money=N] applies a disc config and warps to that point of the story"},
     {"flag", command_flag, 0, "[on=N,N] [off=N,N] [get=N,N] sets or reads bit flags"},
     {"party", command_party, 0, "who=monica|ridepod|monster|townsperson [id=1..26] adds a party member"},
-    {"equip", command_equip, 0, "chara=0..2 item=N equips an item, giving it first if missing"},
+    {"unlock", command_unlock, 0, "Monica, the ridepod and monster transform with every monster medal"},
+    {"equip", command_equip, 0, "chara=0..2 item=N equips an item, giving it first if missing; with a fishing rod, bait=N [count=10] fits that bait"},
     {"charstats", command_stats, 0, "chara=0..2 [hp=N] [defence=N] sets a character's health and defence"},
     {"geo", command_geo, 0, "[all=1] [debug=0|1] [free=0|1] [town=N [conditions=0|1]] [part=N [count=30]] [list=1] georama parts, conditions and state"},
-    {"names", command_names, 1, "kind=maps|items [q=text] lists map or item names"},
+    {"names", command_names, 1, "kind=maps|items [q=text] [type=max_melee|max_clothes|robo_arm|fish|...] lists map or item names"},
+    {"menu", command_menu, 0, "open=shop|save|georama|... [param=a,b] opens that menu the next time the town or dungeon would open its main menu; no open lists them"},
     {NULL, NULL, 0, NULL},
 };
 
@@ -818,7 +995,8 @@ void debug_scenario_status(DebugReply *reply) {
                     data->save_dungeon.floor_id[data->save_dungeon.stage_id]);
     }
     CScene *scene = GetMainScene();
-    if (in_playable_loop()) debug_print(reply, ", \"event_run\": %d, \"event\": %d", scene->event_run, scene->event_no);
+    if (in_playable_loop()) debug_print(reply, ", \"event_run\": %d, \"event\": %d, \"menu\": %d", scene->event_run, scene->event_no, menu_up());
+    if (in_playable_loop() && GetSubGameNo() == SUBGAME_FISHING) debug_print(reply, ", \"fishing\": \"%s\"", fishing_step());
     debug_print(reply, ", \"character\": \"%s\", \"money\": %d, \"hour\": %.2f, \"day\": %d, \"game_progress\": %d",
                 active >= 0 && active < USER_CHARA_NUM ? character_names[active] : "unknown", data->user_data.money,
                 data->now_time, data->day, data->game_progress);

@@ -102,6 +102,7 @@ void debug_clip_panel(void);
 void debug_savestate_panel(void);
 void debug_reload_bar(void);
 void debug_helpers_panel(void);
+void debug_hold(uint16_t buttons, int frames);
 void debug_start(void);
 int debug_event(const void *event);
 void debug_field(void);

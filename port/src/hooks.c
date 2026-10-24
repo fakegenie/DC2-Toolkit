@@ -1,5 +1,6 @@
 #include "port_kernel.h"
 #include "port_memory.h"
+#include "port_menu.h"
 #include "port_stats.h"
 
 PortStats port_stats;
@@ -18,4 +19,9 @@ __attribute__((weak)) void port_memory_use(const void *pool, int used, int size)
     (void)pool;
     (void)used;
     (void)size;
+}
+
+__attribute__((weak)) int port_menu_open(int open_type, int *param) {
+    (void)param;
+    return open_type;
 }

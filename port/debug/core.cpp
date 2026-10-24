@@ -595,6 +595,12 @@ static int command_speed(const DebugArgs *args, DebugReply *reply) {
     return 0;
 }
 
+void debug_hold(uint16_t buttons, int frames) {
+    injection.buttons = buttons;
+    injection.frames = frames;
+    injection.sticks = 0;
+}
+
 static uint16_t parse_buttons(const char *text, int *bad) {
     uint16_t buttons = 0;
     *bad = 0;
@@ -616,9 +622,7 @@ static int command_press(const DebugArgs *args, DebugReply *reply) {
     int bad = 0;
     uint16_t buttons = parse_buttons(debug_arg(args, "buttons", debug_arg(args, "button", "")), &bad);
     if (bad) return debug_fail(reply, "buttons are l2 r2 l1 r1 triangle circle cross square select l3 r3 start up right down left");
-    injection.buttons = buttons;
-    injection.frames = (int)debug_arg_int(args, "frames", 6);
-    injection.sticks = 0;
+    debug_hold(buttons, (int)debug_arg_int(args, "frames", 6));
     if (debug_arg(args, "lx", NULL) || debug_arg(args, "ly", NULL) || debug_arg(args, "rx", NULL) ||
         debug_arg(args, "ry", NULL)) {
         injection.sticks = 1;

@@ -1,7 +1,9 @@
 #define _DARWIN_C_SOURCE
 #define _DEFAULT_SOURCE
 #include "debug.h"
+#include <execinfo.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -42,6 +44,27 @@ static void *reader(void *unused) {
     }
 }
 
+static void crashed(int signal_number) {
+    int fd = terminal >= 0 ? terminal : 2;
+    char text[64];
+    int length = snprintf(text, sizeof text, "crash: signal %d\n", signal_number);
+    ssize_t written = write(fd, text, (size_t)length);
+    (void)written;
+    void *frames[64];
+    backtrace_symbols_fd(frames, backtrace(frames, 64), fd);
+    signal(signal_number, SIG_DFL);
+    raise(signal_number);
+}
+
+static void catch_crashes(void) {
+    static char stack[1 << 16];
+    stack_t alternate = {.ss_sp = stack, .ss_size = sizeof stack};
+    sigaltstack(&alternate, NULL);
+    struct sigaction action = {.sa_handler = crashed, .sa_flags = SA_ONSTACK};
+    int signals[] = {SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT};
+    for (int i = 0; i < (int)(sizeof signals / sizeof signals[0]); ++i) sigaction(signals[i], &action, NULL);
+}
+
 void debug_log_start(void) {
     int fds[2];
     if (pipe(fds)) return;
@@ -56,6 +79,7 @@ void debug_log_start(void) {
     pthread_t thread;
     pthread_create(&thread, NULL, reader, NULL);
     pthread_detach(thread);
+    catch_crashes();
 }
 
 uint32_t debug_log_total(void) {

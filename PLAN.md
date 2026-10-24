@@ -156,6 +156,39 @@ written fresh. These are what it found to fix:
 22. **Done: debug warps from the title during the attract demo.** The warp's Start+Select press
     only ended the demo; a warp from the title now presses again every 30 frames until the title
     is left (`port/debug/scenario.cpp`).
+23. **Done: the blue screen while fishing.** Aiming a cast sets the camera's near and far distance
+    equal, and `CCameraControl`'s height ratio divided 0 by 0. The PS2 FPU gives no NaN there; the
+    host did, so the camera went NaN, only the sky drew and frames took a second. `port.json`
+    guards the division. The same can hide anywhere the engine divides by a range: a solid sky
+    picture, an empty depth buffer or a NaN camera in a `clip` trace points at it.
+24. **The fishing recording.** `memory_tour.py record fishing` sets Max at the Palm Brinks canal
+    with a rod and bait 317 (Carrots draw nothing there) and records the user's catch; the user
+    still has to record it. Then add starts for Finny Frenzy, Spheda, photos and Georama.
+
+### Next: debugging and states that last
+
+What the fishing work kept needing, in the order to build it:
+
+1. **Engine variables by name.** `peek name=CastDist [type=f32|i32|u8|ptr|...] [count=N]` and
+   `poke` read and write any global or file static through the symbol table the savestates
+   already read, with a Watch tab in the debug window. Each new fishing question today cost a
+   rebuild to add a status field.
+2. **Savestates that outlive a rebuild.** States already load in a later launch of the same build
+   (macOS runs without ASLR); any rebuild refuses them. Keep every build that made a state
+   (`build/port/builds/<fingerprint>/`, 10 MB each), so an old state, clip or recording always
+   opens in the build that made it; then relocate a state into a new build: pin the image at an
+   address whose high half PS2 data never holds, and move every word that points into the old
+   image to the same symbol and offset in the new one (code, vtables, return addresses, globals,
+   `_main_buffer`), refusing when a function on a thread's stack changed size. Check it by playing
+   the same input from the state in the old build and the relocated one and comparing pictures.
+   The earlier attempt failed on iOS ASLR, where data moved too and lookalike values could not be
+   told from pointers.
+3. **A black box.** Keep the last 30 seconds as a savestate every few seconds plus the input, and
+   write them as a clip on a crash, on F9 or on `blackbox`, so "it crashed" arrives replayable.
+4. **Fault watch.** Check the camera and player for NaN and wild values every frame; on the first
+   bad frame log it, keep a clip and pause.
+5. **Recordings and clips from any state:** `record` and `replay` start from a named state as well
+   as from a warp, and survive rebuilds the way states do.
 
 ### Gates only the user can run
 
@@ -239,7 +272,18 @@ written fresh. These are what it found to fix:
   (`event/view_pal.txt`) in its own copy of the debug build (port 7791, throwaway saves) and writes
   `build/port/event-sweep.json` with the top of each crash's backtrace; `--rows 32,129` or `--from 145`
   for a subset. Rows run in order without a save reset, as the in-game list does, so a crash can need
-  the rows before it.
+  the rows before it. It sets `DC2TK_MEMORY_STRICT=1`, so a pool overflow during an event is a crash too.
+- **Memory pool tour:** `python3 -I tools/memory_tour.py places|menus|models|recordings|untested|all`
+  runs its own debug build (port 7793, throwaway saves, `DC2TK_MEMORY_STRICT=1` so the first overflow
+  stops the game) from the cap8 preset with `unlock`, and visits every map and floor, opens every menu
+  through the debug API's `menu`, equips every weapon, outfit and ridepod part, transforms into every
+  monster form, and replays the input recordings in `port/tests/recordings`. `untested` lists the pool
+  set-up sites in the source that no tour has reached. Results and screenshots go to
+  `build/port/memory-tour`. `memory_tour.py record fishing` (a built-in start) or `record NAME town
+  map=m03` records new input; recordings replay exactly because set-up is seeded (`seed`), paused and
+  stepped, saves are fresh, and both record and replay run at speed 1. While paused, `press` holds
+  input only for frames that are stepped. Debug commands added for it: `menu open=NAME`, `seed`,
+  `water` (fishing water around the player), `equip ... bait=N`, and `fishing` in `status`.
 - **Frame-time benchmark:** `python3 -I tools/perf_bench.py` measures CPU time per game frame (every
   thread) and busy time per frame (frame time less the wait for the next field) in a fixed set of towns,
   dungeons and boss fights (port 7792) and compares it with the previous run in

@@ -934,6 +934,11 @@
   },
   {
     "file": "ps2/src/dataread.cpp",
+    "find": "    if (old_vsync == vsync) {\n        return;\n    }\n\n    old_vsync = vsync;",
+    "replace": "    static int stalled_calls;\n\n    if (old_vsync == vsync && ++stalled_calls < 1000) {\n        return;\n    }\n\n    stalled_calls = 0;\n    old_vsync = vsync;"
+  },
+  {
+    "file": "ps2/src/dataread.cpp",
     "find": "int LoadFileBG(char *name, u_long128 *buffer, int *out_size) {",
     "replace": "int LoadFileBGRetail(char *name, u_long128 *buffer, int *out_size) {"
   },
@@ -1220,5 +1225,45 @@
     "file": "ps2/src/inventmn.cpp",
     "find": "MenuInventCharaStack.stSetBuffer(chara_top, 0xC200);",
     "replace": "MenuInventCharaStack.stSetBuffer(chara_top, 2 * 0xC200);"
+  },
+  {
+    "file": "ps2/src/editloop.cpp",
+    "find": "                            open_menu = 1;\n                            MenuInfo->open_type = MENU_OPEN_MAIN_TOWN;",
+    "replace": "                            open_menu = 1;\n                            MenuInfo->open_type = port_menu_open(MENU_OPEN_MAIN_TOWN, MenuInfo->param);"
+  },
+  {
+    "file": "ps2/src/editloop.cpp",
+    "find": "static int LoopMode;",
+    "replace": "int LoopMode;"
+  },
+  {
+    "file": "ps2/src/fishing.cpp",
+    "find": "static int CharaMode;",
+    "replace": "int CharaMode;"
+  },
+  {
+    "file": "ps2/src/fishing.cpp",
+    "find": "static int UkiMode;",
+    "replace": "int UkiMode;"
+  },
+  {
+    "file": "ps2/src/cameracontrol.cpp",
+    "find": "        float ratio = (distance - near_distance) / (far_distance - near_distance);",
+    "replace": "        float ratio = far_distance != near_distance ? (distance - near_distance) / (far_distance - near_distance) : 0.0f;"
+  },
+  {
+    "file": "ps2/src/dng_main.cpp",
+    "find": "        } else {\n            MenuArg.open_type = MENU_OPEN_MAIN_DUNGEON;\n        }\n\n        VoiceUnit.StopVoice(10);",
+    "replace": "        } else {\n            MenuArg.open_type = port_menu_open(MENU_OPEN_MAIN_DUNGEON, MenuArg.param);\n        }\n\n        VoiceUnit.StopVoice(10);"
+  },
+  {
+    "file": "ps2/src/editloop.cpp",
+    "find": "#include \"common.h\"\n",
+    "replace": "#include \"common.h\"\n#include \"port_menu.h\"\n"
+  },
+  {
+    "file": "ps2/src/dng_main.cpp",
+    "find": "#include \"common.h\"\n",
+    "replace": "#include \"common.h\"\n#include \"port_menu.h\"\n"
   }
 ]
