@@ -193,8 +193,14 @@ What the fishing work kept needing, in the order to build it:
    a restored port file, loading in each and playing the same input: every picture identical. A
    clip recorded in one build replays in a rebuilt one with player and camera within 0.001. The
    iOS app links at `0x1_0000_0000` with the same segments and still runs.
-3. **A black box.** Keep the last 30 seconds as a savestate every few seconds plus the input, and
-   write them as a clip on a crash, on F9 or on `blackbox`, so "it crashed" arrives replayable.
+3. **A black box.** Done (`port/debug/blackbox.cpp`). The debug build keeps a savestate every 300
+   frames (7 of them, about 190 MB in a town) plus each frame's input and trace, and writes the
+   last 30 s or more as an ordinary clip on a crash (`crash-<time>`), on F9 or on `blackbox`
+   (`box-<time>`); `blackbox on=0`, the Clips tab checkbox or `DC2TK_BLACKBOX=0` turns it off.
+   Its saves go through `debug_savestate_frame` like every other, so a loaded box state resumes
+   where clip states do. A load empties it; debug commands that change the game outside input
+   (warps, `poke`) inside its window make the clip stray. Each state costs 15-20 ms once every
+   5 s. Checked: a written box and one written by a SIGSEGV both replay within 0.001.
 4. **Fault watch.** Check the camera and player for NaN and wild values every frame; on the first
    bad frame log it, keep a clip and pause.
 5. **Recordings and clips from any state:** `record` and `replay` start from a named state as well

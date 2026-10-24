@@ -199,7 +199,8 @@ void debug_finish(DebugReply *reply) {
 static const DebugCommand *find_command(const char *name) {
     const DebugCommand *tables[] = {debug_core_commands, debug_scenario_commands, debug_capture_commands,
                                     debug_replay_commands, debug_savestate_commands, debug_reload_commands,
-                                    debug_overlay_commands, debug_clip_commands, debug_memory_commands, debug_watch_commands};
+                                    debug_overlay_commands, debug_clip_commands, debug_memory_commands, debug_watch_commands,
+                                    debug_blackbox_commands};
     for (const DebugCommand *table : tables)
         for (const DebugCommand *command = table; command->name; ++command)
             if (!strcmp(command->name, name)) return command;
@@ -468,7 +469,8 @@ static int command_help(const DebugArgs *args, DebugReply *reply) {
     (void)args;
     const DebugCommand *tables[] = {debug_core_commands, debug_scenario_commands, debug_capture_commands,
                                     debug_replay_commands, debug_savestate_commands, debug_reload_commands,
-                                    debug_overlay_commands, debug_clip_commands, debug_memory_commands, debug_watch_commands};
+                                    debug_overlay_commands, debug_clip_commands, debug_memory_commands, debug_watch_commands,
+                                    debug_blackbox_commands};
     debug_print(reply, "{\"commands\": [");
     int first = 1;
     for (const DebugCommand *table : tables)
@@ -795,6 +797,10 @@ extern "C" int debug_event(const void *event) {
             debug_clip_hotkey();
             return 1;
         }
+        if (e->key.scancode == SDL_SCANCODE_F9) {
+            debug_blackbox_hotkey();
+            return 1;
+        }
     }
     return debug_window_event(event);
 }
@@ -834,6 +840,7 @@ extern "C" void debug_input(struct port_input_state *state) {
         }
     }
     debug_replay_input(state);
+    debug_blackbox_input(state);
 }
 
 static void record_frame(uint64_t exit_time) {
@@ -865,6 +872,7 @@ extern "C" STATE_RESUMABLE void debug_frame_exit(void) {
     if (injection.frames > 0) injection.frames--;
     debug_capture_frame();
     debug_replay_frame();
+    debug_blackbox_frame();
     debug_savestate_frame();
     debug_clip_frame();
     debug_reload_frame();

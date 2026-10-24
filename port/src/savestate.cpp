@@ -364,7 +364,7 @@ static void save_state(PortState *state) {
             if (stored) size += length;
         }
     }
-    unsigned char *data = (unsigned char *)malloc(size);
+    unsigned char *data = state->room >= size ? state->data : (unsigned char *)malloc(size);
     if (!data) {
         snprintf(problem, sizeof problem, "no memory for a %zu byte savestate", size);
         return;
@@ -407,7 +407,10 @@ static void save_state(PortState *state) {
         }
     }
     visual_save(at + audio_save(at));
-    free(state->data);
+    if (data != state->data) {
+        free(state->data);
+        state->room = size;
+    }
     state->data = data;
     state->size = size;
 }
@@ -717,6 +720,8 @@ void port_state_force(int force) { force_load = force; }
 
 float port_state_ms(void) { return host_ms; }
 
+const char *port_state_keep(void) { return port_state_ready() ? port_state_ready() : keep_build(); }
+
 STATE_RESUMABLE void port_state_frame(void) {
     if (!request_kind) return;
     if (request_kind == STATE_SAVE && !port_movie_end() && port_movie_started()) {
@@ -790,5 +795,6 @@ const char *port_state_read(PortState *state, const char *path) {
     free(state->data);
     state->data = data;
     state->size = (size_t)size;
+    state->room = (size_t)size;
     return NULL;
 }

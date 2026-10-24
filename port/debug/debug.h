@@ -1,6 +1,7 @@
 #pragma once
 
 #include "input.h"
+#include "port_state.h"
 #include "port_stats.h"
 #include <stddef.h>
 #include <stdint.h>
@@ -9,7 +10,7 @@
 extern "C" {
 #endif
 
-enum { DEBUG_ARG_LIMIT = 16, DEBUG_HISTORY = 600, DEBUG_CLIENT_NONE = -1 };
+enum { DEBUG_ARG_LIMIT = 16, DEBUG_HISTORY = 600, DEBUG_CLIENT_NONE = -1, DEBUG_TRACE = 256 };
 
 typedef struct {
     int count;
@@ -95,6 +96,7 @@ extern const DebugCommand debug_overlay_commands[];
 extern const DebugCommand debug_clip_commands[];
 extern const DebugCommand debug_memory_commands[];
 extern const DebugCommand debug_watch_commands[];
+extern const DebugCommand debug_blackbox_commands[];
 
 void debug_scenario_panel(void);
 void debug_capture_panel(void);
@@ -102,6 +104,7 @@ void debug_replay_panel(void);
 void debug_clip_panel(void);
 void debug_savestate_panel(void);
 void debug_watch_panel(void);
+void debug_blackbox_panel(void);
 void debug_reload_bar(void);
 void debug_helpers_panel(void);
 void debug_hold(uint16_t buttons, int frames);
@@ -126,6 +129,14 @@ void debug_savestate_frame(void);
 void debug_reload_frame(void);
 void debug_clip_frame(void);
 void debug_clip_hotkey(void);
+void debug_clip_trace(char *text, size_t size);
+int debug_savestate_into(PortState *state);
+void debug_blackbox_input(const struct port_input_state *state);
+void debug_blackbox_frame(void);
+void debug_blackbox_saved(int saved);
+void debug_blackbox_clear(void);
+void debug_blackbox_hotkey(void);
+void debug_blackbox_crash(void);
 void debug_scenario_frame(void);
 
 #ifdef __cplusplus

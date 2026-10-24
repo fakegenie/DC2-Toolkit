@@ -91,17 +91,29 @@ static void sample(TracePoint *point) {
     memcpy(point->look, pose[2], sizeof point->look);
 }
 
-static void write_point(uint32_t frame, const TracePoint *point) {
+static void format_point(char *text, size_t size, const TracePoint *point) {
     CScene *scene = GetSaveData() && (GetNowLoopNo() == LOOP_EDIT || GetNowLoopNo() == LOOP_DUNGEON) ? GetMainScene() : NULL;
     float rotation[4] = {0};
     CCharacter2 *chara = scene ? scene->GetCharacter(scene->player_chara >= 0 ? scene->player_chara : 0) : NULL;
     if (chara) chara->GetRotation(rotation);
-    fprintf(trace,
-            "{\"frame\": %u, \"player\": [%.3f, %.3f, %.3f], \"camera\": [%.3f, %.3f, %.3f], \"look\": [%.4f, %.4f, "
-            "%.4f], \"yaw\": %.4f, \"loop\": %d, \"field\": %llu}\n",
-            frame, point->player[0], point->player[1], point->player[2], point->camera[0], point->camera[1],
-            point->camera[2], point->look[0], point->look[1], point->look[2], rotation[1], GetNowLoopNo(),
-            (unsigned long long)debug_frames[(debug_frame_total - 1) % DEBUG_HISTORY].field);
+    snprintf(text, size,
+             "\"player\": [%.3f, %.3f, %.3f], \"camera\": [%.3f, %.3f, %.3f], \"look\": [%.4f, %.4f, %.4f], "
+             "\"yaw\": %.4f, \"loop\": %d, \"field\": %llu}",
+             point->player[0], point->player[1], point->player[2], point->camera[0], point->camera[1], point->camera[2],
+             point->look[0], point->look[1], point->look[2], rotation[1], GetNowLoopNo(),
+             (unsigned long long)debug_frames[(debug_frame_total - 1) % DEBUG_HISTORY].field);
+}
+
+static void write_point(uint32_t frame, const TracePoint *point) {
+    char text[DEBUG_TRACE];
+    format_point(text, sizeof text, point);
+    fprintf(trace, "{\"frame\": %u, %s\n", frame, text);
+}
+
+void debug_clip_trace(char *text, size_t size) {
+    TracePoint point;
+    sample(&point);
+    format_point(text, size, &point);
 }
 
 static void finish(const char *message) {
@@ -364,6 +376,7 @@ void debug_clip_panel(void) {
     }
     if (clip_state == CLIP_IDLE && clip_message[0]) ImGui::TextWrapped("%s", clip_message);
     live_values();
+    debug_blackbox_panel();
     ImGui::Separator();
     if (!entry_count) {
         ImGui::TextUnformatted("No clips yet. Press F8 in the game window to record one.");

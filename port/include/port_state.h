@@ -34,6 +34,7 @@ typedef struct {
 typedef struct {
     unsigned char *data;
     size_t size;
+    size_t room;
 } PortState;
 
 const char *port_state_ready(void);
@@ -43,6 +44,7 @@ const char *port_state_problem(void);
 const char *port_state_note(void);
 void port_state_force(int force);
 float port_state_ms(void);
+const char *port_state_keep(void);
 STATE_RESUMABLE void port_state_frame(void);
 void port_state_host(void);
 const PortStateHeader *port_state_header(const PortState *state);
