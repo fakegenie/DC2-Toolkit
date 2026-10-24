@@ -8,6 +8,9 @@ pools, and reports how full each pool got.
     python3 -I tools/memory_tour.py recordings          replays port/tests/recordings
     python3 -I tools/memory_tour.py untested            pool set-up sites in the source no tour has reached yet
     python3 -I tools/memory_tour.py all                 places, menus, models and recordings, then untested
+    python3 -I tools/memory_tour.py clips               replays every clip in build/port/clips and port/tests/recordings
+                                                        and reports the ones that strayed, faulted or crashed, and
+                                                        apart from those the ones whose state no longer loads
     python3 -I tools/memory_tour.py record fishing       starts the game in front set up for that minigame, says what to
                                                         play, and records your input to port/tests/recordings until you
                                                         press Enter here
@@ -15,9 +18,10 @@ pools, and reports how full each pool got.
                                                         the same from any debug API warp
 
 It runs its own copy of build/port/darkchronicle-debug on DC2TK_DEBUG_PORT 7793 with throwaway saves, no
-overrides and DC2TK_MEMORY_STRICT=1, so the first pool overflow stops the game. Every visit starts from the
+overrides and DC2TK_MEMORY_STRICT=1, so the first pool overflow stops the game, and with the fault watch
+logging NaN or far-off camera and player values without pausing. Every visit starts from the
 cap8 preset with the unlock command. Results go to build/port/memory-tour: report.json, the pools seen so far in
-seen.json, and screenshots. It exits with 1 when a pool overflowed or the game crashed.
+seen.json, and screenshots. It exits with 1 when a pool overflowed, a fault was seen or the game crashed.
 """
 
 import json
@@ -36,6 +40,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BINARY = ROOT / "build" / "port" / "darkchronicle-debug"
 OUT = ROOT / "build" / "port" / "memory-tour"
 RECORDINGS = ROOT / "port" / "tests" / "recordings"
+CLIPS = ROOT / "build" / "port" / "clips"
 SOURCES = [ROOT / "build" / "port" / "copy" / "ps2" / "src", ROOT / "port" / "src"]
 PORT = 7793
 FLOOR_COUNTS = [6, 14, 22, 19, 21, 26, 37]
@@ -63,7 +68,7 @@ MINIGAMES = {
 }
 
 game = {"process": None, "log": None, "saves": None, "overrides": None}
-results = {"visits": [], "overflows": [], "crashes": []}
+results = {"visits": [], "overflows": [], "faults": [], "strayed": [], "unplayable": [], "crashes": []}
 
 
 def request(command, arguments=None, timeout=60):
@@ -117,7 +122,7 @@ def launch(front=False, paused=False, speed="0"):
     game["overrides"] = game["overrides"] or tempfile.mkdtemp(prefix="dc2tk-memory-overrides-")
     flags = [] if front else ["--mute", "--background"]
     env = {**os.environ, "DC2TK_DEBUG_PORT": str(PORT), "DC2_SAVE_ROOT": game["saves"],
-           "DC2TK_OVERRIDES": game["overrides"], "DC2TK_MEMORY_STRICT": "1"}
+           "DC2TK_OVERRIDES": game["overrides"], "DC2TK_MEMORY_STRICT": "1", "DC2TK_FAULT_PAUSE": "0"}
     game["log"] = open(log_path(), "a")
     game["process"] = subprocess.Popen([str(BINARY), *flags, str(ROOT / "dc2.iso")], cwd=ROOT, stdout=game["log"],
                                        stderr=game["log"], env=env)
@@ -196,6 +201,10 @@ def visit(label, steps, shot=None):
     if over:
         record["over"] = over
         results["overflows"].append({"where": label, "lines": over})
+    faults = [line for line in lines if line.startswith("fault:")]
+    if faults:
+        record["faults"] = faults
+        results["faults"].append({"where": label, "lines": faults})
     if not record["alive"]:
         record["tail"] = lines[-12:]
         if not over:
@@ -203,6 +212,7 @@ def visit(label, steps, shot=None):
         stop()
     results["visits"].append(record)
     print(json.dumps(record), flush=True)
+    return record
 
 
 def town(name, event=None):
@@ -273,6 +283,25 @@ def tour_recordings():
         stop()
 
 
+def clip_frames(folder):
+    return len((folder / "trace.jsonl").read_text().splitlines())
+
+
+def tour_clips():
+    folders = sorted(folder for base in (CLIPS, RECORDINGS) if base.exists() for folder in base.iterdir()
+                     if (folder / "start.state").exists() and (folder / "trace.jsonl").exists())
+    for folder in folders:
+        record = visit(f"clip {folder.name}", [("clip_play", {"name": str(folder)}, clip_frames(folder) + 30)])
+        status = request("clip_status", timeout=10) if record["alive"] else None
+        if not status:
+            continue
+        message = status["message"]
+        kind = "unplayable" if message.startswith("savestate failed") else "strayed"
+        if status["state"] != "idle" or not message.startswith("played") or status["first_apart"] >= 0:
+            results[kind].append({"clip": str(folder), "state": status["state"], "message": message})
+            print(json.dumps({"clip": folder.name, kind: message or status["state"]}), flush=True)
+
+
 def record(name, words):
     chosen = MINIGAMES[name]["start"] if name in MINIGAMES else [" ".join(words), "step frames=400"]
     start = ["seed value=1", *chosen]
@@ -330,9 +359,10 @@ def report():
     results["fullest"] = sorted(({"offset": offset, **pool} for offset, pool in seen.items() if pool.get("used")),
                                 key=lambda pool: -pool["full"])[:30]
     (OUT / "report.json").write_text(json.dumps(results, indent=1))
-    print(f"{len(results['visits'])} visits, {len(results['overflows'])} overflows, {len(results['crashes'])} crashes; "
-          f"{OUT / 'report.json'}")
-    return 1 if results["overflows"] or results["crashes"] else 0
+    print(f"{len(results['visits'])} visits, {len(results['overflows'])} overflows, {len(results['faults'])} faults, "
+          f"{len(results['strayed'])} clips strayed, {len(results['unplayable'])} could not load, "
+          f"{len(results['crashes'])} crashes; {OUT / 'report.json'}")
+    return 1 if results["overflows"] or results["faults"] or results["strayed"] or results["crashes"] else 0
 
 
 def main():
@@ -347,8 +377,8 @@ def main():
         record(sys.argv[2], sys.argv[3:])
         return
     tours = {"places": tour_places, "menus": tour_menus, "models": tour_models, "recordings": tour_recordings,
-             "untested": tour_untested}
-    names = list(tours) if sys.argv[1] == "all" else sys.argv[1:]
+             "untested": tour_untested, "clips": tour_clips}
+    names = [name for name in tours if name != "clips"] if sys.argv[1] == "all" else sys.argv[1:]
     for name in names:
         if name not in tours:
             sys.exit(__doc__)

@@ -48,6 +48,12 @@ typedef struct {
     PortStats stats;
 } DebugFrame;
 
+typedef struct {
+    float player[3];
+    float camera[3];
+    float look[3];
+} DebugPoint;
+
 extern DebugFrame debug_frames[DEBUG_HISTORY];
 extern uint32_t debug_frame_total;
 extern int debug_paused;
@@ -97,6 +103,7 @@ extern const DebugCommand debug_clip_commands[];
 extern const DebugCommand debug_memory_commands[];
 extern const DebugCommand debug_watch_commands[];
 extern const DebugCommand debug_blackbox_commands[];
+extern const DebugCommand debug_fault_commands[];
 
 void debug_scenario_panel(void);
 void debug_capture_panel(void);
@@ -130,6 +137,10 @@ void debug_reload_frame(void);
 void debug_clip_frame(void);
 void debug_clip_hotkey(void);
 void debug_clip_trace(char *text, size_t size);
+void debug_clip_sample(DebugPoint *point);
+const char *debug_blackbox_write(const char *prefix, char *name, size_t size);
+void debug_fault_frame(void);
+void debug_fault_panel(void);
 int debug_savestate_into(PortState *state);
 void debug_blackbox_input(const struct port_input_state *state);
 void debug_blackbox_frame(void);

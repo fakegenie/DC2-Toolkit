@@ -3,7 +3,18 @@
 #include <stddef.h>
 #include <stdint.h>
 
+static uint32_t rand_next = 1;
+
 void mwInit(void) {
+}
+
+void srand(unsigned int seed) {
+    rand_next = seed;
+}
+
+int rand(void) {
+    rand_next = rand_next * 1103515245u + 12345u;
+    return (int)(rand_next & 0x7fffffff);
 }
 
 int fptosi(float value) {

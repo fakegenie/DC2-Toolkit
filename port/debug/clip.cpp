@@ -13,8 +13,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-enum { CLIP_IDLE, CLIP_SAVING, CLIP_RECORDING, CLIP_LOADING, CLIP_PLAYING };
-enum { CLIP_NAME = 64, CLIP_PATH = 256, TRACE_LINE = 512, CLIP_SLOT = 7, CLIP_LIMIT = 64, CLIP_REFRESH_MS = 1000 };
+enum { CLIP_IDLE, CLIP_SAVING, CLIP_RECORDING, CLIP_LOADING, CLIP_PLAYING, CLIP_STARTING };
+enum { CLIP_NAME = 160, CLIP_PATH = 320, TRACE_LINE = 512, CLIP_SLOT = 7, CLIP_LIMIT = 64, CLIP_REFRESH_MS = 1000 };
 
 typedef struct {
     char name[CLIP_NAME];
@@ -22,12 +22,6 @@ typedef struct {
     int loop;
     long long taken;
 } ClipEntry;
-
-typedef struct {
-    float player[3];
-    float camera[3];
-    float look[3];
-} TracePoint;
 
 static int clip_state;
 static char clip_name[CLIP_NAME];
@@ -51,14 +45,29 @@ static const char *const loop_names[] = {"menu", "town", "dungeon", "title", "ch
                                          "map viewer", "snd viewer", "movie viewer", "save convert"};
 
 static void clip_folder(const char *name, char *path, size_t size) {
-    snprintf(path, size, "build/port/clips/%s", name);
+    if (strchr(name, '/')) snprintf(path, size, "%s", name);
+    else snprintf(path, size, "build/port/clips/%s", name);
 }
 
 static void clip_file(const char *name, const char *file, char *path, size_t size) {
-    snprintf(path, size, "build/port/clips/%s/%s", name, file);
+    char folder[CLIP_PATH];
+    clip_folder(name, folder, sizeof folder);
+    snprintf(path, size, "%s/%s", folder, file);
 }
 
-static int read_point(FILE *file, TracePoint *point) {
+static int copy_file(const char *from, const char *to) {
+    FILE *in = fopen(from, "rb");
+    FILE *out = in ? fopen(to, "wb") : NULL;
+    char buffer[1 << 16];
+    size_t length = 0;
+    int ok = in && out;
+    while (ok && (length = fread(buffer, 1, sizeof buffer, in)) > 0) ok = fwrite(buffer, 1, length, out) == length;
+    if (in) fclose(in);
+    if (out && fclose(out)) ok = 0;
+    return ok;
+}
+
+static int read_point(FILE *file, DebugPoint *point) {
     char line[TRACE_LINE];
     while (fgets(line, sizeof line, file)) {
         unsigned frame;
@@ -74,7 +83,7 @@ static float distance(const float *a, const float *b) {
     return sqrtf((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]));
 }
 
-static void sample(TracePoint *point) {
+void debug_clip_sample(DebugPoint *point) {
     memset(point, 0, sizeof *point);
     CScene *scene = GetSaveData() && (GetNowLoopNo() == LOOP_EDIT || GetNowLoopNo() == LOOP_DUNGEON) ? GetMainScene() : NULL;
     CCharacter2 *chara = scene ? scene->GetCharacter(scene->player_chara >= 0 ? scene->player_chara : 0) : NULL;
@@ -91,7 +100,7 @@ static void sample(TracePoint *point) {
     memcpy(point->look, pose[2], sizeof point->look);
 }
 
-static void format_point(char *text, size_t size, const TracePoint *point) {
+static void format_point(char *text, size_t size, const DebugPoint *point) {
     CScene *scene = GetSaveData() && (GetNowLoopNo() == LOOP_EDIT || GetNowLoopNo() == LOOP_DUNGEON) ? GetMainScene() : NULL;
     float rotation[4] = {0};
     CCharacter2 *chara = scene ? scene->GetCharacter(scene->player_chara >= 0 ? scene->player_chara : 0) : NULL;
@@ -104,15 +113,15 @@ static void format_point(char *text, size_t size, const TracePoint *point) {
              (unsigned long long)debug_frames[(debug_frame_total - 1) % DEBUG_HISTORY].field);
 }
 
-static void write_point(uint32_t frame, const TracePoint *point) {
+static void write_point(uint32_t frame, const DebugPoint *point) {
     char text[DEBUG_TRACE];
     format_point(text, sizeof text, point);
     fprintf(trace, "{\"frame\": %u, %s\n", frame, text);
 }
 
 void debug_clip_trace(char *text, size_t size) {
-    TracePoint point;
-    sample(&point);
+    DebugPoint point;
+    debug_clip_sample(&point);
     format_point(text, size, &point);
 }
 
@@ -133,18 +142,36 @@ static int open_trace(const char *file) {
     return trace != NULL;
 }
 
-static int clip_start(const char *name) {
-    if (clip_state != CLIP_IDLE) return 0;
-    char path[CLIP_PATH], line[CLIP_PATH + 32];
+static const char *state_name(void);
+
+static int clip_start(const char *name, const char *from) {
+    if (clip_state != CLIP_IDLE) {
+        snprintf(clip_message, sizeof clip_message, "a clip is already %s", state_name());
+        return 0;
+    }
+    char path[CLIP_PATH], line[CLIP_PATH + 32], state[CLIP_PATH];
     mkdir("build/port/clips", 0755);
     clip_folder(name, path, sizeof path);
     mkdir(path, 0755);
     snprintf(clip_name, sizeof clip_name, "%s", name);
     clip_file(name, "start.state", path, sizeof path);
-    snprintf(line, sizeof line, "save?slot=%d&path=%s", CLIP_SLOT, path);
-    debug_run(line);
-    clip_state = CLIP_SAVING;
     clip_message[0] = 0;
+    if (!from) {
+        snprintf(line, sizeof line, "save?slot=%d&path=%s", CLIP_SLOT, path);
+        debug_run(line);
+        clip_state = CLIP_SAVING;
+        return 1;
+    }
+    if (strchr(from, '/')) snprintf(state, sizeof state, "%s", from);
+    else snprintf(state, sizeof state, "build/port/savestates/%s", from);
+    if (!copy_file(state, path)) {
+        snprintf(clip_message, sizeof clip_message, "cannot copy %s into %s", state, path);
+        return 0;
+    }
+    snprintf(line, sizeof line, "load?slot=%d&path=%s", CLIP_SLOT, path);
+    debug_run(line);
+    clip_state = CLIP_STARTING;
+    debug_paused = 0;
     return 1;
 }
 
@@ -155,7 +182,7 @@ static void clip_stop(void) {
         snprintf(message, sizeof message, "recorded %s, %u frames", clip_name, debug_frame_total - clip_base);
         finish(message);
     }
-    if (clip_state == CLIP_PLAYING || clip_state == CLIP_LOADING) {
+    if (clip_state == CLIP_PLAYING || clip_state == CLIP_LOADING || clip_state == CLIP_STARTING) {
         debug_run("replay_stop");
         finish("playback stopped");
     }
@@ -200,11 +227,11 @@ static void begin_after_state(const char *input_command, const char *file, const
         return;
     }
     clip_base = debug_frame_total;
-    clip_state = clip_state == CLIP_SAVING ? CLIP_RECORDING : CLIP_PLAYING;
+    clip_state = clip_state == CLIP_LOADING ? CLIP_PLAYING : CLIP_RECORDING;
 }
 
-static void compare(uint32_t frame, const TracePoint *now) {
-    TracePoint then;
+static void compare(uint32_t frame, const DebugPoint *now) {
+    DebugPoint then;
     if (!recorded || !read_point(recorded, &then)) return;
     float apart_player = distance(now->player, then.player), apart_camera = distance(now->camera, then.camera);
     if (apart_player > worst_player) worst_player = apart_player;
@@ -215,10 +242,11 @@ static void compare(uint32_t frame, const TracePoint *now) {
 void debug_clip_frame(void) {
     if (clip_state == CLIP_SAVING) begin_after_state("record", "trace.jsonl", "\"saved\"");
     else if (clip_state == CLIP_LOADING) begin_after_state("replay", "play.jsonl", "\"loaded\"");
+    else if (clip_state == CLIP_STARTING) begin_after_state("record", "trace.jsonl", "\"loaded\"");
     if (clip_state != CLIP_RECORDING && clip_state != CLIP_PLAYING) return;
     uint32_t frame = debug_frame_total - clip_base;
-    TracePoint point;
-    sample(&point);
+    DebugPoint point;
+    debug_clip_sample(&point);
     write_point(frame, &point);
     if (clip_state != CLIP_PLAYING) return;
     compare(frame, &point);
@@ -238,11 +266,11 @@ void debug_clip_hotkey(void) {
     char name[CLIP_NAME];
     time_t now = time(NULL);
     strftime(name, sizeof name, "clip-%Y%m%d-%H%M%S", localtime(&now));
-    clip_start(name);
+    clip_start(name, NULL);
 }
 
 static const char *state_name(void) {
-    static const char *const names[] = {"idle", "saving", "recording", "loading", "playing"};
+    static const char *const names[] = {"idle", "saving", "recording", "loading", "playing", "starting"};
     return names[clip_state];
 }
 
@@ -299,8 +327,8 @@ static const char *loop_name(int loop) {
 }
 
 static void live_values(void) {
-    TracePoint point;
-    sample(&point);
+    DebugPoint point;
+    debug_clip_sample(&point);
     ImGui::Text("player %.1f %.1f %.1f   camera %.1f %.1f %.1f   looking %.2f %.2f %.2f", point.player[0],
                 point.player[1], point.player[2], point.camera[0], point.camera[1], point.camera[2], point.look[0],
                 point.look[1], point.look[2]);
@@ -353,7 +381,7 @@ void debug_clip_panel(void) {
         ImGui::InputTextWithHint("##name", "name (blank for the time)", panel_name, sizeof panel_name);
         ImGui::SameLine();
         if (ImGui::Button("Record clip (F8)")) {
-            if (panel_name[0]) clip_start(panel_name);
+            if (panel_name[0]) clip_start(panel_name, NULL);
             else debug_clip_hotkey();
             panel_name[0] = 0;
         }
@@ -368,7 +396,7 @@ void debug_clip_panel(void) {
         debug_steps = 1;
     }
     if (clip_state == CLIP_RECORDING) ImGui::Text("recording %s: frame %u", clip_name, frame);
-    if (clip_state == CLIP_SAVING || clip_state == CLIP_LOADING) ImGui::Text("%s %s...", state_name(), clip_name);
+    if (clip_state == CLIP_SAVING || clip_state == CLIP_LOADING || clip_state == CLIP_STARTING) ImGui::Text("%s %s...", state_name(), clip_name);
     if (clip_state == CLIP_PLAYING) {
         ImGui::Text("playing %s: frame %u of %u   player apart %.2f, camera apart %.2f", clip_name, frame, clip_frames,
                     worst_player, worst_camera);
@@ -377,6 +405,7 @@ void debug_clip_panel(void) {
     if (clip_state == CLIP_IDLE && clip_message[0]) ImGui::TextWrapped("%s", clip_message);
     live_values();
     debug_blackbox_panel();
+    debug_fault_panel();
     ImGui::Separator();
     if (!entry_count) {
         ImGui::TextUnformatted("No clips yet. Press F8 in the game window to record one.");
@@ -408,7 +437,8 @@ static int command_clip(const DebugArgs *args, DebugReply *reply) {
     char name[CLIP_NAME];
     time_t now = time(NULL);
     strftime(name, sizeof name, "clip-%Y%m%d-%H%M%S", localtime(&now));
-    if (!clip_start(debug_arg(args, "name", name))) return debug_fail(reply, "a clip is already %s", state_name());
+    if (!clip_start(debug_arg(args, "name", name), debug_arg(args, "from", NULL)))
+        return debug_fail(reply, "%s", clip_message);
     print_status(reply);
     return 0;
 }
@@ -453,11 +483,12 @@ static int command_clips(const DebugArgs *args, DebugReply *reply) {
 extern const DebugCommand debug_clip_commands[] = {
     {"clip", command_clip, 0,
      "record a clip: a savestate now, then the input and each frame's player position and camera until clip_stop "
-     "(F8 in the game window starts and stops one); name=N"},
+     "(F8 in the game window starts and stops one); name=N, or a folder path; from=STATE starts it from that "
+     "savestate (a name under build/port/savestates or a path) instead of now"},
     {"clip_stop", command_clip_stop, 0, "stop recording or playing a clip"},
     {"clip_play", command_clip_play, 0,
      "load a clip's savestate and replay its input, tracing the same values to play.jsonl and comparing them; "
-     "name=N [pause=frame]"},
+     "name=N or a folder path [pause=frame]"},
     {"clip_status", command_clip_status, 1, "the clip being recorded or played, and how far playback strayed"},
     {"clips", command_clips, 1, "the recorded clips in build/port/clips"},
     {NULL, NULL, 0, NULL},

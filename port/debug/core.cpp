@@ -200,14 +200,25 @@ static const DebugCommand *find_command(const char *name) {
     const DebugCommand *tables[] = {debug_core_commands, debug_scenario_commands, debug_capture_commands,
                                     debug_replay_commands, debug_savestate_commands, debug_reload_commands,
                                     debug_overlay_commands, debug_clip_commands, debug_memory_commands, debug_watch_commands,
-                                    debug_blackbox_commands};
+                                    debug_blackbox_commands, debug_fault_commands};
     for (const DebugCommand *table : tables)
         for (const DebugCommand *command = table; command->name; ++command)
             if (!strcmp(command->name, name)) return command;
     return NULL;
 }
 
+static int changes_game(const DebugCommand *command) {
+    if (!strcmp(command->name, "poke")) return 1;
+    if (command->immediate) return 0;
+    const DebugCommand *tables[] = {debug_scenario_commands, debug_reload_commands};
+    for (const DebugCommand *table : tables)
+        for (const DebugCommand *at = table; at->name; ++at)
+            if (at == command) return 1;
+    return 0;
+}
+
 static void execute(const DebugCommand *command, const DebugArgs *args, int client) {
+    if (changes_game(command)) debug_blackbox_clear();
     DebugReply reply;
     memset(&reply, 0, sizeof reply);
     reply.client = client;
@@ -232,6 +243,7 @@ void debug_dispatch(const char *name, const DebugArgs *args, int client) {
         }
         static char answer[16384];
         answer[0] = 0;
+        debug_blackbox_clear();
         int result = port_mods_command(name, keys, values, args->count, answer, sizeof answer);
         if (result < 0) debug_fail(&reply, "no command %s; try /help", name);
         else if (result > 0) debug_fail(&reply, "%s", answer);
@@ -470,7 +482,7 @@ static int command_help(const DebugArgs *args, DebugReply *reply) {
     const DebugCommand *tables[] = {debug_core_commands, debug_scenario_commands, debug_capture_commands,
                                     debug_replay_commands, debug_savestate_commands, debug_reload_commands,
                                     debug_overlay_commands, debug_clip_commands, debug_memory_commands, debug_watch_commands,
-                                    debug_blackbox_commands};
+                                    debug_blackbox_commands, debug_fault_commands};
     debug_print(reply, "{\"commands\": [");
     int first = 1;
     for (const DebugCommand *table : tables)
@@ -875,6 +887,7 @@ extern "C" STATE_RESUMABLE void debug_frame_exit(void) {
     debug_blackbox_frame();
     debug_savestate_frame();
     debug_clip_frame();
+    debug_fault_frame();
     debug_reload_frame();
     debug_scenario_frame();
     debug_run_queued();

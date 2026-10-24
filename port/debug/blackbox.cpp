@@ -9,7 +9,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-enum { BOX_STATES = 7, BOX_EVERY = 300, BOX_FRAMES = (BOX_STATES + 1) * BOX_EVERY, BOX_NAME = 64, BOX_PATH = 256,
+enum { BOX_STATES = 7, BOX_EVERY = 300, BOX_FRAMES = (BOX_STATES + 1) * BOX_EVERY, BOX_NAME = 160, BOX_PATH = 320,
        BOX_LINE = DEBUG_TRACE + 32 };
 
 typedef struct {
@@ -141,9 +141,15 @@ static int write_all(int fd, const void *data, size_t size) {
     return 1;
 }
 
+static void box_folder(const char *name, char *path, size_t size) {
+    if (strchr(name, '/')) snprintf(path, size, "%s", name);
+    else snprintf(path, size, "build/port/clips/%s", name);
+}
+
 static int open_file(const char *name, const char *file) {
-    char path[BOX_PATH];
-    snprintf(path, sizeof path, "build/port/clips/%s/%s", name, file);
+    char folder[BOX_PATH], path[BOX_PATH + 32];
+    box_folder(name, folder, sizeof folder);
+    snprintf(path, sizeof path, "%s/%s", folder, file);
     return open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 }
 
@@ -192,7 +198,7 @@ static const char *write_box(const char *name, uint32_t *frames) {
     if (oldest < 0) return "the black box has no state yet";
     char path[BOX_PATH];
     mkdir("build/port/clips", 0755);
-    snprintf(path, sizeof path, "build/port/clips/%s", name);
+    box_folder(name, path, sizeof path);
     mkdir(path, 0755);
     uint32_t from = states[oldest].frame;
     if (!write_state(name, &states[oldest]) || !write_input(name, from, to) || !write_trace(name, from, to))
@@ -230,10 +236,15 @@ static const char *write_named(const char *name) {
     return problem;
 }
 
+const char *debug_blackbox_write(const char *prefix, char *name, size_t size) {
+    if (!box_on()) return "the black box is off";
+    box_name(prefix, name, size);
+    return write_named(name);
+}
+
 void debug_blackbox_hotkey(void) {
     char name[BOX_NAME];
-    box_name("box", name, sizeof name);
-    write_named(name);
+    debug_blackbox_write("box", name, sizeof name);
 }
 
 static void set_on(int on) {

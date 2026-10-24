@@ -112,7 +112,7 @@ ALIASES = {
 }
 ENGINE_PORT_FILES = ["memory", "split_data"]
 RESTORED_PORT_FILES = ["kernel", "graphics", "cdvd", "spu2", "iop", "devices", "mg_shadow", "mg_drawprim", "frame", "draw",
-                       "mg_visual", "mg_sprite", "water"]
+                       "mg_visual", "mg_sprite", "water", "runtime"]
 OPERATORS = {
     **dict.fromkeys(["_Znwm", "_Znam", "_ZnwmRKSt9nothrow_t", "_ZnamRKSt9nothrow_t"], "port_new"),
     **dict.fromkeys(["_ZnwmSt11align_val_t", "_ZnamSt11align_val_t", "_ZnwmSt11align_val_tRKSt9nothrow_t",

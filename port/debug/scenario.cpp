@@ -7,6 +7,7 @@
 #include "imgui.h"
 #include "mainloop.hpp"
 #include "mapselect.hpp"
+#include "menuaqua.hpp"
 #include "menuchr.hpp"
 #include "menumain.hpp"
 #include "mglib.hpp"
@@ -37,7 +38,7 @@ typedef struct {
     const char *label;
 } Place;
 
-enum { FLOOR_START_EVENT = 1010, MAP_LIMIT = 1024, ITEM_LIMIT = ITEM_NO_MAX, LIST_LIMIT = 64, PARTS_LIMIT = 0x100, CHAPTER_LIMIT = 9 };
+enum { FLOOR_START_EVENT = 1010, RACE_MAP = 96, MAP_LIMIT = 1024, ITEM_LIMIT = ITEM_NO_MAX, LIST_LIMIT = 64, PARTS_LIMIT = 0x100, CHAPTER_LIMIT = 9 };
 
 static const char *loop_names[LOOP_MODE_NUM] = {"menu",       "town",       "dungeon",    "title",      "chara viewer",
                                                 "tex viewer", "map viewer", "snd viewer", "movie viewer", "save convert"};
@@ -133,6 +134,9 @@ static int pick_preset_money;
 static int pick_town;
 static int pick_part;
 static int pick_part_count = 30;
+static int pick_race_class;
+static int pick_race;
+static int pick_race_fish = -1;
 static bool pick_conditions_lifted;
 static char map_filter[64];
 static char item_filter[64];
@@ -430,6 +434,65 @@ static int command_character(const DebugArgs *args, DebugReply *reply) {
     int loop = GetNowLoopNo();
     if (in_playable_loop()) return enter(loop, here(loop), reply);
     debug_print(reply, "{\"ok\": 1, \"active\": \"%s\"}", character_names[chara]);
+    return 0;
+}
+
+static int fill_aquarium(CUserDataManager *user) {
+    int moved = 0;
+    for (CGameDataUsed &item : user->used_data)
+        if (item.item_no > 0 && item.item_type == ITEM_DATA_FISH && user->FishInAquarium(&item, AQUARIUM_TANK_FIRST)) moved++;
+    return moved;
+}
+
+static void print_tank(DebugReply *reply) {
+    CGameDataUsed *fish = GetAquariumData()->GetAquariumFishTop(AQUARIUM_TANK_FIRST);
+    debug_print(reply, "\"tank\": [");
+    for (int slot = 0; slot < 6; ++slot) {
+        if (slot) debug_print(reply, ", ");
+        if (fish[slot].item_no <= 0) {
+            debug_print(reply, "null");
+            continue;
+        }
+        char name[64];
+        clean(name, sizeof name, fish[slot].GetName(ITEM_NAME_TYPE_LEVEL));
+        debug_print(reply, "{\"slot\": %d, \"item\": %d, \"name\": ", slot, fish[slot].item_no);
+        debug_print_string(reply, name);
+        debug_print(reply, ", \"electric\": %d}", (fish[slot].data.fish.flags & BREEDFISH_FLAG_ELECTRIC) != 0);
+    }
+    debug_print(reply, "]");
+}
+
+static int command_aquarium(const DebugArgs *args, DebugReply *reply) {
+    if (!ready()) return debug_fail(reply, "the game is still starting");
+    int moved = debug_arg_int(args, "fill", 0) ? fill_aquarium(&save()->user_data) : 0;
+    debug_print(reply, "{\"moved\": %d, ", moved);
+    print_tank(reply);
+    debug_print(reply, "}");
+    return 0;
+}
+
+static int command_fishrace(const DebugArgs *args, DebugReply *reply) {
+    if (!ready() || GetNowLoopNo() != LOOP_EDIT || here_map() != RACE_MAP)
+        return debug_fail(reply, "the race runs in the Finny Frenzy race course; town map=%d first", RACE_MAP);
+    CScene *scene = GetMainScene();
+    if (scene->event_run || SubGameRunning()) return debug_fail(reply, "an event or a sub game is running");
+    long race_class = debug_arg_int(args, "class", 0);
+    long race = debug_arg_int(args, "race", 0);
+    long slot = debug_arg_int(args, "fish", -1);
+    if (race_class < 0 || race_class > 3 || race < 0 || race > 2) return debug_fail(reply, "class=0..3 race=0..2");
+    CGameDataUsed *fish = GetAquariumData()->GetAquariumFishTop(AQUARIUM_TANK_FIRST);
+    for (int i = 0; slot < 0 && i < 6; ++i)
+        if (fish[i].item_no > 0 && !(fish[i].data.fish.flags & BREEDFISH_FLAG_ELECTRIC)) slot = i;
+    if (slot < 0 || slot > 5 || fish[slot].item_no <= 0) return debug_fail(reply, "no fish to race in the first tank; aquarium fill=1 moves the inventory's fish there");
+    SetGyoRaceClass((int)race_class);
+    SetGyoRaceNo((int)race);
+    SetGyoRaceAquariumNo((int)slot);
+    GyoraceFish = &fish[slot];
+    SubGameInfo info;
+    memset(&info, 0, sizeof info);
+    info.scene = scene;
+    if (!sgInitSubGame(SUBGAME_GYORACE, &info)) return debug_fail(reply, "the race did not start");
+    debug_print(reply, "{\"ok\": 1, \"class\": %ld, \"race\": %ld, \"fish\": %ld}", race_class, race, slot);
     return 0;
 }
 
@@ -818,6 +881,8 @@ extern const DebugCommand debug_scenario_commands[] = {
     {"defeat", command_defeat, 0, "[list=1] defeats every living monster on the dungeon floor through its own death program, or lists them"},
     {"character", command_character, 0, "who=max|monica|ridepod switches the playable character and re-enters the current place; who=monster monster=id transforms Monica in a dungeon"},
     {"item", command_item, 0, "id=N [count=1] gives an item"},
+    {"aquarium", command_aquarium, 0, "[fill=1] lists the aquarium's first tank; fill=1 first moves every fish in the inventory into it"},
+    {"fishrace", command_fishrace, 0, "[class=0..3] [race=0..2] [fish=slot] starts a fish race with a fish from the aquarium's first tank, as the engine's debug menu does; only on the race course, map 96 (i03h05)"},
     {"itemset", command_itemset, 0, "set=0|1|2|6 gives one of the engine's debug item sets"},
     {"seed", command_seed, 0, "value=N seeds the game's random numbers, so dungeon floors and drops repeat"},
     {"money", command_money, 0, "[amount=N] [add=N] sets or adds money"},
@@ -933,6 +998,17 @@ void debug_scenario_panel(void) {
         ImGui::InputInt("count##part", &pick_part_count);
         if (ImGui::Button("Set part count")) run("geo?part=%d&count=%d", pick_part, pick_part_count);
     }
+    if (ImGui::CollapsingHeader("Fish race")) {
+        if (ImGui::Button("Fish preset")) run("preset?name=sg1&warp=0");
+        ImGui::SameLine();
+        if (ImGui::Button("Go to the race course")) run("town?map=%d", RACE_MAP);
+        ImGui::SameLine();
+        if (ImGui::Button("Fish into the aquarium")) run("aquarium?fill=1");
+        ImGui::InputInt("class (0-3)", &pick_race_class);
+        ImGui::InputInt("race (0-2)", &pick_race);
+        ImGui::InputInt("tank slot (-1 the first fish)", &pick_race_fish);
+        if (ImGui::Button("Start race")) run("fishrace?class=%d&race=%d&fish=%d", pick_race_class, pick_race, pick_race_fish);
+    }
     if (ImGui::CollapsingHeader("Town")) {
         ImGui::InputText("filter##map", map_filter, sizeof map_filter);
         pick_from("maps", maps, map_total, map_filter, &pick_map);
@@ -998,6 +1074,7 @@ void debug_scenario_status(DebugReply *reply) {
     CScene *scene = GetMainScene();
     if (in_playable_loop()) debug_print(reply, ", \"event_run\": %d, \"event\": %d, \"menu\": %d", scene->event_run, scene->event_no, menu_up());
     if (in_playable_loop() && GetSubGameNo() == SUBGAME_FISHING) debug_print(reply, ", \"fishing\": \"%s\"", fishing_step());
+    if (in_playable_loop()) debug_print(reply, ", \"subgame\": %d", SubGameRunning() ? GetSubGameNo() : 0);
     CCharacter2 *chara = in_playable_loop() ? scene->GetCharacter(scene->player_chara >= 0 ? scene->player_chara : 0) : NULL;
     alignas(16) float position[4] = {0};
     if (chara && chara->CObjectFrame::frame) chara->CObjectFrame::frame->GetWorldPosition0(position);

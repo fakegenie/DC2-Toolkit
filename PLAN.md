@@ -201,10 +201,23 @@ What the fishing work kept needing, in the order to build it:
    where clip states do. A load empties it; debug commands that change the game outside input
    (warps, `poke`) inside its window make the clip stray. Each state costs 15-20 ms once every
    5 s. Checked: a written box and one written by a SIGSEGV both replay within 0.001.
-4. **Fault watch.** Check the camera and player for NaN and wild values every frame; on the first
-   bad frame log it, keep a clip and pause.
-5. **Recordings and clips from any state:** `record` and `replay` start from a named state as well
-   as from a warp, and survive rebuilds the way states do.
+4. **Fault watch.** Done (`port/debug/fault.cpp`, `faults`, Clips tab). Every frame the player,
+   the camera position and the camera, view and projection matrices are checked for NaN, infinity
+   or a position past a million; the first bad frame logs a `fault:` line, writes the black box as
+   `fault-<time>` and pauses (`faults pause=0` or `DC2TK_FAULT_PAUSE=0` only logs; memory_tour runs
+   that way and fails on a fault). The places tour (330 places) raised none.
+5. **Clips from any state.** Done. `clip from=STATE` records from a saved state instead of now, and
+   a clip or black box name with a `/` is a folder anywhere (so clips can sit in
+   `port/tests/recordings/NAME/`). `memory_tour.py clips` replays every clip in `build/port/clips`
+   and `port/tests/recordings` and reports the ones that strayed, faulted or crashed, and apart
+   from those the ones whose state no longer loads. The black box empties itself whenever a debug
+   command changes the game outside input (warps and every other scenario command, reload, poke,
+   mod commands), since those cannot replay.
+   Found on the way: the engine's `rand` was the host C library's, whose state no savestate holds,
+   so every replay that drew random numbers after a load strayed (a dungeon floor loaded from a
+   state came out different). `port/src/runtime.c` now has the PS2's own newlib `rand`
+   (next * 1103515245 + 12345, low 31 bits, starting at 1) and `runtime` is restored with states.
+   Random numbers now follow the PS2 sequence, so input recorded before this may play differently.
 
 ### Gates only the user can run
 
