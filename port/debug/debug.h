@@ -94,12 +94,14 @@ extern const DebugCommand debug_reload_commands[];
 extern const DebugCommand debug_overlay_commands[];
 extern const DebugCommand debug_clip_commands[];
 extern const DebugCommand debug_memory_commands[];
+extern const DebugCommand debug_watch_commands[];
 
 void debug_scenario_panel(void);
 void debug_capture_panel(void);
 void debug_replay_panel(void);
 void debug_clip_panel(void);
 void debug_savestate_panel(void);
+void debug_watch_panel(void);
 void debug_reload_bar(void);
 void debug_helpers_panel(void);
 void debug_hold(uint16_t buttons, int frames);

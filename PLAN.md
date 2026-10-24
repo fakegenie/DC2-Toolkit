@@ -169,20 +169,30 @@ written fresh. These are what it found to fix:
 
 What the fishing work kept needing, in the order to build it:
 
-1. **Engine variables by name.** `peek name=CastDist [type=f32|i32|u8|ptr|...] [count=N]` and
-   `poke` read and write any global or file static through the symbol table the savestates
-   already read, with a Watch tab in the debug window. Each new fishing question today cost a
-   rebuild to add a status field.
-2. **Savestates that outlive a rebuild.** States already load in a later launch of the same build
-   (macOS runs without ASLR); any rebuild refuses them. Keep every build that made a state
-   (`build/port/builds/<fingerprint>/`, 10 MB each), so an old state, clip or recording always
-   opens in the build that made it; then relocate a state into a new build: pin the image at an
-   address whose high half PS2 data never holds, and move every word that points into the old
-   image to the same symbol and offset in the new one (code, vtables, return addresses, globals,
-   `_main_buffer`), refusing when a function on a thread's stack changed size. Check it by playing
-   the same input from the state in the old build and the relocated one and comparing pictures.
-   The earlier attempt failed on iOS ASLR, where data moved too and lookalike values could not be
-   told from pointers.
+1. **Engine variables by name.** Done: `peek name=CastDist [type=f32|i32|u8|ptr|str|hex] [count=N]`,
+   `poke`, `symbols match=` and `watch` (a Watch tab in the debug window) read and write any global
+   or file static through the executable's own symbol table. `status` also reports the player's
+   and the camera's position.
+2. **Savestates that outlive a rebuild.** Done. Saving a state keeps the build that made it in
+   `build/port/builds/<layout>/` (10 MB each); loading it in a later build moves every word that
+   points into the old image to the same symbol and offset in the new one. What made that exact:
+   - macOS links the image at `0x3E91_0000_0000`, so a host pointer's high half is a value PS2
+     data never holds (at the old `0x1_0000_0000` any `{n, 1}` int pair looked like a pointer and
+     got moved, which showed up as seams on walls).
+   - Data the engine reaches through 32-bit PS2 addresses sits in its own pinned segment,
+     `__PS2RAM` (engine files plus `memory.c`'s arena and `split_data.c`); restored port files'
+     data sits in `__PS2PORT` and the rest of the port's data in `__DATA`, all pinned
+     (`tools/port.py` `SEGMENTS`, `ENGINE_PORT_FILES`, `RESTORED_PORT_FILES`). Port changes
+     never move engine memory; a build that does is refused unless `load ... force=1`.
+   - Functions that can be on a game stack when a state is taken (`mgEndFrame`,
+     `port_mods_frame_exit`, `debug_frame_exit`, `debug_savestate_frame`, `port_state_frame`) are
+     `STATE_RESUMABLE` (unoptimised), as the engine and `kernel.c` already are, so no register
+     holds a page address across the switch; a function on a stack that changed size is refused.
+   - States store the stack guard and swap it on load (it changes every launch).
+   Checked by saving in one build, rebuilding with code changed, port data added, and data added to
+   a restored port file, loading in each and playing the same input: every picture identical. A
+   clip recorded in one build replays in a rebuilt one with player and camera within 0.001. The
+   iOS app links at `0x1_0000_0000` with the same segments and still runs.
 3. **A black box.** Keep the last 30 seconds as a savestate every few seconds plus the input, and
    write them as a clip on a crash, on F9 or on `blackbox`, so "it crashed" arrives replayable.
 4. **Fault watch.** Check the camera and player for NaN and wild values every frame; on the first

@@ -9,6 +9,7 @@
 #include "mapselect.hpp"
 #include "menuchr.hpp"
 #include "menumain.hpp"
+#include "mglib.hpp"
 #include "monster.hpp"
 #include "port_menu.h"
 #include "savedata.hpp"
@@ -997,6 +998,15 @@ void debug_scenario_status(DebugReply *reply) {
     CScene *scene = GetMainScene();
     if (in_playable_loop()) debug_print(reply, ", \"event_run\": %d, \"event\": %d, \"menu\": %d", scene->event_run, scene->event_no, menu_up());
     if (in_playable_loop() && GetSubGameNo() == SUBGAME_FISHING) debug_print(reply, ", \"fishing\": \"%s\"", fishing_step());
+    CCharacter2 *chara = in_playable_loop() ? scene->GetCharacter(scene->player_chara >= 0 ? scene->player_chara : 0) : NULL;
+    alignas(16) float position[4] = {0};
+    if (chara && chara->CObjectFrame::frame) chara->CObjectFrame::frame->GetWorldPosition0(position);
+    else if (chara) chara->GetPosition(position);
+    float eye[4] = {0};
+    mgGetCameraPos(eye);
+    if (chara)
+        debug_print(reply, ", \"player\": [%.2f, %.2f, %.2f], \"camera\": [%.2f, %.2f, %.2f]", position[0], position[1],
+                    position[2], eye[0], eye[1], eye[2]);
     debug_print(reply, ", \"character\": \"%s\", \"money\": %d, \"hour\": %.2f, \"day\": %d, \"game_progress\": %d",
                 active >= 0 && active < USER_CHARA_NUM ? character_names[active] : "unknown", data->user_data.money,
                 data->now_time, data->day, data->game_progress);

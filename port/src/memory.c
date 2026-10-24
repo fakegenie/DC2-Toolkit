@@ -204,17 +204,27 @@ static void mirror(uintptr_t start, size_t size, uintptr_t offset, const char *o
     }
 }
 
-__attribute__((constructor(101))) static void port_memory_init(void) {
-    disable_address_randomisation();
+static void mirror_segment(const char *name) {
     unsigned long size;
-    uintptr_t start = (uintptr_t)getsegmentdata(&_mh_execute_header, "__DATA", &size);
-    if (!start || start < PORT_WINDOW || start + size - PORT_WINDOW >= 0x10000000 ||
-        (uintptr_t)window != PORT_WINDOW + 0x10000000 || (uintptr_t)scratchpad != PORT_WINDOW + 0x70000000) {
-        fputs("port: linked data lies outside the PS2 address range\n", stderr);
+    uintptr_t start = (uintptr_t)getsegmentdata(&_mh_execute_header, name, &size);
+    if (!start) return;
+    if (start < PORT_WINDOW || start + size - PORT_WINDOW >= 0x10000000) {
+        fprintf(stderr, "port: %s lies outside the PS2 address range\n", name);
         _exit(1);
     }
     mirror(start, size, 0x20000000, "port: uncached RAM mapping");
     mirror(start, size, 0x30000000, "port: DMA RAM mapping");
+}
+
+__attribute__((constructor(101))) static void port_memory_init(void) {
+    disable_address_randomisation();
+    if ((uintptr_t)window != PORT_WINDOW + 0x10000000 || (uintptr_t)scratchpad != PORT_WINDOW + 0x70000000) {
+        fputs("port: the PS2 window is not where the build placed it\n", stderr);
+        _exit(1);
+    }
+    mirror_segment("__DATA");
+    mirror_segment("__PS2RAM");
+    mirror_segment("__PS2PORT");
 }
 #else
 extern char __data_start[];

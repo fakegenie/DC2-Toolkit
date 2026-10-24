@@ -119,7 +119,12 @@ static void finish_request(void) {
     } else {
         debug_print(&reply, "{\"%s\": ", request.kind == SAVE ? "saved" : "loaded");
         print_slot(&reply, request.slot);
-        debug_print(&reply, ", \"ms\": %.2f, \"at_frame\": %u}", ms, debug_frame_total);
+        debug_print(&reply, ", \"ms\": %.2f, \"at_frame\": %u", ms, debug_frame_total);
+        if (request.kind == LOAD && port_state_note()) {
+            debug_print(&reply, ", \"moved\": ");
+            debug_print_string(&reply, port_state_note());
+        }
+        debug_print(&reply, "}");
         snprintf(message, sizeof message, "%s slot %d in %.1f ms (%.1f MB)", request.kind == SAVE ? "saved" : "loaded",
                  request.slot, ms, (double)slot->state.size / 1048576.0);
     }
@@ -127,7 +132,7 @@ static void finish_request(void) {
     debug_finish(&reply);
 }
 
-void debug_savestate_frame(void) {
+STATE_RESUMABLE void debug_savestate_frame(void) {
     if (debug_frame_total == frame_seen) pause_hook = 1;
     frame_seen = debug_frame_total;
     if (!request.kind) return;
@@ -147,6 +152,7 @@ static int request_state(const DebugArgs *args, DebugReply *reply, int kind) {
         if (problem) return debug_fail(reply, "%s", problem);
     }
     if (kind == LOAD && !slots[slot].state.data) return debug_fail(reply, "slot %ld is empty", slot);
+    port_state_force(kind == LOAD && debug_arg_int(args, "force", 0));
     if (!port_state_request(kind, &slots[slot].state)) return debug_fail(reply, "%s", port_state_problem());
     request.kind = kind;
     request.slot = (int)slot;
@@ -181,7 +187,9 @@ static int command_savestates(const DebugArgs *args, DebugReply *reply) {
 extern const DebugCommand debug_savestate_commands[] = {
     {"save", command_save, 1, "save the whole game into slot=N (0-7) at the end of the frame; path=name also writes "
                               "build/port/savestates/name"},
-    {"load", command_load, 1, "load slot=N at the end of the frame; path=name first reads build/port/savestates/name"},
+    {"load", command_load, 1, "load slot=N at the end of the frame; path=name first reads build/port/savestates/name; a state "
+                              "from another kept build is moved into this one, and force=1 loads it even when code "
+                              "or data it uses changed size"},
     {"savestates", command_savestates, 1, "list the savestate slots"},
     {NULL, NULL, 0, NULL},
 };

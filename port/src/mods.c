@@ -1,5 +1,6 @@
 #include "port_mod.h"
 #include "port_overrides.h"
+#include "port_state.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -122,7 +123,7 @@ void port_mods_frame_drawn(void) {
         if (mods[i]->frame_drawn) mods[i]->frame_drawn();
 }
 
-void port_mods_frame_exit(void) {
+STATE_RESUMABLE void port_mods_frame_exit(void) {
     for (int i = 0; i < mod_count; ++i)
         if (mods[i]->frame_exit) mods[i]->frame_exit();
 }

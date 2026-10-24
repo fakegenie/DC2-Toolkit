@@ -7,6 +7,8 @@
 extern "C" {
 #endif
 
+#define STATE_RESUMABLE __attribute__((optnone, noinline))
+
 enum { STATE_SAVE = 1, STATE_LOAD = 2 };
 enum { STATE_THUMB_WIDTH = 160, STATE_THUMB_HEIGHT = 120 };
 
@@ -26,6 +28,7 @@ typedef struct {
     uint64_t sound;
     uint64_t size;
     uint64_t base;
+    uint64_t guard;
 } PortStateHeader;
 
 typedef struct {
@@ -37,8 +40,10 @@ const char *port_state_ready(void);
 int port_state_request(int kind, PortState *state);
 int port_state_pending(void);
 const char *port_state_problem(void);
+const char *port_state_note(void);
+void port_state_force(int force);
 float port_state_ms(void);
-void port_state_frame(void);
+STATE_RESUMABLE void port_state_frame(void);
 void port_state_host(void);
 const PortStateHeader *port_state_header(const PortState *state);
 const uint32_t *port_state_thumbnail(const PortState *state);

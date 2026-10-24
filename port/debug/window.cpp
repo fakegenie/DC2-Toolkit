@@ -478,6 +478,10 @@ void debug_window_draw(void) {
             debug_savestate_panel();
             ImGui::EndTabItem();
         }
+        if (tab("Watch")) {
+            debug_watch_panel();
+            ImGui::EndTabItem();
+        }
         if (tab("Log")) {
             log_tab();
             ImGui::EndTabItem();

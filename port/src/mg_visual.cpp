@@ -181,6 +181,20 @@ size_t visual_save(unsigned char *out) {
     return at;
 }
 
+size_t visual_keys(const unsigned char *in, std::vector<size_t> *offsets) {
+    uint32_t count;
+    memcpy(&count, in, sizeof count);
+    size_t at = sizeof count + sizeof mesh_frame;
+    for (uint32_t i = 0; i < count; i++) {
+        uint32_t vertices;
+        offsets->push_back(at);
+        at += sizeof(const mgCFace *) + sizeof(u_short) + sizeof(u_int);
+        memcpy(&vertices, in + at, sizeof vertices);
+        at += sizeof vertices + vertices * sizeof(MeshVertex);
+    }
+    return at;
+}
+
 size_t visual_load(const unsigned char *in) {
     for (const auto &entry : face_meshes)
         render_mesh_forget(entry.second.resident, (int)entry.second.vertices.size());

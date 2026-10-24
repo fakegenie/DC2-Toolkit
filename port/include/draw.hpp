@@ -1,5 +1,6 @@
 #pragma once
 #include "render.h"
+#include <vector>
 
 class mgCTexture;
 class mgCVisualMDT;
@@ -53,6 +54,7 @@ int visual_packet_draw(const void *common, const void *packet);
 void visual_next_frame();
 size_t visual_save(unsigned char *out);
 size_t visual_load(const unsigned char *in);
+size_t visual_keys(const unsigned char *in, std::vector<size_t> *offsets);
 void sprite_next_frame();
 
 struct ShadowSetup {

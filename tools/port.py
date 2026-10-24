@@ -26,6 +26,7 @@ import plistlib
 import re
 import shlex
 import shutil
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -56,10 +57,10 @@ FLAGS = [
     "-fno-strict-return", "-ftrivial-auto-var-init=zero",
     "-Wno-c++11-narrowing", "-Wno-register", "-Wno-return-mismatch", "-w",
 ]
-LINK_FLAGS = ["-pthread"]
-if DARWIN:
-    LINK_FLAGS += ["-lobjc", "-Wl,-segaddr,__PS2,0x110000000", "-Wl,-segprot,__PS2,rw,rw",
-                   "-Wl,-segaddr,__PS2SPR,0x170000000", "-Wl,-segprot,__PS2SPR,rw,rw"]
+LINK_FLAGS = ["-pthread", *(["-lobjc"] if DARWIN else [])]
+MAC_IMAGE_BASE = 0x3E9100000000
+SEGMENTS = {"__TEXT": 0, "__DATA_CONST": 0xC00000, "__DATA": 0x1000000, "__PS2RAM": 0x4000000, "__PS2PORT": 0xC000000,
+            "__PS2": 0x10000000, "__PS2SPR": 0x70000000}
 IOS = {
     "simulator": {"sdk": "iphonesimulator", "target": "arm64-apple-ios17.0-simulator", "platform": "iPhoneSimulator"},
     "device": {"sdk": "iphoneos", "target": "arm64-apple-ios17.0", "platform": "iPhoneOS"},
@@ -109,6 +110,9 @@ ALIASES = {
     "_Z8PrimQuadIfEvP11mgCDrawPrim6mgRectIT_ES2_IiE": "_Z11PrimQuad_f_P11mgCDrawPrim9mgRect_f_9mgRect_i_",
     "_Z8PrimQuadIiEvP11mgCDrawPrim6mgRectIT_ES2_IiE": "_Z11PrimQuad_i_P11mgCDrawPrim9mgRect_i_S1_",
 }
+ENGINE_PORT_FILES = ["memory", "split_data"]
+RESTORED_PORT_FILES = ["kernel", "graphics", "cdvd", "spu2", "iop", "devices", "mg_shadow", "mg_drawprim", "frame", "draw",
+                       "mg_visual", "mg_sprite", "water"]
 OPERATORS = {
     **dict.fromkeys(["_Znwm", "_Znam", "_ZnwmRKSt9nothrow_t", "_ZnamRKSt9nothrow_t"], "port_new"),
     **dict.fromkeys(["_ZnwmSt11align_val_t", "_ZnamSt11align_val_t", "_ZnwmSt11align_val_tRKSt9nothrow_t",
@@ -212,12 +216,38 @@ def compile_one(source, name):
     if name == "main":
         changes.append(f"--redefine-sym={PREFIX}main={PREFIX}port_game_main")
     return compile_command(source, target, depfile, command_file, command, changes,
-                           operators=not c and not name.startswith(("mod_", "port_")))
+                           operators=not c and not name.startswith(("mod_", "port_")),
+                           segment=data_segment(name) if DARWIN else None)
 
 
-def compile_command(source, target, depfile, command_file, command, changes, operators=False):
+def data_segment(name):
+    if name.startswith("port_") and name.removeprefix("port_") in ENGINE_PORT_FILES:
+        return "__PS2RAM"
+    if name.startswith("port_"):
+        return "__PS2PORT" if name.removeprefix("port_") in RESTORED_PORT_FILES else None
+    return None if name.startswith(("mod_", "imgui_")) else "__PS2RAM"
+
+
+def move_data(target, segment):
+    data = bytearray(target.read_bytes())
+    commands = struct.unpack_from("<I", data, 16)[0]
+    at = 32
+    for _ in range(commands):
+        kind, size = struct.unpack_from("<II", data, at)
+        if kind == 0x19:
+            sections = struct.unpack_from("<I", data, at + 64)[0]
+            for index in range(sections):
+                header = at + 72 + index * 80
+                if data[header + 16:header + 32].rstrip(b"\0") == b"__DATA" and \
+                        data[header:header + 16].rstrip(b"\0") in (b"__data", b"__bss", b"__common"):
+                    data[header + 16:header + 32] = segment.encode().ljust(16, b"\0")
+        at += size
+    target.write_bytes(data)
+
+
+def compile_command(source, target, depfile, command_file, command, changes, operators=False, segment=None):
     name = target.stem
-    signature = json.dumps([command, changes, operators])
+    signature = json.dumps([command, changes, operators, segment])
     if up_to_date(source, target, depfile) and command_file.exists() and command_file.read_text() == signature:
         return name, None
     result = subprocess.run(command, capture_output=True, text=True)
@@ -230,6 +260,8 @@ def compile_command(source, target, depfile, command_file, command, changes, ope
         for old, new in OPERATORS.items():
             if f"{PREFIX}{old}" in used:
                 subprocess.run([OBJCOPY, f"--redefine-sym={PREFIX}{old}={PREFIX}{new}", str(target)], check=True)
+    if segment:
+        move_data(target, segment)
     command_file.write_text(signature, encoding="utf-8")
     return name, None
 
@@ -269,6 +301,10 @@ def compile_all(units, debug=False, mods=()):
 def link(objects, extra, binary):
     if DARWIN:
         platform = [f"-Wl,-alias,_{target},_{alias}" for alias, target in ALIASES.items()]
+        base = 0x100000000 if TARGET else MAC_IMAGE_BASE
+        for segment, offset in SEGMENTS.items():
+            platform += [f"-Wl,-segaddr,{segment},{base + offset:#x}"]
+            platform += [f"-Wl,-segprot,{segment},rw,rw"] if segment.startswith("__PS2") else []
     else:
         platform = ["-no-pie", "-Wl,--no-demangle", *(f"-Wl,--defsym={alias}={target}" for alias, target in ALIASES.items())]
     fresh = binary.with_name(binary.name + ".linking")

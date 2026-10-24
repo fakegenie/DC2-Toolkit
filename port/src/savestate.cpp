@@ -7,12 +7,17 @@
 #include "port_mod.h"
 #include "port_present.h"
 #include "port_stats.h"
+#include "port_symbols.h"
 #include "render.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <map>
+#include <string>
+#include <sys/stat.h>
+#include <unordered_map>
 #include <sys/mman.h>
 #include <unistd.h>
 #include <vector>
@@ -29,9 +34,10 @@ typedef unsigned char ResidentPage;
 
 extern "C" {
 #include "audio.h"
+extern long __stack_chk_guard;
 }
 
-enum { PAGE = 4096, RUN_LIMIT = 1024, STATE_VERSION = 4 };
+enum { PAGE = 4096, RUN_LIMIT = 1024, STATE_VERSION = 5 };
 enum { THUMB_BYTES = STATE_THUMB_WIDTH * STATE_THUMB_HEIGHT * 4 };
 
 typedef struct {
@@ -44,11 +50,23 @@ typedef struct {
     size_t size;
 } Run;
 
-static const char *const restored_objects[] = {
-    "port_kernel.o", "port_memory.o", "port_graphics.o", "port_cdvd.o", "port_spu2.o", "port_iop.o",
-    "port_devices.o", "port_split_data.o", "port_mg_shadow.o", "port_mg_drawprim.o", "port_frame.o",
-    "port_draw.o", "port_mg_visual.o", "port_mg_sprite.o", "port_water.o",
-};
+typedef struct {
+    uint64_t start;
+    std::vector<unsigned char> bytes;
+} Piece;
+
+typedef struct {
+    const PortSymbols *from;
+    const PortSymbols *to;
+    std::map<std::pair<std::string, std::string>, const PortSymbol *> keys;
+    std::unordered_map<std::string, uint64_t> strings;
+    uint64_t low;
+    uint64_t high;
+    uint64_t moved;
+    uint64_t unresolved;
+    std::vector<std::string> changed;
+    std::vector<std::string> shifted;
+} Move;
 
 static const char *const kept_symbols[][2] = {
     {"port_kernel.o", "_host_context"}, {"port_graphics.o", "_next_field"}, {"port_graphics.o", "_port_field_period"},
@@ -65,19 +83,70 @@ static size_t run_bytes;
 static int layout_state;
 static char layout_error[256];
 static uint64_t layout_id[2];
-static int objects_seen[sizeof restored_objects / sizeof restored_objects[0]];
 static int kept_seen[sizeof kept_symbols / sizeof kept_symbols[0]];
 static uint32_t thumbnail[STATE_THUMB_WIDTH * STATE_THUMB_HEIGHT];
 static int request_kind;
 static PortState *request_state;
-static char problem[256];
+static char problem[1024];
 static float host_ms;
+static int force_load;
+static char note[256];
+static PortSymbols old_build;
+static char old_layout[33];
 
 
 static uint64_t now_ns(void) {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
     return (uint64_t)now.tv_sec * 1000000000ull + (uint64_t)now.tv_nsec;
+}
+
+static void layout_text(const unsigned char *layout, char *text) {
+    for (int i = 0; i < 16; ++i) snprintf(text + i * 2, 3, "%02x", layout[i]);
+}
+
+static void build_path(const unsigned char *layout, char *path, size_t size) {
+    char text[33];
+    layout_text(layout, text);
+    const char *executable = port_symbols_executable();
+    const char *slash = strrchr(executable, '/');
+    int folder = slash ? (int)(slash - executable) : 0;
+    snprintf(path, size, "%.*s/builds/%s/%s", folder, executable, text, slash ? slash + 1 : executable);
+}
+
+static void make_folders(char *path) {
+    for (char *at = path + 1; *at; ++at) {
+        if (*at != '/') continue;
+        *at = 0;
+        mkdir(path, 0755);
+        *at = '/';
+    }
+}
+
+static const char *keep_build(void) {
+    static char failure[1200];
+    char path[1024];
+    build_path((const unsigned char *)layout_id, path, sizeof path);
+    struct stat existing;
+    if (!stat(path, &existing)) return NULL;
+    make_folders(path);
+    FILE *in = fopen(port_symbols_executable(), "rb");
+    char temporary[1100];
+    snprintf(temporary, sizeof temporary, "%s.part", path);
+    FILE *out = fopen(temporary, "wb");
+    char buffer[1 << 16];
+    size_t length = 0;
+    int ok = in && out;
+    while (ok && (length = fread(buffer, 1, sizeof buffer, in)) > 0) ok = fwrite(buffer, 1, length, out) == length;
+    if (in) fclose(in);
+    if (out && fclose(out)) ok = 0;
+    if (!ok || rename(temporary, path)) {
+        remove(temporary);
+        snprintf(failure, sizeof failure, "the state was written but %s could not be kept", path);
+        return failure;
+    }
+    chmod(path, 0755);
+    return NULL;
 }
 
 static void add_run(uintptr_t start, uintptr_t end) {
@@ -94,16 +163,6 @@ static void add_run(uintptr_t start, uintptr_t end) {
     runs[run_count].start = start;
     runs[run_count].size = end - start;
     run_count++;
-}
-
-static int restored_object(const char *object) {
-    if (strncmp(object, "port_", 5) && strncmp(object, "mod_", 4) && strncmp(object, "imgui_", 6)) return 1;
-    for (size_t i = 0; i < sizeof restored_objects / sizeof restored_objects[0]; ++i)
-        if (!strcmp(object, restored_objects[i])) {
-            objects_seen[i] = 1;
-            return 1;
-        }
-    return 0;
 }
 
 static int kept_symbol(const char *object, const char *symbol) {
@@ -145,7 +204,7 @@ static int read_layout(void) {
             for (uint32_t s = 0; s < segment->nsects; ++s)
                 if (strcmp(section[s].sectname, "__text")) fingerprint(section[s].sectname, section[s].addr);
             for (uint32_t s = 0; s < segment->nsects && sections < 8; ++s) {
-                if (strcmp(section[s].segname, "__DATA")) continue;
+                if (strcmp(section[s].segname, "__PS2RAM") && strcmp(section[s].segname, "__PS2PORT")) continue;
                 if (strcmp(section[s].sectname, "__data") && strcmp(section[s].sectname, "__bss") &&
                     strcmp(section[s].sectname, "__common"))
                     continue;
@@ -185,7 +244,7 @@ static int read_layout(void) {
             }
             address = (uintptr_t)found;
         }
-        int restore = restored_object(object) && !kept_symbol(object, name);
+        int restore = !kept_symbol(object, name);
         marks.push_back((uint64_t)address << 1 | (uint64_t)restore);
     }
     if (!objects) {
@@ -207,11 +266,6 @@ static int read_layout(void) {
         }
         if (restore) add_run(start, highs[s]);
     }
-    for (size_t i = 0; i < sizeof restored_objects / sizeof restored_objects[0]; ++i)
-        if (!objects_seen[i]) {
-            snprintf(layout_error, sizeof layout_error, "%s is not linked; update the savestate tables", restored_objects[i]);
-            return 0;
-        }
     for (size_t i = 0; i < sizeof kept_symbols / sizeof kept_symbols[0]; ++i)
         if (!kept_seen[i]) {
             snprintf(layout_error, sizeof layout_error, "%s has no %s; update the savestate tables", kept_symbols[i][0],
@@ -331,6 +385,7 @@ static void save_state(PortState *state) {
     header.sound = sound;
     header.size = size;
     header.base = PORT_WINDOW;
+    header.guard = (uint64_t)__stack_chk_guard;
     unsigned char *at = data;
     memcpy(at, &header, sizeof header);
     at += sizeof header;
@@ -357,13 +412,209 @@ static void save_state(PortState *state) {
     state->size = size;
 }
 
+static int kept(const unsigned char *layout) {
+    char path[1024];
+    struct stat existing;
+    build_path(layout, path, sizeof path);
+    return !stat(path, &existing);
+}
+
+static int image_segment(const PortSection &section) {
+    return strcmp(section.segment, "__PS2") && strcmp(section.segment, "__PS2SPR") &&
+           strcmp(section.segment, "__PAGEZERO") && strcmp(section.segment, "__LINKEDIT");
+}
+
+static int string_section(const PortSection *section) {
+    return section && (!strcmp(section->name, "__cstring") || !strcmp(section->name, "__oslogstring"));
+}
+
+static const char *open_old_build(const unsigned char *layout) {
+    char text[33];
+    layout_text(layout, text);
+    if (!strcmp(text, old_layout)) return NULL;
+    old_layout[0] = 0;
+    char path[1024];
+    build_path(layout, path, sizeof path);
+    const char *failed = port_symbols_load(path, &old_build);
+    if (failed) return failed;
+    snprintf(old_layout, sizeof old_layout, "%s", text);
+    return NULL;
+}
+
+static void prepare_move(Move *move, const PortSymbols *from, const PortSymbols *to) {
+    move->from = from;
+    move->to = to;
+    move->moved = move->unresolved = 0;
+    for (const PortSymbol &symbol : to->symbols) move->keys.emplace(std::make_pair(symbol.name, symbol.object), &symbol);
+    for (const PortSection &section : to->sections) {
+        if (!string_section(&section)) continue;
+        const char *text = (const char *)to->file.data() + section.offset;
+        for (uint64_t at = 0; at < section.size;) {
+            size_t length = strnlen(text + at, (size_t)(section.size - at));
+            move->strings.emplace(std::string(text + at, length), section.address + at);
+            at += length + 1;
+        }
+    }
+    move->low = UINT64_MAX;
+    move->high = 0;
+    for (const PortSection &section : from->sections) {
+        if (!image_segment(section) || !section.size) continue;
+        if (section.address < move->low) move->low = section.address;
+        if (section.address + section.size > move->high) move->high = section.address + section.size;
+    }
+}
+
+static void note_name(std::vector<std::string> *names, const std::string &name) {
+    for (const std::string &seen : *names)
+        if (seen == name) return;
+    names->push_back(name);
+}
+
+static int move_address(Move *move, uint64_t value, uint64_t *moved) {
+    const PortSection *section = port_section_at(move->from, value);
+    if (!section) return 0;
+    if (string_section(section)) {
+        const char *base = (const char *)move->from->file.data() + section->offset;
+        uint64_t at = value - section->address;
+        uint64_t start = at;
+        while (start > 0 && base[start - 1]) start--;
+        size_t length = strnlen(base + start, (size_t)(section->size - start));
+        auto found = move->strings.find(std::string(base + start, length));
+        if (found == move->strings.end()) return 0;
+        *moved = found->second + (at - start);
+        return 1;
+    }
+    const PortSymbol *symbol = port_symbol_at(move->from, value);
+    if (!symbol) return 0;
+    auto found = move->keys.find(std::make_pair(symbol->name, symbol->object));
+    if (found == move->keys.end()) return 0;
+    uint64_t offset = value - symbol->address;
+    if (symbol->code && offset && found->second->size != symbol->size) note_name(&move->changed, symbol->name);
+    *moved = found->second->address + offset;
+    return 1;
+}
+
+static void move_words(Move *move, unsigned char *bytes, uint64_t start, size_t size) {
+    for (size_t at = (size_t)((8 - start % 8) % 8); at + 8 <= size; at += 8) {
+        uint64_t value;
+        memcpy(&value, bytes + at, 8);
+        if (value < move->low || value >= move->high) continue;
+        uint64_t moved;
+        if (!move_address(move, value, &moved)) {
+            move->unresolved++;
+            continue;
+        }
+        if (moved != value) memcpy(bytes + at, &moved, 8);
+        move->moved++;
+    }
+}
+
+static void decode_regions(const unsigned char *data, std::vector<Piece> *pieces, const unsigned char **tail) {
+    const PortStateHeader *header = (const PortStateHeader *)data;
+    const unsigned char *at = data + sizeof(PortStateHeader) + THUMB_BYTES;
+    for (uint32_t i = 0; i < header->regions; ++i) {
+        Region record;
+        memcpy(&record, at, sizeof record);
+        at += sizeof record;
+        size_t pages = (record.size + PAGE - 1) / PAGE;
+        const unsigned char *map = at;
+        at += pages;
+        Piece piece;
+        piece.start = record.start;
+        piece.bytes.assign((size_t)record.size, 0);
+        for (size_t page = 0; page < pages; ++page) {
+            size_t length = page_length(record.size, page);
+            if (!map[page]) continue;
+            memcpy(piece.bytes.data() + page * PAGE, at, length);
+            at += length;
+        }
+        pieces->push_back(std::move(piece));
+    }
+    *tail = at;
+}
+
+static void place_piece(Move *move, const Piece &piece, int write) {
+    if (inside_window(piece.start, piece.bytes.size())) {
+        if (write) restore_bytes(piece.start, piece.bytes.data(), piece.bytes.size());
+        return;
+    }
+    uint64_t end = piece.start + piece.bytes.size();
+    const std::vector<PortSymbol> &list = move->from->symbols;
+    size_t low = 0, high = list.size();
+    while (low < high) {
+        size_t middle = (low + high) / 2;
+        if (list[middle].address + list[middle].size <= piece.start) low = middle + 1;
+        else high = middle;
+    }
+    for (size_t i = low; i < list.size() && list[i].address < end; ++i) {
+        const PortSymbol &symbol = list[i];
+        uint64_t first = symbol.address > piece.start ? symbol.address : piece.start;
+        uint64_t last = symbol.address + symbol.size < end ? symbol.address + symbol.size : end;
+        if (symbol.code || first >= last) continue;
+        auto found = move->keys.find(std::make_pair(symbol.name, symbol.object));
+        if (found == move->keys.end()) continue;
+        uint64_t room = found->second->size < symbol.size ? found->second->size : symbol.size;
+        if (found->second->size != symbol.size) note_name(&move->changed, symbol.name);
+        const PortSection *section = port_section_at(move->from, symbol.address);
+        if (found->second->address != symbol.address && section && !strcmp(section->segment, "__PS2RAM"))
+            note_name(&move->shifted, symbol.name);
+        if (last > symbol.address + room) last = symbol.address + room;
+        if (!write || first >= last) continue;
+        restore_bytes(found->second->address + (first - symbol.address), piece.bytes.data() + (first - piece.start),
+                      (size_t)(last - first));
+    }
+}
+
+static void swap_guard(std::vector<Piece> *pieces, uint64_t old_guard) {
+    uint64_t guard = (uint64_t)__stack_chk_guard;
+    if (old_guard == guard) return;
+    for (Piece &piece : *pieces)
+        for (size_t at = (size_t)((8 - piece.start % 8) % 8); at + 8 <= piece.bytes.size(); at += 8) {
+            uint64_t value;
+            memcpy(&value, piece.bytes.data() + at, 8);
+            if (value == old_guard) memcpy(piece.bytes.data() + at, &guard, 8);
+        }
+}
+
+static size_t add_names(size_t length, const char *intro, const std::vector<std::string> &names, size_t shown) {
+    if (length < sizeof problem) length += (size_t)snprintf(problem + length, sizeof problem - length, "%s", intro);
+    for (size_t i = 0; i < names.size() && i < shown && length < sizeof problem; ++i)
+        length += (size_t)snprintf(problem + length, sizeof problem - length, " %s", port_symbol_pretty(names[i]).c_str());
+    if (names.size() > shown && length < sizeof problem)
+        length += (size_t)snprintf(problem + length, sizeof problem - length, " and %zu more", names.size() - shown);
+    if (length < sizeof problem) length += (size_t)snprintf(problem + length, sizeof problem - length, "; ");
+    return length;
+}
+
+static int move_pieces(const PortStateHeader *header, std::vector<Piece> *pieces, Move *move) {
+    const char *failed = open_old_build(header->layout);
+    const char *error = NULL;
+    const PortSymbols *current = port_symbols_self(&error);
+    if (failed || !current) {
+        snprintf(problem, sizeof problem, "%s", failed ? failed : error);
+        return 0;
+    }
+    prepare_move(move, &old_build, current);
+    for (Piece &piece : *pieces) move_words(move, piece.bytes.data(), piece.start, piece.bytes.size());
+    for (const Piece &piece : *pieces) place_piece(move, piece, 0);
+    if ((move->changed.empty() && move->shifted.empty()) || force_load) return 1;
+    size_t length = 0;
+    if (!move->shifted.empty())
+        length = add_names(length, "this build moved engine memory, which the engine also reaches through 32-bit PS2 "
+                                   "addresses:", move->shifted, 2);
+    if (!move->changed.empty()) length = add_names(length, "this build sizes these differently:", move->changed, 6);
+    if (length < sizeof problem) snprintf(problem + length, sizeof problem - length, "force=1 loads anyway");
+    return 0;
+}
+
 static const char *check_state(const unsigned char *data, size_t size) {
     if (size < sizeof(PortStateHeader) + THUMB_BYTES) return "the savestate is truncated";
     const PortStateHeader *header = (const PortStateHeader *)data;
     if (memcmp(header->magic, "DC2STATE", 8) || header->version != STATE_VERSION) return "not a savestate of this version";
-    if (memcmp(header->layout, layout_id, 16)) return "the savestate is from a build with the game's code or data in other places";
+    if (memcmp(header->layout, layout_id, 16) && !kept(header->layout))
+        return "the savestate is from another build, and that build was not kept beside this one";
     if (header->size != size) return "the savestate is truncated";
-    if (header->base != PORT_WINDOW) return "the savestate is from an earlier launch, and the game now sits at another address";
+    if (header->base != PORT_WINDOW) return "the savestate was made with the game loaded at another address";
     const unsigned char *at = data + sizeof(PortStateHeader) + THUMB_BYTES;
     const unsigned char *end = data + size;
     for (uint32_t i = 0; i < header->regions; ++i) {
@@ -393,26 +644,32 @@ static void load_state(const PortState *state) {
         return;
     }
     const PortStateHeader *header = (const PortStateHeader *)state->data;
+    std::vector<Piece> pieces;
+    const unsigned char *tail = NULL;
+    decode_regions(state->data, &pieces, &tail);
+    std::vector<unsigned char> sound(tail, (const unsigned char *)state->data + state->size);
+    swap_guard(&pieces, header->guard);
+    int moved = memcmp(header->layout, layout_id, 16) != 0;
+    Move move;
+    if (moved && !move_pieces(header, &pieces, &move)) return;
     if (!port_movie_end()) port_movie_close();
     for (const Run &region : window_runs()) memset((void *)region.start, 0, region.size);
-    const unsigned char *at = state->data + sizeof(PortStateHeader) + THUMB_BYTES;
-    for (uint32_t i = 0; i < header->regions; ++i) {
-        Region record;
-        memcpy(&record, at, sizeof record);
-        at += sizeof record;
-        size_t pages = (record.size + PAGE - 1) / PAGE;
-        const unsigned char *map = at;
-        at += pages;
-        for (size_t page = 0; page < pages; ++page) {
-            size_t length = page_length(record.size, page);
-            restore_bytes(record.start + page * PAGE, map[page] ? at : NULL, length);
-            if (map[page]) at += length;
-        }
+    for (const Piece &piece : pieces) {
+        if (moved) place_piece(&move, piece, 1);
+        else restore_bytes(piece.start, piece.bytes.data(), piece.bytes.size());
     }
-    visual_load(at + audio_load(at));
+    unsigned char *visual = sound.data() + audio_load(sound.data());
+    std::vector<size_t> keys;
+    if (moved) visual_keys(visual, &keys);
+    for (size_t key : keys) move_words(&move, visual + key, 0, 8);
+    visual_load(visual);
     port_stats.arena_used = header->arena_used;
     port_stats.arena_peak = header->arena_peak;
     port_stats.arena_blocks = header->arena_blocks;
+    if (moved)
+        snprintf(note, sizeof note, "from build %s: %llu pointers moved, %llu left as they were%s", old_layout,
+                 (unsigned long long)move.moved, (unsigned long long)move.unresolved,
+                 move.changed.empty() && move.shifted.empty() ? "" : ", forced");
 }
 
 static void capture_thumbnail(void) {
@@ -431,6 +688,7 @@ static void capture_thumbnail(void) {
 
 int port_state_request(int kind, PortState *state) {
     problem[0] = 0;
+    note[0] = 0;
     const char *unready = port_state_ready();
     if (unready) {
         snprintf(problem, sizeof problem, "%s", unready);
@@ -453,9 +711,13 @@ int port_state_pending(void) { return request_kind; }
 
 const char *port_state_problem(void) { return problem[0] ? problem : NULL; }
 
+const char *port_state_note(void) { return note[0] ? note : NULL; }
+
+void port_state_force(int force) { force_load = force; }
+
 float port_state_ms(void) { return host_ms; }
 
-void port_state_frame(void) {
+STATE_RESUMABLE void port_state_frame(void) {
     if (!request_kind) return;
     if (request_kind == STATE_SAVE && !port_movie_end() && port_movie_started()) {
         snprintf(problem, sizeof problem, "a movie is playing; save after it");
@@ -495,7 +757,8 @@ const char *port_state_write(const PortState *state, const char *path) {
         snprintf(failure, sizeof failure, "cannot write %s", path);
         return failure;
     }
-    return NULL;
+    const PortStateHeader *header = port_state_header(state);
+    return header && !memcmp(header->layout, layout_id, 16) ? keep_build() : NULL;
 }
 
 const char *port_state_read(PortState *state, const char *path) {

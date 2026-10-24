@@ -7,6 +7,7 @@ extern "C" {
 #include "port_mod.h"
 #include "port_graphics.h"
 #include "port_present.h"
+#include "port_state.h"
 #include "render.h"
 #include <cstdarg>
 #include <cstddef>
@@ -198,7 +199,7 @@ void debug_finish(DebugReply *reply) {
 static const DebugCommand *find_command(const char *name) {
     const DebugCommand *tables[] = {debug_core_commands, debug_scenario_commands, debug_capture_commands,
                                     debug_replay_commands, debug_savestate_commands, debug_reload_commands,
-                                    debug_overlay_commands, debug_clip_commands, debug_memory_commands};
+                                    debug_overlay_commands, debug_clip_commands, debug_memory_commands, debug_watch_commands};
     for (const DebugCommand *table : tables)
         for (const DebugCommand *command = table; command->name; ++command)
             if (!strcmp(command->name, name)) return command;
@@ -467,7 +468,7 @@ static int command_help(const DebugArgs *args, DebugReply *reply) {
     (void)args;
     const DebugCommand *tables[] = {debug_core_commands, debug_scenario_commands, debug_capture_commands,
                                     debug_replay_commands, debug_savestate_commands, debug_reload_commands,
-                                    debug_overlay_commands, debug_clip_commands, debug_memory_commands};
+                                    debug_overlay_commands, debug_clip_commands, debug_memory_commands, debug_watch_commands};
     debug_print(reply, "{\"commands\": [");
     int first = 1;
     for (const DebugCommand *table : tables)
@@ -749,7 +750,7 @@ extern const DebugCommand debug_core_commands[] = {
     {"debugflag", command_debug_flag, 1, "value=0|1 sets the engine's DebugFlag (Start+Select opens the debug menu)"},
     {"window", command_window, 1, "show or hide the debug window"},
     {"windowshot", debug_window_shot, 1, "the debug window as PNG, to check the UI"},
-    {"tab", debug_window_tab, 1, "select a debug window tab: name=Performance|Game|Scenario|Capture|Clips|Replay|Savestates|Log"},
+    {"tab", debug_window_tab, 1, "select a debug window tab: name=Performance|Game|Scenario|Capture|Clips|Replay|Savestates|Watch|Log"},
     {"quit", command_quit, 1, "exit the game"},
     {NULL, NULL, 0, NULL},
 };
@@ -859,7 +860,7 @@ static void record_frame(uint64_t exit_time) {
     port_stats.arena_blocks = kept.arena_blocks;
 }
 
-extern "C" void debug_frame_exit(void) {
+extern "C" STATE_RESUMABLE void debug_frame_exit(void) {
     record_frame(now_ns());
     if (injection.frames > 0) injection.frames--;
     debug_capture_frame();
