@@ -1,0 +1,11 @@
+dc2tk recording 1
+start checkpoint
+frames 747
+input 0 0x0000 0 0 32767 0 0 0
+input 57 0x0000 0 -32767 0 0 0 0
+input 207 0x0000 32767 0 0 0 0 0
+input 327 0x0000 0 32767 0 0 0 0
+input 477 0x0000 0 0 -32767 0 0 0
+input 567 0x0000 -32767 -20000 0 0 0 0
+input 717 0x0000 0 0 0 0 0 0
+fields 1 1494

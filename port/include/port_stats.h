@@ -29,6 +29,7 @@ typedef struct {
     uint32_t disc_bytes;
     uint64_t wait_ns;
     uint64_t replay_ns;
+    uint64_t gpu_ns;
     uint32_t dropped_fields;
     uint32_t textures_live;
     uint32_t pipelines;

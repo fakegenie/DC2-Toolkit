@@ -579,14 +579,14 @@ static void print_stats(DebugReply *reply, const PortStats *s) {
     debug_print(reply,
                 "{\"draw_calls\": %u, \"mesh_calls\": %u, \"gpu_commands\": %u, \"render_passes\": %u, "
                 "\"pipeline_changes\": %u, \"vertices\": %u, \"texture_uploads\": %u, \"upload_bytes\": %u, "
-                "\"downloads\": %u, \"texture_decodes\": %u, \"target_creates\": %u, \"texture_renames\": %u, \"replays\": %u, \"replay_us\": %llu, \"dropped_fields\": %u, \"mesh_builds\": %u, "
+                "\"downloads\": %u, \"texture_decodes\": %u, \"target_creates\": %u, \"texture_renames\": %u, \"replays\": %u, \"replay_us\": %llu, \"gpu_us\": %llu, \"dropped_fields\": %u, \"mesh_builds\": %u, "
                 "\"sorted_draws\": %u, \"allocations\": %u, \"frees\": %u, \"allocation_bytes\": %u, "
                 "\"disc_reads\": %u, \"disc_bytes\": %u, \"textures_live\": %u, \"pipelines\": %u, "
                 "\"cached_textures\": %u, \"cached_meshes\": %u, \"arena_used\": %llu, \"arena_peak\": %llu, "
                 "\"arena_blocks\": %u, \"audio_ms\": %u}",
                 s->draw_calls, s->mesh_calls, s->gpu_commands, s->render_passes, s->pipeline_changes, s->vertices,
                 s->texture_uploads, s->upload_bytes, s->downloads, s->texture_decodes, s->target_creates, s->texture_renames,
-                s->replays, (unsigned long long)(s->replay_ns / 1000), s->dropped_fields, s->mesh_builds, s->sorted_draws, s->allocations, s->frees, s->allocation_bytes, s->disc_reads,
+                s->replays, (unsigned long long)(s->replay_ns / 1000), (unsigned long long)(s->gpu_ns / 1000), s->dropped_fields, s->mesh_builds, s->sorted_draws, s->allocations, s->frees, s->allocation_bytes, s->disc_reads,
                 s->disc_bytes, s->textures_live, s->pipelines, s->cached_textures, s->cached_meshes,
                 (unsigned long long)s->arena_used, (unsigned long long)s->arena_peak, s->arena_blocks, s->audio_ms);
 }

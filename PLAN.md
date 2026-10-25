@@ -230,6 +230,32 @@ What the fishing work kept needing, in the order to build it:
    (next * 1103515245 + 12345, low 31 bits, starting at 1) and its seed sits in the game data states keep.
    Random numbers now follow the PS2 sequence, so input recorded before this may play differently.
 
+### Next: rendering speed (branch `render-speed`)
+
+The game ticks 25 times a second (PAL: `mgFrameRate` 2 at 50 fields) and must keep doing so;
+everything above that is shown frames. Measured 2026-10-25 on the recordings `perf-swamp` (Fish
+Monster Swamp) and `perf-palm_brinks`: a tick costs 3-5 ms on the Mac and ~9 ms on an iPhone 14 Pro
+Max, but a swamp frame is 600-1800 draws in 55-81 render passes (Palm Brinks 30-38). Character
+outlines (`COutLineDraw::Draw`, two target switches per character) and texture animation
+(`mgCTextureAnime::TexAnime`) split the frame; each split reloads and stores the whole target (4x
+samples with MSAA), which a tile GPU pays for in bandwidth. Between frames come only from
+`smooth_until` inside the game's field waits, on the game thread, and redraw every recorded pass:
+one fits per tick on the iPhone (50 shown a second at 120 Hz), and in the swamp `present_ms` reaches
+12-24 ms.
+
+0. **Measure.** Playback writes each frame's timings and between frames to `play.jsonl` (done).
+   Still needed: GPU time per frame (submit to fence) and an uncapped shown-frame rate.
+1. **Outlines inside the main pass.** Draw toon characters straight into the frame and mark them,
+   then make the edges in one pass, instead of a side target per character.
+2. **No mid-frame splits.** Texture animation, shadows and depth of field before the main pass;
+   never reload an MSAA target; resolve once.
+3. **A render thread.** The game thread hands over each finished frame (passes, draws, transforms);
+   the render thread draws at the display's rate, blending the last two, and neither waits on the
+   other. Screen readbacks (`MenuCapture`, `mgStoreImage`) have to meet it.
+4. **Less per tick.** Dirty marks instead of `texture_checksum` every frame; fewer, bigger draws.
+5. **60 ticks (optional, later).** Menus already run at `mgFrameRate` 1 and movement scales by it,
+   but timers, animations and events count ticks.
+
 ### Gates only the user can run
 
 - E2, E3, E4: the modded images in PCSX2 or on a PS2.

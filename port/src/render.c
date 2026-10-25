@@ -357,6 +357,83 @@ static void render_error(const char *what) {
     exit(1);
 }
 
+enum { TIMED_LIMIT = 64 };
+
+static struct {
+    SDL_GPUFence *fence;
+    uint64_t submitted;
+    SDL_AtomicInt done;
+} timed[TIMED_LIMIT];
+static int timed_pushed;
+static int timed_released;
+static int timed_waited;
+static SDL_Mutex *timed_lock;
+static SDL_Condition *timed_ready;
+static SDL_Thread *timer;
+static int timer_stop;
+static SDL_AtomicInt gpu_busy_ns;
+
+static int time_fences(void *unused) {
+    (void)unused;
+    uint64_t finished = 0;
+    for (;;) {
+        SDL_LockMutex(timed_lock);
+        while (timed_waited == timed_pushed && !timer_stop) SDL_WaitCondition(timed_ready, timed_lock);
+        if (timed_waited == timed_pushed) {
+            SDL_UnlockMutex(timed_lock);
+            return 0;
+        }
+        int slot = timed_waited % TIMED_LIMIT;
+        SDL_UnlockMutex(timed_lock);
+        SDL_WaitForGPUFences(device, true, &timed[slot].fence, 1);
+        uint64_t now = SDL_GetTicksNS();
+        uint64_t began = timed[slot].submitted > finished ? timed[slot].submitted : finished;
+        SDL_AddAtomicInt(&gpu_busy_ns, (int)(now - began));
+        finished = now;
+        SDL_SetAtomicInt(&timed[slot].done, 1);
+        SDL_LockMutex(timed_lock);
+        timed_waited++;
+        SDL_UnlockMutex(timed_lock);
+    }
+}
+
+static void release_timed(void) {
+    while (timed_released < timed_pushed && SDL_GetAtomicInt(&timed[timed_released % TIMED_LIMIT].done)) {
+        SDL_ReleaseGPUFence(device, timed[timed_released % TIMED_LIMIT].fence);
+        timed_released++;
+    }
+}
+
+static SDL_GPUFence *submit_timed(SDL_GPUCommandBuffer *buffer) {
+    release_timed();
+    if (!timer || timed_pushed - timed_released == TIMED_LIMIT) {
+        SDL_SubmitGPUCommandBuffer(buffer);
+        return NULL;
+    }
+    SDL_GPUFence *fence = SDL_SubmitGPUCommandBufferAndAcquireFence(buffer);
+    if (!fence) return NULL;
+    int slot = timed_pushed % TIMED_LIMIT;
+    timed[slot].fence = fence;
+    timed[slot].submitted = SDL_GetTicksNS();
+    SDL_SetAtomicInt(&timed[slot].done, 0);
+    SDL_LockMutex(timed_lock);
+    timed_pushed++;
+    SDL_SignalCondition(timed_ready);
+    SDL_UnlockMutex(timed_lock);
+    return fence;
+}
+
+static void stop_timer(void) {
+    if (!timer) return;
+    SDL_LockMutex(timed_lock);
+    timer_stop = 1;
+    SDL_SignalCondition(timed_ready);
+    SDL_UnlockMutex(timed_lock);
+    SDL_WaitThread(timer, NULL);
+    timer = NULL;
+    release_timed();
+}
+
 static SDL_GPUCommandBuffer *command_buffer(void) {
     if (!commands) commands = SDL_AcquireGPUCommandBuffer(device);
     if (!commands) render_error("command buffer");
@@ -472,6 +549,9 @@ int render_init(void) {
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) render_error("video");
     device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_MSL | SDL_GPU_SHADERFORMAT_SPIRV, 0, NULL);
     if (!device) render_error("device");
+    timed_lock = SDL_CreateMutex();
+    timed_ready = SDL_CreateCondition();
+    timer = SDL_CreateThread(time_fences, "gpu timer", NULL);
     window = SDL_CreateWindow("Dark Chronicle", window_width, window_height,
                               WINDOW_FLAGS | (fullscreen ? SDL_WINDOW_FULLSCREEN : 0));
     if (!window || !SDL_ClaimWindowForGPUDevice(device, window)) render_error("window");
@@ -532,9 +612,10 @@ int render_init(void) {
 
 void render_shutdown(void) {
     if (!device) return;
-    if (commands) SDL_SubmitGPUCommandBuffer(commands);
+    if (commands) submit_timed(commands);
     commands = NULL;
     SDL_WaitForGPUIdle(device);
+    stop_timer();
     SDL_ReleaseWindowFromGPUDevice(device, window);
     SDL_DestroyWindow(window);
     SDL_DestroyGPUDevice(device);
@@ -1376,11 +1457,11 @@ static void download(SDL_GPUTexture *texture, int x, int y, int width, int heigh
     SDL_GPUTextureTransferInfo to = {transfer, 0, (Uint32)width, (Uint32)height};
     SDL_DownloadFromGPUTexture(copy, &from, &to);
     SDL_EndGPUCopyPass(copy);
-    SDL_GPUFence *fence = SDL_SubmitGPUCommandBufferAndAcquireFence(commands);
+    SDL_GPUFence *fence = submit_timed(commands);
     commands = NULL;
     restart_buffers();
-    SDL_WaitForGPUFences(device, true, &fence, 1);
-    SDL_ReleaseGPUFence(device, fence);
+    if (fence) SDL_WaitForGPUFences(device, true, &fence, 1);
+    else SDL_WaitForGPUIdle(device);
     void *mapped = SDL_MapGPUTransferBuffer(device, transfer, false);
     memcpy(pixels, mapped, size);
     SDL_UnmapGPUTransferBuffer(device, transfer);
@@ -2189,6 +2270,12 @@ static void show_texture(SDL_GPUCommandBuffer *buffer, SDL_GPUTexture *swapchain
 static void present_texture(SDL_GPUCommandBuffer *buffer, SDL_GPUTexture *color, int scale, int width, int height) {
     SDL_GPUTexture *swapchain = NULL;
     Uint32 window_width = 0, window_height = 0;
+    if (render_toggles.unpaced) {
+        static uint64_t shown_at;
+        uint64_t now = SDL_GetTicksNS();
+        if (now - shown_at < SDL_NS_PER_SECOND / (uint64_t)render_refresh_rate()) return;
+        shown_at = now;
+    }
     if (!SDL_WaitAndAcquireGPUSwapchainTexture(buffer, window, &swapchain, &window_width, &window_height))
         render_error("swapchain");
     show_texture(buffer, swapchain, window_width, window_height, color, scale, width, height);
@@ -2924,7 +3011,7 @@ int render_replay(float alpha) {
     if (!upload_replay_vertices(buffer, frame, before, alpha) || !upload_replay_models(buffer, frame)) {
         show_texture(buffer, swapchain, window_width, window_height, frame->shown, frame->shown_scale,
                      frame->shown_width, frame->shown_height);
-        SDL_SubmitGPUCommandBuffer(buffer);
+        submit_timed(buffer);
         return 0;
     }
     for (int i = 0; i < frame->step_count; ++i) {
@@ -2944,7 +3031,7 @@ int render_replay(float alpha) {
     if (paced)
         show_texture(buffer, swapchain, window_width, window_height, frame->shown, frame->shown_scale,
                      frame->shown_width, frame->shown_height);
-    SDL_SubmitGPUCommandBuffer(buffer);
+    submit_timed(buffer);
     smooth_shown();
     port_stats.replays++;
     port_debug_replayed(alpha);
@@ -2966,13 +3053,14 @@ int render_refresh_rate(void) {
 
 void render_present(int target, int width, int height) {
     flush();
+    port_stats.gpu_ns += (uint64_t)(unsigned)SDL_SetAtomicInt(&gpu_busy_ns, 0);
     presented++;
     frame_draws = 0;
     int replayed = smoothing && target;
     if (replayed) finish_recording(target, width, height);
     SDL_GPUCommandBuffer *buffer = command_buffer();
     if (!replayed) present_texture(buffer, target ? textures[target].color : NULL, target ? textures[target].scale : 1, width, height);
-    SDL_SubmitGPUCommandBuffer(buffer);
+    submit_timed(buffer);
     commands = NULL;
     restart_buffers();
     apply_quality();
@@ -2986,6 +3074,6 @@ void render_present(int target, int width, int height) {
     if (render_replay(0.0f)) return;
     buffer = command_buffer();
     present_texture(buffer, textures[target].color, textures[target].scale, width, height);
-    SDL_SubmitGPUCommandBuffer(buffer);
+    submit_timed(buffer);
     commands = NULL;
 }

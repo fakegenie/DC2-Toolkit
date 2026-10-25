@@ -69,6 +69,14 @@ typedef struct {
     float yaw;
     int loop;
     uint64_t field;
+    float frame_ms;
+    float game_ms;
+    float draw_ms;
+    float wait_ms;
+    float present_ms;
+    uint32_t replays;
+    float replay_ms;
+    float gpu_ms;
 } TracePoint;
 
 typedef struct {
@@ -211,7 +219,16 @@ static TracePoint sample_trace(void) {
     if (chara) chara->GetRotation(rotation);
     trace.yaw = rotation[1];
     trace.loop = GetNowLoopNo();
-    trace.field = debug_frames[(debug_frame_total - 1) % DEBUG_HISTORY].field;
+    const DebugFrame *last = &debug_frames[(debug_frame_total - 1) % DEBUG_HISTORY];
+    trace.field = last->field;
+    trace.frame_ms = last->frame_ms;
+    trace.game_ms = last->game_ms;
+    trace.draw_ms = last->draw_ms;
+    trace.wait_ms = last->wait_ms;
+    trace.present_ms = last->present_ms;
+    trace.replays = last->stats.replays;
+    trace.replay_ms = (float)last->stats.replay_ns / 1e6f;
+    trace.gpu_ms = (float)last->stats.gpu_ns / 1e6f;
     return trace;
 }
 
@@ -219,9 +236,13 @@ static int format_trace(char *text, size_t size, uint32_t frame, const TracePoin
     const DebugPoint *p = &trace->point;
     return snprintf(text, size,
                     "{\"frame\": %u, \"player\": [%.3f, %.3f, %.3f], \"camera\": [%.3f, %.3f, %.3f], \"look\": [%.4f, "
-                    "%.4f, %.4f], \"yaw\": %.4f, \"loop\": %d, \"field\": %llu}\n",
+                    "%.4f, %.4f], \"yaw\": %.4f, \"loop\": %d, \"field\": %llu, \"frame_ms\": %.3f, \"game_ms\": %.3f, "
+                    "\"draw_ms\": %.3f, \"wait_ms\": %.3f, \"present_ms\": %.3f, \"replays\": %u, \"replay_ms\": %.3f, "
+                    "\"gpu_ms\": %.3f}\n",
                     frame, p->player[0], p->player[1], p->player[2], p->camera[0], p->camera[1], p->camera[2],
-                    p->look[0], p->look[1], p->look[2], trace->yaw, trace->loop, (unsigned long long)trace->field);
+                    p->look[0], p->look[1], p->look[2], trace->yaw, trace->loop, (unsigned long long)trace->field,
+                    trace->frame_ms, trace->game_ms, trace->draw_ms, trace->wait_ms, trace->present_ms, trace->replays,
+                    trace->replay_ms, trace->gpu_ms);
 }
 
 static int read_trace(const char *line, TracePoint *trace) {
