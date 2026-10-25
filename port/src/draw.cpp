@@ -20,6 +20,7 @@ enum {
     GS_ZBUF = 0x4e
 };
 static const float SAMPLE_OFFSET = 0.46875f;
+static const float TEXEL_TIE = 0.0625f;
 
 enum { PRIM_POINT, PRIM_LINE, PRIM_LINE_STRIP, PRIM_TRIANGLE, PRIM_TRIANGLE_STRIP, PRIM_TRIANGLE_FAN, PRIM_SPRITE };
 
@@ -570,6 +571,15 @@ static int sample_range(float p0, float p1, float t0, float t1, float *low, floa
     return 1;
 }
 
+static void round_texels_down(RenderVertex *a, RenderVertex *b) {
+    float limits[4] = {fminf(a->u, b->u), fminf(a->v, b->v), fmaxf(a->u, b->u), fmaxf(a->v, b->v)};
+    memcpy(a->limits, limits, sizeof limits);
+    memcpy(b->limits, limits, sizeof limits);
+    float shift_u = b->x != a->x ? TEXEL_TIE * (b->u - a->u) / (b->x - a->x) : 0.0f;
+    float shift_v = b->y != a->y ? TEXEL_TIE * (b->v - a->v) / (b->y - a->y) : 0.0f;
+    a->u -= shift_u, b->u -= shift_u, a->v -= shift_v, b->v -= shift_v;
+}
+
 static void align_sprite(RenderVertex *a, RenderVertex *b, int textured) {
     float limits[4];
     int clamped = textured && sample_range(a->x, b->x, a->u, b->u, &limits[0], &limits[2]) &&
@@ -579,6 +589,10 @@ static void align_sprite(RenderVertex *a, RenderVertex *b, int textured) {
     a->x -= SAMPLE_OFFSET, b->x -= SAMPLE_OFFSET, a->y -= SAMPLE_OFFSET, b->y -= SAMPLE_OFFSET;
     a->u -= shift_u, b->u -= shift_u, a->v -= shift_v, b->v -= shift_v;
     if (!clamped) return;
+    limits[0] = fmaxf(limits[0], a->limits[0]);
+    limits[1] = fmaxf(limits[1], a->limits[1]);
+    limits[2] = fminf(limits[2], a->limits[2]);
+    limits[3] = fminf(limits[3], a->limits[3]);
     memcpy(a->limits, limits, sizeof limits);
     memcpy(b->limits, limits, sizeof limits);
 }
@@ -642,6 +656,7 @@ static void kick(u_int x, u_int y, u_int z, int fog, int draw) {
         if (type == PRIM_SPRITE) {
             RenderVertex a = out[0], b = out[1];
             RenderSlot target;
+            if (state.texture) round_texels_down(&a, &b);
             if (render_slot(render_bound(), &target) && (target.scale > 1 || target.samples > 1))
                 align_sprite(&a, &b, state.texture != 0);
             RenderVertex corner_b = b, corner_c = b;
