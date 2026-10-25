@@ -340,6 +340,30 @@ int port_kernel_run(int (*entry)(void)) {
     return game_result;
 }
 
+size_t port_kernel_returns(uint64_t *slots, size_t limit) {
+    size_t count = 0;
+    for (int id = 0; id < THREAD_LIMIT; ++id) {
+        if (threads[id].state == UNUSED || threads[id].state == DORMANT) continue;
+        uintptr_t low = (uintptr_t)stacks[id];
+        uintptr_t top = low + STACK_SIZE;
+        uintptr_t frame = port_fiber_frame(&threads[id].context);
+        if (frame == UINTPTR_MAX) return limit + 1;
+        while (frame >= low && frame + 16 <= top) {
+            if (count == limit) return limit + 1;
+            slots[count++] = frame + 8;
+            uintptr_t next = *(const uintptr_t *)frame;
+            if (next <= frame) break;
+            frame = next;
+        }
+    }
+    return count;
+}
+
+void port_kernel_stacks(uint64_t *low, uint64_t *high) {
+    *low = (uintptr_t)stacks;
+    *high = *low + sizeof stacks;
+}
+
 void port_kernel_host(void) {
     host_requested = 1;
     port_fiber_switch(&threads[running].context, &host_context);

@@ -19,14 +19,14 @@ static uint32_t fault_frame;
 static char fault_what[FAULT_TEXT];
 static char fault_clip[FAULT_NAME];
 
-static int setting(const char *name) {
+static int setting(const char *name, int fallback) {
     const char *text = getenv(name);
-    return !(text && !strcmp(text, "0"));
+    return text ? strcmp(text, "0") != 0 : fallback;
 }
 
 static int fault_on(void) {
-    if (watching < 0) watching = setting("DC2TK_FAULT_WATCH");
-    if (pausing < 0) pausing = setting("DC2TK_FAULT_PAUSE");
+    if (watching < 0) watching = setting("DC2TK_FAULT_WATCH", 1);
+    if (pausing < 0) pausing = setting("DC2TK_FAULT_PAUSE", 0);
     return watching;
 }
 
@@ -43,8 +43,9 @@ static int find_fault(char *what, size_t size) {
     DebugPoint point;
     debug_clip_sample(&point);
     const mgRENDER_INFO *info = &mgRenderInfo;
-    return bad_values("player", point.player, 3, FAULT_FAR, what, size) ||
-           bad_values("camera", info->camera_pos, 3, FAULT_FAR, what, size) ||
+    if (bad_values("player", point.player, 3, FAULT_FAR, what, size)) return 1;
+    if (debug_menu_up()) return 0;
+    return bad_values("camera", info->camera_pos, 3, FAULT_FAR, what, size) ||
            bad_values("camera_pose", &info->camera_pose[0][0], 16, INFINITY, what, size) ||
            bad_values("view", &info->view[0][0], 16, INFINITY, what, size) ||
            bad_values("world_screen", &info->world_screen[0][0], 16, INFINITY, what, size) ||
@@ -101,7 +102,8 @@ static int command_faults(const DebugArgs *args, DebugReply *reply) {
 extern const DebugCommand debug_fault_commands[] = {
     {"faults", command_faults, 1,
      "the fault watch: every frame the player, camera and camera matrices are checked for NaN, infinity or a "
-     "position past a million; the first bad frame is logged, written as a fault-<time> clip from the black box "
-     "and paused; on=0|1, pause=0|1"},
+     "position past a million (the camera is not checked while a menu is up, as menus start from an unset camera); "
+     "the first bad frame is logged and written as a fault-<time> clip from the black box; on=0|1, pause=0|1 to "
+     "also pause there"},
     {NULL, NULL, 0, NULL},
 };

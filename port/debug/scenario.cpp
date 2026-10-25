@@ -38,7 +38,7 @@ typedef struct {
     const char *label;
 } Place;
 
-enum { FLOOR_START_EVENT = 1010, RACE_MAP = 96, MAP_LIMIT = 1024, ITEM_LIMIT = ITEM_NO_MAX, LIST_LIMIT = 64, PARTS_LIMIT = 0x100, CHAPTER_LIMIT = 9 };
+enum { FLOOR_START_EVENT = 1010, RACE_MAP = 96, SPHEDA_DUNGEON = 2, SPHEDA_FLOOR = 1, SPHEDA_EVENT = 4000, MAP_LIMIT = 1024, ITEM_LIMIT = ITEM_NO_MAX, LIST_LIMIT = 64, PARTS_LIMIT = 0x100, CHAPTER_LIMIT = 9 };
 
 static const char *loop_names[LOOP_MODE_NUM] = {"menu",       "town",       "dungeon",    "title",      "chara viewer",
                                                 "tex viewer", "map viewer", "snd viewer", "movie viewer", "save convert"};
@@ -225,7 +225,7 @@ static const char *fishing_step(void) {
     return CharaMode >= 0 && CharaMode < 8 ? fishing_steps[CharaMode] : "unknown";
 }
 
-static int menu_up(void) {
+int debug_menu_up(void) {
     int loop = GetNowLoopNo();
     if (loop == LOOP_EDIT) return LoopMode == EDIT_LOOP_WALK_MENU || LoopMode == EDIT_LOOP_EDIT_MENU;
     if (loop == LOOP_DUNGEON) return DngStatus.mode == DNG_STATUS_MENU || DngStatus.mode == DNG_STATUS_EVENT_MENU;
@@ -1009,6 +1009,12 @@ void debug_scenario_panel(void) {
         ImGui::InputInt("tank slot (-1 the first fish)", &pick_race_fish);
         if (ImGui::Button("Start race")) run("fishrace?class=%d&race=%d&fish=%d", pick_race_class, pick_race, pick_race_fish);
     }
+    if (ImGui::CollapsingHeader("Spheda")) {
+        if (ImGui::Button("Spheda preset")) run("preset?name=sg0&warp=0");
+        ImGui::SameLine();
+        if (ImGui::Button("Go to the Spheda floor"))
+            run("dungeon?dungeon=%d&floor=%d&event=%d", SPHEDA_DUNGEON, SPHEDA_FLOOR, SPHEDA_EVENT);
+    }
     if (ImGui::CollapsingHeader("Town")) {
         ImGui::InputText("filter##map", map_filter, sizeof map_filter);
         pick_from("maps", maps, map_total, map_filter, &pick_map);
@@ -1072,7 +1078,7 @@ void debug_scenario_status(DebugReply *reply) {
                     data->save_dungeon.floor_id[data->save_dungeon.stage_id]);
     }
     CScene *scene = GetMainScene();
-    if (in_playable_loop()) debug_print(reply, ", \"event_run\": %d, \"event\": %d, \"menu\": %d", scene->event_run, scene->event_no, menu_up());
+    if (in_playable_loop()) debug_print(reply, ", \"event_run\": %d, \"event\": %d, \"menu\": %d", scene->event_run, scene->event_no, debug_menu_up());
     if (in_playable_loop() && GetSubGameNo() == SUBGAME_FISHING) debug_print(reply, ", \"fishing\": \"%s\"", fishing_step());
     if (in_playable_loop()) debug_print(reply, ", \"subgame\": %d", SubGameRunning() ? GetSubGameNo() : 0);
     CCharacter2 *chara = in_playable_loop() ? scene->GetCharacter(scene->player_chara >= 0 ? scene->player_chara : 0) : NULL;

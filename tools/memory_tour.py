@@ -122,7 +122,7 @@ def launch(front=False, paused=False, speed="0"):
     game["overrides"] = game["overrides"] or tempfile.mkdtemp(prefix="dc2tk-memory-overrides-")
     flags = [] if front else ["--mute", "--background"]
     env = {**os.environ, "DC2TK_DEBUG_PORT": str(PORT), "DC2_SAVE_ROOT": game["saves"],
-           "DC2TK_OVERRIDES": game["overrides"], "DC2TK_MEMORY_STRICT": "1", "DC2TK_FAULT_PAUSE": "0"}
+           "DC2TK_OVERRIDES": game["overrides"], "DC2TK_MEMORY_STRICT": "1"}
     game["log"] = open(log_path(), "a")
     game["process"] = subprocess.Popen([str(BINARY), *flags, str(ROOT / "dc2.iso")], cwd=ROOT, stdout=game["log"],
                                        stderr=game["log"], env=env)

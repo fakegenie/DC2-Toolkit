@@ -18,6 +18,7 @@
 #include <string>
 #include <sys/stat.h>
 #include <unordered_map>
+#include <unordered_set>
 #include <sys/mman.h>
 #include <unistd.h>
 #include <vector>
@@ -37,7 +38,7 @@ extern "C" {
 extern long __stack_chk_guard;
 }
 
-enum { PAGE = 4096, RUN_LIMIT = 1024, STATE_VERSION = 5 };
+enum { PAGE = 4096, RUN_LIMIT = 1024, STATE_VERSION = 6 };
 enum { THUMB_BYTES = STATE_THUMB_WIDTH * STATE_THUMB_HEIGHT * 4 };
 
 typedef struct {
@@ -62,6 +63,10 @@ typedef struct {
     std::unordered_map<std::string, uint64_t> strings;
     uint64_t low;
     uint64_t high;
+    uint64_t stack_low;
+    uint64_t stack_high;
+    int every_return;
+    std::unordered_set<uint64_t> returns;
     uint64_t moved;
     uint64_t unresolved;
     std::vector<std::string> changed;
@@ -386,6 +391,8 @@ static void save_state(PortState *state) {
     header.size = size;
     header.base = PORT_WINDOW;
     header.guard = (uint64_t)__stack_chk_guard;
+    port_kernel_stacks(&header.stack_low, &header.stack_high);
+    header.return_count = port_kernel_returns(header.return_slots, STATE_RETURN_LIMIT);
     unsigned char *at = data;
     memcpy(at, &header, sizeof header);
     at += sizeof header;
@@ -444,7 +451,11 @@ static const char *open_old_build(const unsigned char *layout) {
     return NULL;
 }
 
-static void prepare_move(Move *move, const PortSymbols *from, const PortSymbols *to) {
+static void prepare_move(Move *move, const PortStateHeader *header, const PortSymbols *from, const PortSymbols *to) {
+    move->stack_low = header->stack_low;
+    move->stack_high = header->stack_high;
+    move->every_return = header->return_count > STATE_RETURN_LIMIT;
+    for (uint64_t i = 0; i < header->return_count && i < STATE_RETURN_LIMIT; ++i) move->returns.insert(header->return_slots[i]);
     move->from = from;
     move->to = to;
     move->moved = move->unresolved = 0;
@@ -473,7 +484,12 @@ static void note_name(std::vector<std::string> *names, const std::string &name) 
     names->push_back(name);
 }
 
-static int move_address(Move *move, uint64_t value, uint64_t *moved) {
+static int live_return(const Move *move, uint64_t where) {
+    if (where < move->stack_low || where >= move->stack_high || move->every_return) return 1;
+    return move->returns.count(where) != 0;
+}
+
+static int move_address(Move *move, uint64_t where, uint64_t value, uint64_t *moved) {
     const PortSection *section = port_section_at(move->from, value);
     if (!section) return 0;
     if (string_section(section)) {
@@ -492,7 +508,8 @@ static int move_address(Move *move, uint64_t value, uint64_t *moved) {
     auto found = move->keys.find(std::make_pair(symbol->name, symbol->object));
     if (found == move->keys.end()) return 0;
     uint64_t offset = value - symbol->address;
-    if (symbol->code && offset && found->second->size != symbol->size) note_name(&move->changed, symbol->name);
+    if (symbol->code && offset && found->second->size != symbol->size && live_return(move, where))
+        note_name(&move->changed, symbol->name);
     *moved = found->second->address + offset;
     return 1;
 }
@@ -503,7 +520,7 @@ static void move_words(Move *move, unsigned char *bytes, uint64_t start, size_t 
         memcpy(&value, bytes + at, 8);
         if (value < move->low || value >= move->high) continue;
         uint64_t moved;
-        if (!move_address(move, value, &moved)) {
+        if (!move_address(move, start + at, value, &moved)) {
             move->unresolved++;
             continue;
         }
@@ -597,7 +614,7 @@ static int move_pieces(const PortStateHeader *header, std::vector<Piece> *pieces
         snprintf(problem, sizeof problem, "%s", failed ? failed : error);
         return 0;
     }
-    prepare_move(move, &old_build, current);
+    prepare_move(move, header, &old_build, current);
     for (Piece &piece : *pieces) move_words(move, piece.bytes.data(), piece.start, piece.bytes.size());
     for (const Piece &piece : *pieces) place_piece(move, piece, 0);
     if ((move->changed.empty() && move->shifted.empty()) || force_load) return 1;

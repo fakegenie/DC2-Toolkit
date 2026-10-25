@@ -140,6 +140,7 @@ void debug_clip_trace(char *text, size_t size);
 void debug_clip_sample(DebugPoint *point);
 const char *debug_blackbox_write(const char *prefix, char *name, size_t size);
 void debug_fault_frame(void);
+int debug_menu_up(void);
 void debug_fault_panel(void);
 int debug_savestate_into(PortState *state);
 void debug_blackbox_input(const struct port_input_state *state);

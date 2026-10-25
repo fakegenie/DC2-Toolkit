@@ -188,6 +188,10 @@ What the fishing work kept needing, in the order to build it:
      `port_mods_frame_exit`, `debug_frame_exit`, `debug_savestate_frame`, `port_state_frame`) are
      `STATE_RESUMABLE` (unoptimised), as the engine and `kernel.c` already are, so no register
      holds a page address across the switch; a function on a stack that changed size is refused.
+     Only live return addresses count: a state lists the return slots on each thread's
+     frame-pointer chain (`port_kernel_returns`), and stale ones elsewhere in the stacks are moved
+     without complaint. Before that, any edit to a debug hook (`debug_fault_frame`) broke every
+     state through a leftover return address in a live frame's padding.
    - States store the stack guard and swap it on load (it changes every launch).
    Checked by saving in one build, rebuilding with code changed, port data added, and data added to
    a restored port file, loading in each and playing the same input: every picture identical. A
@@ -203,9 +207,12 @@ What the fishing work kept needing, in the order to build it:
    5 s. Checked: a written box and one written by a SIGSEGV both replay within 0.001.
 4. **Fault watch.** Done (`port/debug/fault.cpp`, `faults`, Clips tab). Every frame the player,
    the camera position and the camera, view and projection matrices are checked for NaN, infinity
-   or a position past a million; the first bad frame logs a `fault:` line, writes the black box as
-   `fault-<time>` and pauses (`faults pause=0` or `DC2TK_FAULT_PAUSE=0` only logs; memory_tour runs
-   that way and fails on a fault). The places tour (330 places) raised none.
+   or a position past a million; the first bad frame logs a `fault:` line and writes the black box
+   as `fault-<time>` (`faults pause=1` or `DC2TK_FAULT_PAUSE=1` also pauses there; memory_tour
+   fails on a fault). The camera is not checked while a menu is up: `MenuWorldTrans` reads the menu
+   camera's position before its first step, so the first menu frame always has a leftover camera,
+   on the PS2 too. A pause by default looked like a freeze in play. The places tour (330 places)
+   raised none.
 5. **Clips from any state.** Done. `clip from=STATE` records from a saved state instead of now, and
    a clip or black box name with a `/` is a folder anywhere (so clips can sit in
    `port/tests/recordings/NAME/`). `memory_tour.py clips` replays every clip in `build/port/clips`

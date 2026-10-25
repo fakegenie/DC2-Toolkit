@@ -10,7 +10,7 @@ extern "C" {
 #define STATE_RESUMABLE __attribute__((optnone, noinline))
 
 enum { STATE_SAVE = 1, STATE_LOAD = 2 };
-enum { STATE_THUMB_WIDTH = 160, STATE_THUMB_HEIGHT = 120 };
+enum { STATE_THUMB_WIDTH = 160, STATE_THUMB_HEIGHT = 120, STATE_RETURN_LIMIT = 1024 };
 
 typedef struct {
     char magic[8];
@@ -29,6 +29,10 @@ typedef struct {
     uint64_t size;
     uint64_t base;
     uint64_t guard;
+    uint64_t stack_low;
+    uint64_t stack_high;
+    uint64_t return_count;
+    uint64_t return_slots[STATE_RETURN_LIMIT];
 } PortStateHeader;
 
 typedef struct {
