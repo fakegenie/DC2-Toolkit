@@ -1,24 +1,16 @@
 #pragma once
 #include <stdint.h>
 
-typedef struct {
-    uint64_t display[5];
-    uint64_t draw[30];
-    int buffer;
-    short mode;
-    short interlace;
-    short output;
-    short frame_mode;
-    uint64_t fields;
-} PortGraphicsState;
-
 #ifdef __cplusplus
 extern "C" {
 #endif
-extern PortGraphicsState port_graphics;
+extern uint64_t port_fields;
 extern uint64_t port_field_period;
 void port_graphics_tick(void);
 void port_graphics_wait(void);
+void port_timer_reset(void);
+uint32_t port_timer_lines(void);
+int port_display_field(void);
 int sceGsSyncV(int mode);
 #ifdef __cplusplus
 }

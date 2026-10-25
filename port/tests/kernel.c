@@ -1,7 +1,6 @@
 #define _XOPEN_SOURCE 700
 #include <assert.h>
 #include <stdint.h>
-#include "port_window.h"
 #include "../src/kernel.c"
 static int trace[32];
 static int position;
@@ -21,7 +20,6 @@ void port_graphics_wait(void) {
 void port_mods_host(void) {}
 void port_state_host(void) {}
 static void worker(void *argument) {
-    assert((uintptr_t)&argument - PORT_WINDOW < 0x10000000);
     assert(argument == &trace);
     trace[position++] = 1;
     assert(WaitSema(semaphore) == semaphore);

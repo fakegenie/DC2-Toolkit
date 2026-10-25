@@ -88,7 +88,7 @@ static void journal_event(const char *kind, const char *command) {
     const char *name = scene ? scene->GetMapName(scene->active_map) : nullptr;
     CCharacter2 *chara = scene ? scene->GetCharacter(scene->player_chara) : nullptr;
     std::fprintf(file, "%llu\t%s\tloop=%d\tmap=%.16s\tposition=%.3f,%.3f,%.3f\t%s\n",
-                 (unsigned long long)port_graphics.fields, kind, GetNowLoopNo(), name ? name : "none",
+                 (unsigned long long)port_fields, kind, GetNowLoopNo(), name ? name : "none",
                  chara ? chara->position[0] : 0, chara ? chara->position[1] : 0,
                  chara ? chara->position[2] : 0, command);
     std::fclose(file);
@@ -347,8 +347,8 @@ static void screenshot_request(void) {
     static const char *request = getenv("DC2TK_REPLAY_SCREENSHOTS");
     static unsigned long long previous;
     static uint64_t next_poll;
-    if (!request || port_graphics.fields < next_poll) return;
-    next_poll = port_graphics.fields + 6;
+    if (!request || port_fields < next_poll) return;
+    next_poll = port_fields + 6;
     FILE *file = std::fopen(request, "r");
     if (!file) return;
     unsigned long long id;
@@ -359,7 +359,7 @@ static void screenshot_request(void) {
     previous = id;
     port_present_save(path);
     std::fprintf(stderr, "replay: screenshot id=%llu field=%llu path=%s\n", id,
-                 (unsigned long long)port_graphics.fields, path);
+                 (unsigned long long)port_fields, path);
 }
 
 static void town_report(void) {
@@ -446,7 +446,7 @@ static double seconds(clockid_t clock) {
     return value.tv_sec + value.tv_nsec * 1e-9;
 }
 
-extern "C" void port_input_read(unsigned char data[32]) {
+extern "C" void port_input_read(pad_dualshock2_report *report) {
     static int stage;
     static uint64_t last_press;
     static uint64_t next_report;
@@ -463,7 +463,7 @@ extern "C" void port_input_read(unsigned char data[32]) {
     static double start = seconds(CLOCK_MONOTONIC);
     static uint64_t limit = getenv("DC2TK_REPLAY_FIELDS") ? strtoull(getenv("DC2TK_REPLAY_FIELDS"), nullptr, 10) : 3000;
     port_input_state input = {};
-    uint64_t field = port_graphics.fields;
+    uint64_t field = port_fields;
     screenshot_request();
     if (resume && stage == 4 && GetNowLoopNo() != LOOP_TITLE) {
         stage = 5;
@@ -765,5 +765,5 @@ extern "C" void port_input_read(unsigned char data[32]) {
         }
     }
     if (!controlled && fighting && gun_aim) input.buttons |= PORT_INPUT_L1;
-    port_input_report(&input, data);
+    port_input_report(&input, report);
 }

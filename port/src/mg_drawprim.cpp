@@ -6,7 +6,7 @@
 #include "vu0_lanes.hpp"
 #include <cstring>
 
-enum { DIRECT_LIMIT = 4096 };
+enum { DIRECT_LIMIT = 4096, GIF_REGISTER_BITS = 4, GIF_REGISTER_MASK = 15 };
 
 static u_long packed_registers;
 static int packed_count;
@@ -15,16 +15,17 @@ static int packed_mode;
 static u_long128 direct_buffer[DIRECT_LIMIT];
 static int direct_pending;
 
-static void packed_data(const u_int *words) {
-    int reg = packed_mode ? (int)((packed_registers >> (packed_index * 4)) & 15) : 0xe;
-    gs_packed(reg, words);
+static void packed_data(const void *qword) {
+    int reg = packed_mode ? (int)((packed_registers >> (packed_index * GIF_REGISTER_BITS)) & GIF_REGISTER_MASK)
+                          : SCE_GIF_PACKED_AD;
+    gs_packed(reg, qword);
     if (packed_mode && packed_count > 0) packed_index = (packed_index + 1) % packed_count;
 }
 
 static void drain() {
     int count = direct_pending;
     direct_pending = 0;
-    for (int i = 0; i < count; ++i) packed_data((const u_int *)&direct_buffer[i]);
+    for (int i = 0; i < count; ++i) packed_data(&direct_buffer[i]);
 }
 
 PORT_OVERRIDE void mgCDrawPrim::Begin2() {
@@ -36,14 +37,14 @@ PORT_OVERRIDE void mgCDrawPrim::Begin2() {
     draw_env.zbuf = zbuf;
     draw_env.SetZBuf(z_mask);
     gs_write(SCE_GS_TEST_1, draw_env.test.value);
-    gs_write(SCE_GS_ZBUF_1, *(u_long *)&draw_env.zbuf);
+    gs_write(SCE_GS_ZBUF_1, draw_env.zbuf.value);
     gs_write(SCE_GS_ALPHA_1, draw_env.alpha.value);
 }
 
 PORT_OVERRIDE void mgCDrawPrim::BeginDma() {
     drain();
     packed_mode = 0;
-    gs_write(SCE_GS_PRIM, *(u_long *)&prim);
+    gs_write(SCE_GS_PRIM, prim.value);
 }
 
 PORT_OVERRIDE void mgCDrawPrim::EndDma() {
@@ -61,7 +62,7 @@ PORT_OVERRIDE void mgCDrawPrim::BeginPrim2(int type, u_int data_a, u_int data_b,
     drain();
     prim.PRIM = type;
     q = 1.0f;
-    gs_write(SCE_GS_PRIM, *(u_long *)&prim & 0x7ff);
+    gs_write(SCE_GS_PRIM, prim.value);
     packed_mode = 1;
     packed_registers = (u_long)data_a | (u_long)data_b << 32;
     packed_count = unit_count;
@@ -80,7 +81,7 @@ PORT_OVERRIDE void mgCDrawPrim::End2() {
 
 PORT_OVERRIDE void mgCDrawPrim::Data(int *data) {
     drain();
-    packed_data((const u_int *)data);
+    packed_data(data);
 }
 
 void mgCDrawPrim::Data0(float *data) {
@@ -106,19 +107,30 @@ PORT_OVERRIDE void mgCDrawPrim::Vertex4(int x, int y, int z) {
     int offset_x = 0;
     int offset_y = 0;
     GetOffset(&offset_x, &offset_y);
-    gs_write(SCE_GS_XYZ2, ((u_long)(u_int)z << 32) | (u_long)((x + offset_x) & 0xffff) |
-                              (u_long)((y + offset_y) & 0xffff) << 16);
+    sceGsXyz xyz = {};
+    xyz.X = x + offset_x;
+    xyz.Y = y + offset_y;
+    xyz.Z = (u_int)z;
+    gs_write(SCE_GS_XYZ2, xyz.value);
 }
 
 PORT_OVERRIDE void mgCDrawPrim::Color(int r, int g, int b, int a) {
     drain();
-    gs_write(SCE_GS_RGBAQ, ((u_long)q_bits << 32) | (u_long)(r & 255) | (u_long)(g & 255) << 8 |
-                               (u_long)(b & 255) << 16 | (u_long)(a & 255) << 24);
+    sceGsRgbaq rgbaq;
+    rgbaq.bytes.red = r;
+    rgbaq.bytes.green = g;
+    rgbaq.bytes.blue = b;
+    rgbaq.bytes.alpha = a;
+    rgbaq.bytes.q = q_bits;
+    gs_write(SCE_GS_RGBAQ, rgbaq.value);
 }
 
 PORT_OVERRIDE void mgCDrawPrim::TextureCrd4(int u, int v) {
     drain();
-    gs_write(SCE_GS_UV, (u_long)(u & 0x3fff) | (u_long)(v & 0x3fff) << 16);
+    sceGsUv uv = {};
+    uv.U = u;
+    uv.V = v;
+    gs_write(SCE_GS_UV, uv.value);
 }
 
 PORT_OVERRIDE void mgCDrawPrim::Direct(unsigned long reg, unsigned long data) {

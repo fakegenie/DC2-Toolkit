@@ -1,31 +1,66 @@
 #define _POSIX_C_SOURCE 200809L
 #include "movie.h"
+#include <stddef.h>
 #include <string.h>
 
+_Static_assert(sizeof(struct mpeg_start_code) == 4, "MPEG start code");
+_Static_assert(sizeof(struct mpeg_pack_header) == 14, "MPEG-2 pack header");
+_Static_assert(sizeof(struct mpeg_pes_header) == 6, "MPEG PES header");
+_Static_assert(sizeof(struct mpeg_pes_extension) == 3, "MPEG PES optional header");
+_Static_assert(sizeof(struct mpeg_pts) == 5, "MPEG presentation time stamp");
+_Static_assert(sizeof(struct mpeg_pes_packet) == 14, "MPEG PES header with PTS");
+_Static_assert(sizeof(struct pss_audio_header) == 4, "PSS audio subheader");
+_Static_assert(sizeof(struct pss_sshd) == 40, "PSS SShd header");
+
+static const uint8_t mpeg_start_prefix[3] = {0, 0, 1};
+
+static unsigned mpeg_be16(const uint8_t bytes[2]) { return (unsigned)bytes[0] << 8 | bytes[1]; }
+
+static size_t pss_packet_size(const unsigned char *data, size_t size) {
+    const struct mpeg_start_code *start = (const struct mpeg_start_code *)data;
+    const struct mpeg_pack_header *pack = (const struct mpeg_pack_header *)data;
+    const struct mpeg_pes_header *pes = (const struct mpeg_pes_header *)data;
+    if (size < sizeof *start) return 0;
+    if (start->stream == MPEG_STREAM_END) return sizeof *start;
+    if (start->stream == MPEG_STREAM_PACK) return size < sizeof *pack ? 0 : sizeof *pack + pack->stuffing_length;
+    return size < sizeof *pes ? 0 : sizeof *pes + mpeg_be16(pes->length);
+}
+
+static int pss_has_header(unsigned stream) {
+    return (stream & MPEG_STREAM_AUDIO_MASK) == MPEG_STREAM_AUDIO || (stream & MPEG_STREAM_VIDEO_MASK) == MPEG_STREAM_VIDEO ||
+           stream == MPEG_STREAM_PRIVATE_1;
+}
+
+static uint64_t mpeg_pts_value(const struct mpeg_pts *pts) {
+    return (uint64_t)pts->high << 30 | (uint64_t)pts->middle_high << 22 | (uint64_t)pts->middle_low << 15 | (uint64_t)pts->low_high << 7 | pts->low_low;
+}
+
 int port_pss_packet(const unsigned char *data, size_t size, struct port_pss_packet *packet) {
-    if (!data || !packet || size < 4) return 0;
-    if (data[0] || data[1] || data[2] != 1) return -1;
+    if (!data || !packet || size < sizeof(struct mpeg_start_code)) return 0;
+    const struct mpeg_pes_packet *pes = (const struct mpeg_pes_packet *)data;
+    const struct mpeg_pack_header *pack = (const struct mpeg_pack_header *)data;
+    if (memcmp(pes->header.start.prefix, mpeg_start_prefix, sizeof mpeg_start_prefix)) return -1;
     memset(packet, 0, sizeof(*packet));
-    packet->stream = data[3];
+    packet->stream = pes->header.start.stream;
     packet->pts = UINT64_MAX;
-    if (data[3] == 0xb9) return 4;
-    if (data[3] == 0xba) {
-        if (size < 14) return 0;
-        if ((data[4] & 0xc0) != 0x40) return -1;
-        size_t count = 14 + (data[13] & 7);
+    if (packet->stream == MPEG_STREAM_END) return (int)pss_packet_size(data, size);
+    if (packet->stream == MPEG_STREAM_PACK) {
+        if (size < sizeof *pack) return 0;
+        if (pack->version != MPEG_PACK_VERSION_2) return -1;
+        size_t count = pss_packet_size(data, size);
         return size < count ? 0 : (int)count;
     }
-    if (size < 6) return 0;
-    size_t count = 6 + ((unsigned)data[4] << 8 | data[5]);
-    if (count == 6) return -1;
+    if (size < sizeof pes->header) return 0;
+    size_t count = pss_packet_size(data, size);
+    if (count == sizeof pes->header) return -1;
     if (size < count) return 0;
-    if ((data[3] & 0xe0) == 0xc0 || (data[3] & 0xf0) == 0xe0 || data[3] == 0xbd) {
-        if (count < 9 || (data[6] & 0xc0) != 0x80 || 9u + data[8] > count) return -1;
-        size_t offset = 9 + data[8];
-        if (data[7] & 0x80) {
-            if (data[8] < 5 || !(data[9] & 1) || !(data[11] & 1) || !(data[13] & 1)) return -1;
-            packet->pts = (uint64_t)(data[9] & 14) << 29 | (uint64_t)data[10] << 22 |
-                          (uint64_t)(data[11] & 254) << 14 | (uint64_t)data[12] << 7 | data[13] >> 1;
+    if (pss_has_header(packet->stream)) {
+        size_t first = offsetof(struct mpeg_pes_packet, pts);
+        if (count < first || pes->extension.marker != MPEG_PES_MARKER || first + pes->extension.header_length > count) return -1;
+        size_t offset = first + pes->extension.header_length;
+        if (pes->extension.pts_dts & MPEG_PES_HAS_PTS) {
+            if (pes->extension.header_length < sizeof pes->pts || !pes->pts.marker_high || !pes->pts.marker_middle || !pes->pts.marker_low) return -1;
+            packet->pts = mpeg_pts_value(&pes->pts);
         }
         packet->data = data + offset;
         packet->size = count - offset;
@@ -44,25 +79,30 @@ int port_pss_packet(const unsigned char *data, size_t size, struct port_pss_pack
 
 #include "audio.h"
 
+enum { MOVIE_RATE_MIN = 8000, MOVIE_RATE_MAX = 192000, MOVIE_CHANNELS = 2, MOVIE_INTERLEAVE_MAX = 32768, MOVIE_SIZE_LIMIT = 2048 };
+enum { MOVIE_PCM_LIMIT = MOVIE_INTERLEAVE_MAX / sizeof(int16_t) * MOVIE_CHANNELS };
+static const double field_seconds = 1.0 / 50;
+static const uint32_t opaque = 0xff000000u;
+
 static struct {
     struct sceCdlFILE file;
     uint64_t offset;
     AVCodecContext *decoder;
     AVCodecParserContext *parser;
     AVFrame *frame;
-    unsigned char input[65542 + AV_INPUT_BUFFER_PADDING_SIZE];
+    unsigned char input[sizeof(struct mpeg_pes_header) + UINT16_MAX + AV_INPUT_BUFFER_PADDING_SIZE];
     const unsigned char *video;
     size_t video_size;
     uint64_t video_pts;
     uint32_t *pixels;
-    unsigned char audio_header[40];
+    struct pss_sshd audio_header;
     unsigned audio_header_size;
     unsigned audio_rate;
     unsigned audio_channels;
     unsigned audio_interleave;
     unsigned audio_size;
-    unsigned char audio_block[65536];
-    int16_t pcm[32768];
+    unsigned char audio_block[MOVIE_INTERLEAVE_MAX * MOVIE_CHANNELS];
+    int16_t pcm[MOVIE_PCM_LIMIT];
     int with_audio;
     int loop;
     int playing;
@@ -77,37 +117,35 @@ static struct {
 } movie;
 
 static double movie_time(void) {
-    return (double)port_graphics.fields * 0.02;
-}
-
-static unsigned movie_le32(const unsigned char *p) {
-    return (unsigned)p[0] | (unsigned)p[1] << 8 | (unsigned)p[2] << 16 | (unsigned)p[3] << 24;
+    return (double)port_fields * field_seconds;
 }
 
 static void movie_audio(const unsigned char *data, size_t size) {
-    if (!movie.with_audio || size < 4 || data[0] != 0xff || data[1] != 0xa0) return;
-    data += 4;
-    size -= 4;
+    const struct pss_audio_header *subheader = (const struct pss_audio_header *)data;
+    if (!movie.with_audio || size < sizeof *subheader || subheader->marker != PSS_AUDIO_MARKER || subheader->type != PSS_AUDIO_PCM) return;
+    data += sizeof *subheader;
+    size -= sizeof *subheader;
     while (size) {
-        if (movie.audio_header_size < 40) {
-            unsigned count = 40 - movie.audio_header_size;
+        if (movie.audio_header_size < sizeof movie.audio_header) {
+            unsigned count = (unsigned)sizeof movie.audio_header - movie.audio_header_size;
             if (count > size) count = (unsigned)size;
-            memcpy(movie.audio_header + movie.audio_header_size, data, count);
+            memcpy((unsigned char *)&movie.audio_header + movie.audio_header_size, data, count);
             movie.audio_header_size += count;
             data += count;
             size -= count;
-            if (movie.audio_header_size < 40) return;
-            const unsigned char *h = movie.audio_header;
-            if (memcmp(h, "SShd", 4) || movie_le32(h + 4) != 24 || movie_le32(h + 8) != 1 || memcmp(h + 32, "SSbd", 4)) {
+            if (movie.audio_header_size < sizeof movie.audio_header) return;
+            const struct pss_sshd *h = &movie.audio_header;
+            if (memcmp(h->tag, "SShd", sizeof h->tag) || h->size != offsetof(struct pss_sshd, body_tag) - offsetof(struct pss_sshd, type) ||
+                h->type != PSS_SSHD_PCM16 || memcmp(h->body_tag, "SSbd", sizeof h->body_tag)) {
                 movie.with_audio = 0;
                 fprintf(stderr, "movie: unsupported PCM header\n");
                 return;
             }
-            movie.audio_rate = movie_le32(h + 12);
-            movie.audio_channels = movie_le32(h + 16);
-            movie.audio_interleave = movie_le32(h + 20);
-            if (movie.audio_rate < 8000 || movie.audio_rate > 192000 || movie.audio_channels < 1 || movie.audio_channels > 2 ||
-                movie.audio_interleave < 2 || movie.audio_interleave > 32768 || movie.audio_interleave & 1) {
+            movie.audio_rate = h->rate;
+            movie.audio_channels = h->channels;
+            movie.audio_interleave = h->interleave;
+            if (movie.audio_rate < MOVIE_RATE_MIN || movie.audio_rate > MOVIE_RATE_MAX || movie.audio_channels < 1 || movie.audio_channels > MOVIE_CHANNELS ||
+                movie.audio_interleave < sizeof(int16_t) || movie.audio_interleave > MOVIE_INTERLEAVE_MAX || movie.audio_interleave % sizeof(int16_t)) {
                 movie.with_audio = 0;
                 return;
             }
@@ -120,11 +158,11 @@ static void movie_audio(const unsigned char *data, size_t size) {
         data += count;
         size -= count;
         if (movie.audio_size == block) {
-            unsigned frames = movie.audio_interleave / 2;
+            unsigned frames = movie.audio_interleave / sizeof(int16_t);
             for (unsigned i = 0; i < frames; i++) {
                 for (unsigned channel = 0; channel < movie.audio_channels; channel++) {
-                    const unsigned char *p = movie.audio_block + channel * movie.audio_interleave + i * 2;
-                    movie.pcm[i * movie.audio_channels + channel] = (int16_t)((unsigned)p[0] | (unsigned)p[1] << 8);
+                    const unsigned char *sample = movie.audio_block + channel * movie.audio_interleave + i * sizeof(int16_t);
+                    memcpy(&movie.pcm[i * movie.audio_channels + channel], sample, sizeof(int16_t));
                 }
             }
             audio_movie_pcm(movie.pcm, frames, movie.audio_rate, movie.audio_channels);
@@ -136,18 +174,10 @@ static void movie_audio(const unsigned char *data, size_t size) {
 static int movie_packet(void) {
     while (movie.offset < movie.file.size) {
         size_t left = movie.file.size - movie.offset;
-        size_t size = left < 14 ? left : 14;
+        size_t size = left < sizeof(struct mpeg_pack_header) ? left : sizeof(struct mpeg_pack_header);
         if (!port_cdvd_read_file(&movie.file, movie.offset, movie.input, size)) return -1;
-        if (size < 4) return -1;
-        size_t packet_size;
-        if (movie.input[3] == 0xb9) packet_size = 4;
-        else if (movie.input[3] == 0xba) {
-            if (size < 14) return -1;
-            packet_size = 14 + (movie.input[13] & 7);
-        } else {
-            if (size < 6) return -1;
-            packet_size = 6 + ((unsigned)movie.input[4] << 8 | movie.input[5]);
-        }
+        size_t packet_size = pss_packet_size(movie.input, size);
+        if (!packet_size) return -1;
         if (packet_size > left || packet_size > sizeof(movie.input) - AV_INPUT_BUFFER_PADDING_SIZE) return -1;
         if (packet_size > size && !port_cdvd_read_file(&movie.file, movie.offset + size, movie.input + size, packet_size - size)) return -1;
         size = packet_size;
@@ -155,9 +185,9 @@ static int movie_packet(void) {
         int used = port_pss_packet(movie.input, size, &packet);
         if (used <= 0) return -1;
         movie.offset += (unsigned)used;
-        if (packet.stream == 0xb9) return 0;
-        if (packet.stream == 0xbd) movie_audio(packet.data, packet.size);
-        if (packet.stream == 0xe0 && packet.size) {
+        if (packet.stream == MPEG_STREAM_END) return 0;
+        if (packet.stream == MPEG_STREAM_PRIVATE_1) movie_audio(packet.data, packet.size);
+        if (packet.stream == MPEG_STREAM_VIDEO && packet.size) {
             movie.video = packet.data;
             movie.video_size = packet.size;
             movie.video_pts = packet.pts;
@@ -176,8 +206,8 @@ static unsigned movie_byte(int value) {
 static int movie_picture(void) {
     int width = movie.frame->width;
     int height = movie.frame->height;
-    if (width < 1 || height < 1 || width > 2048 || height > 2048 || movie.frame->format != AV_PIX_FMT_YUV420P) return -1;
-    uint32_t *pixels = realloc(movie.pixels, (size_t)width * height * 4);
+    if (width < 1 || height < 1 || width > MOVIE_SIZE_LIMIT || height > MOVIE_SIZE_LIMIT || movie.frame->format != AV_PIX_FMT_YUV420P) return -1;
+    uint32_t *pixels = realloc(movie.pixels, (size_t)width * height * sizeof *pixels);
     if (!pixels) return -1;
     movie.pixels = pixels;
     for (int y = 0; y < height; y++) {
@@ -188,7 +218,7 @@ static int movie_picture(void) {
             unsigned red = movie_byte((298 * luma + 409 * cr + 128) >> 8);
             unsigned green = movie_byte((298 * luma - 100 * cb - 208 * cr + 128) >> 8);
             unsigned blue = movie_byte((298 * luma + 516 * cb + 128) >> 8);
-            pixels[y * width + x] = red | green << 8 | blue << 16 | 0xff000000u;
+            pixels[y * width + x] = red | green << 8 | blue << 16 | opaque;
         }
     }
     if (movie.decoder->framerate.num > 0 && movie.decoder->framerate.den > 0)

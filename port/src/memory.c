@@ -1,23 +1,16 @@
 #ifdef __APPLE__
 #define _DARWIN_C_SOURCE
-#else
-#define _GNU_SOURCE
 #endif
+#include "port_arena.h"
 #include "port_stats.h"
-#include "port_window.h"
-#include <errno.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
 #include <unistd.h>
 #ifdef __APPLE__
 #include <crt_externs.h>
-#include <mach/mach.h>
 #include <mach-o/dyld.h>
-#include <mach-o/getsect.h>
-#include <mach-o/ldsyms.h>
 #include <spawn.h>
 #include <TargetConditionals.h>
 #endif
@@ -160,15 +153,16 @@ void port_release(void *pointer) {
     unlock_allocations();
 }
 
-size_t port_arena_spans(const unsigned char *saved, size_t size, uint64_t saved_at, uint64_t *spans, size_t limit) {
+size_t port_arena_spans(const unsigned char *saved, size_t size, uint64_t saved_at, PortArenaSpan *spans, size_t limit) {
     size_t count = 0;
     uint64_t at = saved_at;
     if (size > ARENA_SIZE) size = ARENA_SIZE;
-    while (at - saved_at + sizeof(struct Allocation) <= size && count + 2 <= limit) {
+    while (at - saved_at + sizeof(struct Allocation) <= size && count < limit) {
         struct Allocation block;
         memcpy(&block, saved + (at - saved_at), sizeof block);
-        spans[count++] = at;
-        spans[count++] = block.available ? at : at + sizeof block + block.size;
+        spans[count].start = at;
+        spans[count].live_end = block.available ? at : at + sizeof block + block.size;
+        count++;
         if (!block.next) break;
         at = (uint64_t)(uintptr_t)block.next;
     }
@@ -187,15 +181,7 @@ void port_delete(void *pointer) {
     port_release(pointer);
 }
 
-static void memory_error(const char *operation) {
-    perror(operation);
-    _exit(1);
-}
-
 #ifdef __APPLE__
-__attribute__((used, section("__PS2,__window,zerofill"))) static unsigned char window[0x30000000];
-__attribute__((used, section("__PS2SPR,__scratchpad,zerofill"))) static unsigned char scratchpad[16384];
-
 static void disable_address_randomisation(void) {
     if (!TARGET_OS_OSX || !_dyld_get_image_vmaddr_slide(0) || getenv("DC2TK_ASLR")) return;
     char path[4096];
@@ -205,79 +191,13 @@ static void disable_address_randomisation(void) {
     pid_t pid;
     if (_NSGetExecutablePath(path, &length) || posix_spawnattr_init(&attributes) ||
         posix_spawnattr_setflags(&attributes, flags) ||
-        posix_spawn(&pid, path, NULL, &attributes, *_NSGetArgv(), *_NSGetEnviron()))
-        memory_error("port: restarting without address randomisation");
-}
-
-static void mirror(uintptr_t start, size_t size, uintptr_t offset, const char *operation) {
-    vm_address_t target = start + offset;
-    vm_prot_t current, maximum;
-    if (vm_remap(mach_task_self(), &target, size, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, mach_task_self(), start, FALSE,
-                      &current, &maximum, VM_INHERIT_NONE) != KERN_SUCCESS || target != start + offset) {
-        fprintf(stderr, "%s failed\n", operation);
+        posix_spawn(&pid, path, NULL, &attributes, *_NSGetArgv(), *_NSGetEnviron())) {
+        perror("port: restarting without address randomisation");
         _exit(1);
     }
-}
-
-static void mirror_segment(const char *name) {
-    unsigned long size;
-    uintptr_t start = (uintptr_t)getsegmentdata(&_mh_execute_header, name, &size);
-    if (!start) return;
-    if (start < PORT_WINDOW || start + size - PORT_WINDOW >= 0x10000000) {
-        fprintf(stderr, "port: %s lies outside the PS2 address range\n", name);
-        _exit(1);
-    }
-    mirror(start, size, 0x20000000, "port: uncached RAM mapping");
-    mirror(start, size, 0x30000000, "port: DMA RAM mapping");
 }
 
 __attribute__((constructor(101))) static void port_memory_init(void) {
     disable_address_randomisation();
-    if ((uintptr_t)window != PORT_WINDOW + 0x10000000 || (uintptr_t)scratchpad != PORT_WINDOW + 0x70000000) {
-        fputs("port: the PS2 window is not where the build placed it\n", stderr);
-        _exit(1);
-    }
-    mirror_segment("__DATA");
-    mirror_segment("__PS2RAM");
-    mirror_segment("__PS2PORT");
-}
-#else
-extern char __data_start[];
-extern char _end[];
-
-__attribute__((constructor(101))) static void port_memory_init(void) {
-    long page = sysconf(_SC_PAGESIZE);
-    if (page <= 0) memory_error("port: page size");
-    uintptr_t start = (uintptr_t)__data_start & ~((uintptr_t)page - 1);
-    uintptr_t end = ((uintptr_t)_end + page - 1) & ~((uintptr_t)page - 1);
-    size_t size = end - start;
-    if (end >= 0x10000000) {
-        fputs("port: linked data lies outside the PS2 address range\n", stderr);
-        _exit(1);
-    }
-    int fd = memfd_create("darkchronicle-ram", MFD_CLOEXEC);
-    if (fd < 0 || ftruncate(fd, size) < 0) memory_error("port: RAM backing");
-    void *copy = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    if (copy == MAP_FAILED) memory_error("port: RAM copy");
-    memcpy(copy, (void *)start, size);
-    if (mmap((void *)start, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, 0) == MAP_FAILED)
-        memory_error("port: RAM mapping");
-    if (mmap((void *)(start + 0x20000000), size, PROT_READ | PROT_WRITE,
-             MAP_SHARED | MAP_FIXED_NOREPLACE, fd, 0) == MAP_FAILED)
-        memory_error("port: uncached RAM mapping");
-    if (mmap((void *)(start + 0x30000000), size, PROT_READ | PROT_WRITE,
-             MAP_SHARED | MAP_FIXED_NOREPLACE, fd, 0) == MAP_FAILED)
-        memory_error("port: DMA RAM mapping");
-    munmap(copy, size);
-    close(fd);
-    if (mmap((void *)0x70000000, 16384, PROT_READ | PROT_WRITE,
-             MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0) == MAP_FAILED)
-        memory_error("port: scratchpad mapping");
-    if (mmap((void *)0x10000000, 65536, PROT_READ | PROT_WRITE,
-             MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0) == MAP_FAILED)
-        memory_error("port: EE register mapping");
-    if (mmap((void *)0x12000000, 8192, PROT_READ | PROT_WRITE,
-             MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0) == MAP_FAILED)
-        memory_error("port: GS register mapping");
 }
 #endif

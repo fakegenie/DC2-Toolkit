@@ -4,7 +4,6 @@
 #include "mg_math.hpp"
 #include "mglib.hpp"
 #include <cmath>
-#include <array>
 #include <cstring>
 #include <vector>
 
@@ -52,7 +51,7 @@ PORT_OVERRIDE int mgCShadowMDT::CreateRenderInfoPacket(u_int *packet, float (*ma
     env.test.bits.date = 0;
     gs_base_state(&shadow_setup.state);
     shadow_setup.state.blend = 1;
-    shadow_setup.state.test = env.test.value;
+    shadow_setup.state.tests = gs_tests(env.test);
     shadow_setup.state.depth_write = 0;
     return 0;
 }
@@ -66,9 +65,9 @@ static int outside(const float c[4]) {
     return c[0] > w || c[0] < -w || c[1] > w || c[1] < -w || c[2] > w || c[2] < -w;
 }
 
-static void project(RenderVertex *vertex, const ShadowSetup &setup, const float *clip, const float screen[4],
+static void project(RenderVertex *vertex, const ShadowSetup &setup, const float *clip, const RenderScreenMapping &screen,
                     float depth) {
-    render_shadow_place(vertex, clip, &setup.screen[0][0], screen, depth);
+    render_shadow_place(vertex, clip, &setup.screen[0][0], &screen, depth);
     vertex->u = vertex->v = 0.0f;
     vertex->r = vertex->g = vertex->b = 1;
     vertex->a = 64;
@@ -81,7 +80,7 @@ static int is_back(const RenderVertex v[4]) {
 
 struct ShadowFaces {
     std::vector<RenderVertex> vertices;
-    std::vector<std::array<float, 4>> points;
+    std::vector<ShadowPoint> points;
 };
 
 static ShadowFaces shadow_faces[2];
@@ -90,20 +89,21 @@ static void draw_faces(const ShadowSetup &setup, int back, int record) {
     ShadowFaces &faces = shadow_faces[back];
     if (faces.vertices.empty()) return;
     RenderState state = setup.state;
-    state.alpha = back ? 0x8000000062ull : 0x8000000068ull;
+    state.blending = back ? RenderBlending{RENDER_BLEND_ZERO, RENDER_BLEND_SOURCE, RENDER_BLEND_FIX,
+                                           RENDER_BLEND_DESTINATION, GS_ALPHA_ONE}
+                          : RenderBlending{RENDER_BLEND_SOURCE, RENDER_BLEND_ZERO, RENDER_BLEND_FIX,
+                                           RENDER_BLEND_DESTINATION, GS_ALPHA_ONE};
     render_source = RENDER_SOURCE_SHADOW;
-    render_shadow(&state, faces.vertices.data(), (const float (*)[4])faces.points.data(), (int)faces.vertices.size(), record);
+    render_shadow(&state, faces.vertices.data(), faces.points.data(), (int)faces.vertices.size(), record);
 }
 
-static void keep_faces(const RenderVertex *vertices, const float (*points)[4], int quads, int back) {
+static void keep_faces(const RenderVertex *vertices, const ShadowPoint *points, int quads, int back) {
     ShadowFaces &faces = shadow_faces[back];
-    for (int i = 0; i < quads * 6; i++) {
-        faces.vertices.push_back(vertices[i]);
-        faces.points.push_back({points[i][0], points[i][1], points[i][2], points[i][3]});
-    }
+    faces.vertices.insert(faces.vertices.end(), vertices, vertices + quads * 6);
+    faces.points.insert(faces.points.end(), points, points + quads * 6);
 }
 
-static void add_quad(RenderVertex *out, float (*points)[4], const RenderVertex *const v[4], const RenderVertex *model,
+static void add_quad(RenderVertex *out, ShadowPoint *points, const RenderVertex *const v[4], const RenderVertex *model,
                      const RenderVertex *cast, const float *const source[3], const int index[3], int prism, int back,
                      int hidden) {
     const int order[6] = {0, 1, 2, 0, 2, 3};
@@ -113,14 +113,11 @@ static void add_quad(RenderVertex *out, float (*points)[4], const RenderVertex *
         int corner_index = (int)(cast_side ? corner - cast : corner - model);
         const float *position = source[corner_index];
         out[i] = hidden ? *v[0] : *corner;
-        points[i][0] = position[0];
-        points[i][1] = position[1];
-        points[i][2] = position[2];
-        points[i][3] = (float)(cast_side + 2 * back + 4 * index[corner_index] + SHADOW_PRISM * prism);
+        points[i] = {{position[0], position[1], position[2]}, cast_side, back, index[corner_index], prism};
     }
 }
 
-static void draw_triangle(const ShadowSetup &setup, const float screen[4], float depth, int record, const float *const v[3],
+static void draw_triangle(const ShadowSetup &setup, const RenderScreenMapping &screen, float depth, int record, const float *const v[3],
                           const int index[3], int prism) {
     float c[3][4], t[3][4];
     for (int j = 0; j < 3; j++) {
@@ -154,7 +151,7 @@ static void draw_triangle(const ShadowSetup &setup, const float screen[4], float
         memcpy(quads, a, sizeof quads);
     }
     RenderVertex fronts[5 * 6], backs[5 * 6];
-    float front_points[5 * 6][4], back_points[5 * 6][4];
+    ShadowPoint front_points[5 * 6], back_points[5 * 6];
     int front_count = 0, back_count = 0, facing = 0;
     for (int g = 0; g < 5; g++) {
         RenderVertex corners[4] = {*quads[g][0], *quads[g][1], *quads[g][2], *quads[g][3]};
@@ -176,13 +173,13 @@ static void draw_triangle(const ShadowSetup &setup, const float screen[4], float
 
 void shadow_draw(const mgCVisualMDT *visual, const ShadowSetup &setup, const mgFACE_GROUP *group) {
     if (render_toggles.no_shadows) return;
-    float screen[4];
+    RenderScreenMapping screen;
     float depth;
-    gs_screen_mapping(screen, &depth);
+    gs_screen_mapping(&screen, &depth);
     int prisms = 0;
     for (const mgCFace *face = group->face; face != NULL; face = face->next) prisms += face->vertex_num;
     int record = render_shadow_setup(setup.key, &setup.world[0][0], &setup.camera[0][0], &setup.caster[0][0],
-                                     &setup.screen[0][0], screen, depth, (const float (*)[4])visual->vertex,
+                                     &setup.screen[0][0], &screen, depth, (const float (*)[4])visual->vertex,
                                      visual->vertex_num, prisms);
     int prism = 0;
     shadow_faces[0].vertices.clear();

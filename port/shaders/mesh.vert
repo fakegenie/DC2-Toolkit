@@ -7,6 +7,34 @@ layout(location = 3) in vec4 color;
 layout(location = 4) in vec4 bone;
 layout(location = 5) in vec4 weight;
 
+struct FogCurve {
+    float offset;
+    float near_value;
+    float far_value;
+    float scale;
+};
+
+struct ScreenMapping {
+    float scale_x;
+    float offset_x;
+    float scale_y;
+    float offset_y;
+};
+
+struct TexelLimits {
+    float low_u;
+    float low_v;
+    float high_u;
+    float high_v;
+};
+
+struct MeshFlags {
+    uint program;
+    uint face_type;
+    uint specular_passes;
+    uint bone_set;
+};
+
 struct Model {
     mat4 model_screen;
     mat4 model_world;
@@ -20,11 +48,14 @@ struct Model {
     vec4 specular;
     vec4 point_light[4];
     vec4 point_color[4];
-    vec4 fog;
-    vec4 screen;
-    vec4 depth;
-    vec4 limits;
-    uvec4 flags;
+    FogCurve fog;
+    ScreenMapping screen;
+    float depth_scale;
+    float texture_scale_u;
+    float texture_scale_v;
+    float unused;
+    TexelLimits limits;
+    MeshFlags flags;
 };
 
 layout(std430, set = 0, binding = 0) readonly buffer Models {
@@ -49,7 +80,9 @@ layout(std430, set = 0, binding = 1) readonly buffer Bones {
 #define point_color models[gl_InstanceIndex].point_color
 #define fog models[gl_InstanceIndex].fog
 #define screen models[gl_InstanceIndex].screen
-#define depth models[gl_InstanceIndex].depth
+#define depth_scale models[gl_InstanceIndex].depth_scale
+#define texture_scale_u models[gl_InstanceIndex].texture_scale_u
+#define texture_scale_v models[gl_InstanceIndex].texture_scale_v
 #define limits models[gl_InstanceIndex].limits
 #define flags models[gl_InstanceIndex].flags
 
@@ -85,7 +118,7 @@ void skin(inout vec3 p, inout vec3 n) {
     vec3 blended_normal = vec3(0.0);
     for (int i = 0; i < 4; i++) {
         float w = weight[i];
-        int b = int(flags.w) * 96 + int(min(bone[i] * 255.0 + 0.5, 31.0)) * 3;
+        int b = int(flags.bone_set) * 96 + int(min(bone[i] * 255.0 + 0.5, 31.0)) * 3;
         vec4 r0 = bones[b];
         vec4 r1 = bones[b + 1];
         vec4 r2 = bones[b + 2];
@@ -102,8 +135,8 @@ void skin(inout vec3 p, inout vec3 n) {
 }
 
 void main() {
-    uint f = flags.x;
-    uint t = flags.y;
+    uint f = flags.program;
+    uint t = flags.face_type;
     vec3 p = position;
     vec3 n = normal;
     vec2 st = uv;
@@ -144,7 +177,7 @@ void main() {
             vec3 view = eye.xyz - p;
             float inverse_view = vu_rsqrt(dot(view, view));
             float vn = dot(view, n);
-            uint passes = flags.z == 0u ? 32u : min(flags.z, 32u);
+            uint passes = flags.specular_passes == 0u ? 32u : min(flags.specular_passes, 32u);
             for (int c = 0; c < 4; c++) {
                 float on = min(1.0, 1.0e4 * shade[c]);
                 float r = max(0.0, 2.0 * vn * dot(lights[c], n) - dot(lights[c], view)) * inverse_view;
@@ -167,11 +200,11 @@ void main() {
     }
 
     vec4 clip = model_screen * vec4(p, 1.0);
-    gl_Position = vec4(clip.x * screen.x + clip.w * screen.y, clip.y * screen.z + clip.w * screen.w,
-                       clip.z * depth.x, clip.w);
+    gl_Position = vec4(clip.x * screen.scale_x + clip.w * screen.offset_x, clip.y * screen.scale_y + clip.w * screen.offset_y,
+                       clip.z * depth_scale, clip.w);
     frag_color = floor(clamp(lit, 0.0, 255.0)) / 255.0;
-    frag_uv = st * depth.yz;
+    frag_uv = st * vec2(texture_scale_u, texture_scale_v);
     frag_fog = 0.0;
-    frag_limits = limits;
-    frag_fog_curve = fog;
+    frag_limits = vec4(limits.low_u, limits.low_v, limits.high_u, limits.high_v);
+    frag_fog_curve = vec4(fog.offset, fog.near_value, fog.far_value, fog.scale);
 }

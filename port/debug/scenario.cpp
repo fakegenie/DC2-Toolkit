@@ -38,6 +38,7 @@ typedef struct {
     const char *label;
 } Place;
 
+enum { MONSTER_PROGRESS_BADGE = 0, MONSTER_PROGRESS_FIRST_LEVEL = 1, TOWNSPERSON_LIMIT = 26, MONSTER_ID_LIMIT = 0x200 };
 enum { FLOOR_START_EVENT = 1010, RACE_MAP = 96, SPHEDA_DUNGEON = 2, SPHEDA_FLOOR = 1, SPHEDA_EVENT = 4000, MAP_LIMIT = 1024, ITEM_LIMIT = ITEM_NO_MAX, LIST_LIMIT = 64, PARTS_LIMIT = 0x100, CHAPTER_LIMIT = 9 };
 
 static const char *loop_names[LOOP_MODE_NUM] = {"menu",       "town",       "dungeon",    "title",      "chara viewer",
@@ -390,7 +391,7 @@ static int menu_params[16];
 static int monster_form(int id, int *row, int *level) {
     for (int r = 0; r < MONSTER_PROGRESS_NUM; ++r)
         for (int l = 0; l < MONSTER_PROGRESS_LEVEL_NUM; ++l)
-            if (monster_progress_tbl[r][1 + l] == id) {
+            if (monster_progress_tbl[r][MONSTER_PROGRESS_FIRST_LEVEL + l] == id) {
                 if (row) *row = r;
                 if (level) *level = l;
                 return 1;
@@ -410,7 +411,7 @@ static int command_character(const DebugArgs *args, DebugReply *reply) {
         int monster = (int)debug_arg_int(args, "monster", user->monster_id);
         int row = 0, level = 0;
         if (!monster_form(monster, &row, &level)) return debug_fail(reply, "monster=%d is no monster form", monster);
-        int no = monster_progress_tbl[row][0] + 1;
+        int no = monster_progress_tbl[row][MONSTER_PROGRESS_BADGE] + 1;
         user->monster_box.EnableChange(no);
         MOS_CHANGE_PARAM *badge = user->monster_box.GetMonsterBajjiData(no);
         badge->progress = (s16)row;
@@ -424,7 +425,7 @@ static int command_character(const DebugArgs *args, DebugReply *reply) {
         memset(menu_params, 0, sizeof menu_params);
         menu_params[0] = USER_CHARA_MONSTER;
         menu_wanted = MENU_OPEN_MAIN_CHARA_BG_DUNGEON;
-        debug_hold(1u << 4, 3);
+        debug_hold(DEBUG_BUTTON_TRIANGLE, 3);
         debug_print(reply, "{\"ok\": 1, \"active\": \"monster\", \"monster\": %d}", monster);
         return 0;
     }
@@ -447,7 +448,7 @@ static int fill_aquarium(CUserDataManager *user) {
 static void print_tank(DebugReply *reply) {
     CGameDataUsed *fish = GetAquariumData()->GetAquariumFishTop(AQUARIUM_TANK_FIRST);
     debug_print(reply, "\"tank\": [");
-    for (int slot = 0; slot < 6; ++slot) {
+    for (int slot = 0; slot < (int)(sizeof CFishAquarium::fish_tank / sizeof CFishAquarium::fish_tank[0]); ++slot) {
         if (slot) debug_print(reply, ", ");
         if (fish[slot].item_no <= 0) {
             debug_print(reply, "null");
@@ -677,7 +678,7 @@ static int command_party(const DebugArgs *args, DebugReply *reply) {
         user->GetItemNotOver(ITEM_ID_BADGE_BOX, 1);
     } else if (!strcmp(who, "townsperson")) {
         long id = debug_arg_int(args, "id", 0);
-        if (id <= 0 || id > 0x1A) return debug_fail(reply, "id=1..26");
+        if (id <= 0 || id > TOWNSPERSON_LIMIT) return debug_fail(reply, "id=1..%d", TOWNSPERSON_LIMIT);
         user->JoinPartyChara((int)id, PARTY_CHARA_STATUS_JOIN, 1);
         user->SetPartyCharaStatus((int)id, PARTY_CHARA_STATUS_IN_PARTY);
     } else return debug_fail(reply, "who=monica|ridepod|monster|townsperson [id=1..26]");
@@ -697,14 +698,14 @@ static int command_unlock(const DebugArgs *args, DebugReply *reply) {
     user->GetItemNotOver(ITEM_ID_BADGE_BOX, 1);
     int medals = 0;
     for (int row = 0; row < MONSTER_PROGRESS_NUM; ++row) {
-        int no = monster_progress_tbl[row][0] + 1;
+        int no = monster_progress_tbl[row][MONSTER_PROGRESS_BADGE] + 1;
         if (user->monster_box.IsChange(no)) continue;
         user->monster_box.EnableChange(no);
         medals++;
     }
     debug_print(reply, "{\"ok\": 1, \"party_member\": %d, \"medals\": %d, \"monsters\": [", user->party_member, medals);
     int shown = 0;
-    for (int id = 0; id < 0x200; ++id)
+    for (int id = 0; id < MONSTER_ID_LIMIT; ++id)
         if (monster_form(id, NULL, NULL)) debug_print(reply, "%s%d", shown++ ? ", " : "", id);
     debug_print(reply, "]}");
     return 0;
@@ -847,7 +848,7 @@ static int command_menu(const DebugArgs *args, DebugReply *reply) {
     int count = 0;
     for (char *value = strtok(list, ","); value && count < 16; value = strtok(NULL, ",")) menu_params[count++] = atoi(value);
     menu_wanted = open_type;
-    debug_hold(1u << 4, 3);
+    debug_hold(DEBUG_BUTTON_TRIANGLE, 3);
     debug_print(reply, "{\"ok\": 1, \"open\": \"%s\", \"open_type\": %d, \"params\": %d}", name, open_type, count);
     return 0;
 }

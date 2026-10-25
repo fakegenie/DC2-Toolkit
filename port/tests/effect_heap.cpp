@@ -22,7 +22,6 @@ _EFF_SCRIPT *allocate_effect(mgCMemory *memory) {
 
 int main() {
     static_assert(sizeof(mgMEMORY_BLOCK) == 16);
-    assert(reinterpret_cast<uintptr_t>(storage + 2048) - PORT_WINDOW <= UINT32_MAX);
     std::memcpy(program.magic, "SB2", 3);
     mgCMemory memory;
     memory.SetHeapMem(storage, 2048);

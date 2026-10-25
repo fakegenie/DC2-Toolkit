@@ -2,6 +2,7 @@
 #include "port_kernel.h"
 #include "port_mod.h"
 #include "port_state.h"
+#include "sce/eekernel.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,27 +10,12 @@
 
 enum { THREAD_LIMIT = 32, SEMA_LIMIT = 64, HANDLER_LIMIT = 64, STACK_SIZE = 1024 * 1024 };
 enum { UNUSED, DORMANT, READY, RUNNING, WAITING };
-
-struct ThreadParam {
-    int status;
-    void (*entry)(void *);
-    void *stack;
-    int stackSize;
-    void *gpReg;
-    int initPriority;
-    int currentPriority;
-    unsigned int attr;
-    unsigned int option;
-};
-
-struct SemaParam {
-    int currentCount;
-    int maxCount;
-    int initCount;
-    int numWaitThreads;
-    unsigned int attr;
-    unsigned int option;
-};
+enum { NO_THREAD = 0, MAIN_THREAD = 1, FIRST_THREAD = 2 };
+enum { NO_SEMAPHORE = 0, FIRST_SEMAPHORE = 1 };
+enum { NO_HANDLER = 0, FIRST_HANDLER = 1, HANDLER_APPEND = -1 };
+enum { PRIORITY_HIGHEST = 1, PRIORITY_LOWEST = 127 };
+enum { INTC_HANDLERS, DMAC_HANDLERS, HANDLER_KINDS };
+enum { INTERRUPT_CAUSES = 16, KERNEL_ERROR = -1, STACK_ALIGNMENT = 16 };
 
 static struct {
     PortFiber context;
@@ -40,10 +26,10 @@ static struct {
     int priority;
     int semaphore;
 } threads[THREAD_LIMIT];
-static unsigned char stacks[THREAD_LIMIT][STACK_SIZE] __attribute__((aligned(16)));
+static unsigned char stacks[THREAD_LIMIT][STACK_SIZE] __attribute__((aligned(STACK_ALIGNMENT)));
 static struct { int used; int count; int maximum; } semaphores[SEMA_LIMIT];
 static struct { int (*function)(int); int cause; int dma; int next; } handlers[HANDLER_LIMIT];
-static int handler_heads[2][16];
+static int handler_heads[HANDLER_KINDS][INTERRUPT_CAUSES];
 static unsigned int intc_enabled;
 static unsigned int dmac_enabled;
 static uint64_t queue_order;
@@ -64,8 +50,8 @@ static void ready(int id) {
 }
 
 static int highest(void) {
-    int selected = 0;
-    for (int i = 1; i < THREAD_LIMIT; ++i) {
+    int selected = NO_THREAD;
+    for (int i = MAIN_THREAD; i < THREAD_LIMIT; ++i) {
         if (threads[i].state != READY) continue;
         if (!selected || threads[i].priority < threads[selected].priority ||
             (threads[i].priority == threads[selected].priority && threads[i].order < threads[selected].order))
@@ -114,19 +100,19 @@ static void thread_entry(void) {
 }
 
 int CreateThread(struct ThreadParam *param) {
-    if (!param || !param->entry || param->initPriority < 1 || param->initPriority > 127) return -1;
-    for (int i = 2; i < THREAD_LIMIT; ++i) {
+    if (!param || !param->entry || param->initPriority < PRIORITY_HIGHEST || param->initPriority > PRIORITY_LOWEST) return KERNEL_ERROR;
+    for (int i = FIRST_THREAD; i < THREAD_LIMIT; ++i) {
         if (threads[i].state != UNUSED) continue;
         threads[i].entry = param->entry;
         threads[i].priority = param->initPriority;
         threads[i].state = DORMANT;
         return i;
     }
-    return -1;
+    return KERNEL_ERROR;
 }
 
 int StartThread(int id, void *argument) {
-    if (id < 2 || id >= THREAD_LIMIT || threads[id].state != DORMANT) return -1;
+    if (id < FIRST_THREAD || id >= THREAD_LIMIT || threads[id].state != DORMANT) return KERNEL_ERROR;
     threads[id].argument = argument;
     port_fiber_make(&threads[id].context, stacks[id], STACK_SIZE, thread_entry);
     ready(id);
@@ -140,8 +126,8 @@ int RotateThreadReadyQueue(int priority) {
         ready(running);
         schedule();
     } else {
-        int first = 0;
-        for (int i = 1; i < THREAD_LIMIT; ++i)
+        int first = NO_THREAD;
+        for (int i = MAIN_THREAD; i < THREAD_LIMIT; ++i)
             if (threads[i].state == READY && threads[i].priority == priority &&
                 (!first || threads[i].order < threads[first].order)) first = i;
         if (first) ready(first);
@@ -154,47 +140,47 @@ int GetThreadId(void) {
 }
 
 int ChangeThreadPriority(int id, int priority) {
-    if (id < 1 || id >= THREAD_LIMIT || threads[id].state == UNUSED || priority < 1 || priority > 127) return -1;
+    if (id < MAIN_THREAD || id >= THREAD_LIMIT || threads[id].state == UNUSED || priority < PRIORITY_HIGHEST || priority > PRIORITY_LOWEST) return KERNEL_ERROR;
     threads[id].priority = priority;
     preempt();
     return 0;
 }
 
 int TerminateThread(int id) {
-    if (id < 2 || id >= THREAD_LIMIT || id == running || threads[id].state == UNUSED) return -1;
+    if (id < FIRST_THREAD || id >= THREAD_LIMIT || id == running || threads[id].state == UNUSED) return KERNEL_ERROR;
     threads[id].state = DORMANT;
-    threads[id].semaphore = 0;
+    threads[id].semaphore = NO_SEMAPHORE;
     return 0;
 }
 
 int DeleteThread(int id) {
-    if (id < 2 || id >= THREAD_LIMIT || threads[id].state != DORMANT) return -1;
+    if (id < FIRST_THREAD || id >= THREAD_LIMIT || threads[id].state != DORMANT) return KERNEL_ERROR;
     memset(&threads[id], 0, sizeof threads[id]);
     return 0;
 }
 
 int CreateSema(struct SemaParam *param) {
-    if (!param || param->maxCount < 1 || param->initCount < 0 || param->initCount > param->maxCount) return -1;
-    for (int i = 1; i < SEMA_LIMIT; ++i) {
+    if (!param || param->maxCount < 1 || param->initCount < 0 || param->initCount > param->maxCount) return KERNEL_ERROR;
+    for (int i = FIRST_SEMAPHORE; i < SEMA_LIMIT; ++i) {
         if (semaphores[i].used) continue;
         semaphores[i].used = 1;
         semaphores[i].count = param->initCount;
         semaphores[i].maximum = param->maxCount;
         return i;
     }
-    return -1;
+    return KERNEL_ERROR;
 }
 
 int DeleteSema(int id) {
-    if (id < 1 || id >= SEMA_LIMIT || !semaphores[id].used) return -1;
-    for (int i = 1; i < THREAD_LIMIT; ++i)
-        if (threads[i].state == WAITING && threads[i].semaphore == id) return -1;
+    if (id < FIRST_SEMAPHORE || id >= SEMA_LIMIT || !semaphores[id].used) return KERNEL_ERROR;
+    for (int i = MAIN_THREAD; i < THREAD_LIMIT; ++i)
+        if (threads[i].state == WAITING && threads[i].semaphore == id) return KERNEL_ERROR;
     semaphores[id].used = 0;
     return 0;
 }
 
 int WaitSema(int id) {
-    if (id < 1 || id >= SEMA_LIMIT || !semaphores[id].used || !running || interrupt_active) return -1;
+    if (id < FIRST_SEMAPHORE || id >= SEMA_LIMIT || !semaphores[id].used || !running || interrupt_active) return KERNEL_ERROR;
     if (semaphores[id].count) {
         --semaphores[id].count;
         return id;
@@ -207,48 +193,48 @@ int WaitSema(int id) {
 }
 
 int SignalSema(int id) {
-    if (id < 1 || id >= SEMA_LIMIT || !semaphores[id].used) return -1;
-    int waiter = 0;
-    for (int i = 1; i < THREAD_LIMIT; ++i)
+    if (id < FIRST_SEMAPHORE || id >= SEMA_LIMIT || !semaphores[id].used) return KERNEL_ERROR;
+    int waiter = NO_THREAD;
+    for (int i = MAIN_THREAD; i < THREAD_LIMIT; ++i)
         if (threads[i].state == WAITING && threads[i].semaphore == id &&
             (!waiter || threads[i].order < threads[waiter].order)) waiter = i;
     if (waiter) {
-        threads[waiter].semaphore = 0;
+        threads[waiter].semaphore = NO_SEMAPHORE;
         ready(waiter);
         preempt();
     } else {
-        if (semaphores[id].count == semaphores[id].maximum) return -1;
+        if (semaphores[id].count == semaphores[id].maximum) return KERNEL_ERROR;
         ++semaphores[id].count;
     }
     return id;
 }
 
 static int add_handler(int cause, int (*function)(int), int next, int dma) {
-    if (cause < 0 || cause > 15 || !function) return -1;
-    if (next > 0 && (next >= HANDLER_LIMIT || !handlers[next].function ||
-                     handlers[next].cause != cause || handlers[next].dma != dma)) return -1;
-    if (next < -1) return -1;
-    for (int i = 1; i < HANDLER_LIMIT; ++i) {
+    if (cause < 0 || cause >= INTERRUPT_CAUSES || !function) return KERNEL_ERROR;
+    if (next > NO_HANDLER && (next >= HANDLER_LIMIT || !handlers[next].function ||
+                              handlers[next].cause != cause || handlers[next].dma != dma)) return KERNEL_ERROR;
+    if (next < HANDLER_APPEND) return KERNEL_ERROR;
+    for (int i = FIRST_HANDLER; i < HANDLER_LIMIT; ++i) {
         if (handlers[i].function) continue;
         handlers[i].function = function;
         handlers[i].cause = cause;
         handlers[i].dma = dma;
         int *link = &handler_heads[dma][cause];
-        if (next == -1) {
+        if (next == HANDLER_APPEND) {
             while (*link) link = &handlers[*link].next;
-        } else if (next > 0) {
+        } else if (next > NO_HANDLER) {
             link = &handlers[next].next;
         }
         handlers[i].next = *link;
         *link = i;
         return i;
     }
-    return -1;
+    return KERNEL_ERROR;
 }
 
 static int remove_handler(int cause, int id, int dma) {
-    if (id < 1 || id >= HANDLER_LIMIT || !handlers[id].function ||
-        handlers[id].cause != cause || handlers[id].dma != dma) return -1;
+    if (id < FIRST_HANDLER || id >= HANDLER_LIMIT || !handlers[id].function ||
+        handlers[id].cause != cause || handlers[id].dma != dma) return KERNEL_ERROR;
     int *link = &handler_heads[dma][cause];
     while (*link != id) link = &handlers[*link].next;
     *link = handlers[id].next;
@@ -257,37 +243,37 @@ static int remove_handler(int cause, int id, int dma) {
 }
 
 int AddIntcHandler(int cause, int (*function)(int), int next) {
-    return add_handler(cause, function, next, 0);
+    return add_handler(cause, function, next, INTC_HANDLERS);
 }
 
 int AddDmacHandler(int cause, int (*function)(int), int next) {
-    return add_handler(cause, function, next, 1);
+    return add_handler(cause, function, next, DMAC_HANDLERS);
 }
 
 int RemoveIntcHandler(int cause, int id) {
-    return remove_handler(cause, id, 0);
+    return remove_handler(cause, id, INTC_HANDLERS);
 }
 
 int RemoveDmacHandler(int cause, int id) {
-    return remove_handler(cause, id, 1);
+    return remove_handler(cause, id, DMAC_HANDLERS);
 }
 
 int EnableIntc(int cause) {
-    if (cause < 0 || cause > 15) return -1;
+    if (cause < 0 || cause >= INTERRUPT_CAUSES) return KERNEL_ERROR;
     int previous = !!(intc_enabled & (1u << cause));
     intc_enabled |= 1u << cause;
     return previous;
 }
 
 int EnableDmac(int cause) {
-    if (cause < 0 || cause > 15) return -1;
+    if (cause < 0 || cause >= INTERRUPT_CAUSES) return KERNEL_ERROR;
     int previous = !!(dmac_enabled & (1u << cause));
     dmac_enabled |= 1u << cause;
     return previous;
 }
 
 int DisableDmac(int cause) {
-    if (cause < 0 || cause > 15) return -1;
+    if (cause < 0 || cause >= INTERRUPT_CAUSES) return KERNEL_ERROR;
     int previous = !!(dmac_enabled & (1u << cause));
     dmac_enabled &= ~(1u << cause);
     return previous;
@@ -295,10 +281,10 @@ int DisableDmac(int cause) {
 
 void port_kernel_vblank(void) {
     ++interrupt_active;
-    for (int dma = 0; dma < 2; ++dma) {
-        unsigned int mask = dma ? dmac_enabled : intc_enabled;
-        for (int cause = 0; cause < 16; ++cause) {
-            if (!(mask & (1u << cause)) || (!dma && cause != 2 && cause != 3)) continue;
+    for (int dma = INTC_HANDLERS; dma < HANDLER_KINDS; ++dma) {
+        unsigned int mask = dma == DMAC_HANDLERS ? dmac_enabled : intc_enabled;
+        for (int cause = 0; cause < INTERRUPT_CAUSES; ++cause) {
+            if (!(mask & (1u << cause)) || (dma == INTC_HANDLERS && cause != INTC_VBLANK_S && cause != INTC_VBLANK_E)) continue;
             for (int i = handler_heads[dma][cause]; i;) {
                 int next = handlers[i].next;
                 int result = handlers[i].function(cause);
@@ -318,19 +304,19 @@ void Exit__2(int status) { exit(status); }
 
 static void main_entry(void) {
     game_result = game_entry();
-    threads[1].state = DORMANT;
-    running = 0;
-    port_fiber_switch(&threads[1].context, &host_context);
+    threads[MAIN_THREAD].state = DORMANT;
+    running = NO_THREAD;
+    port_fiber_switch(&threads[MAIN_THREAD].context, &host_context);
     abort();
 }
 
 int port_kernel_run(int (*entry)(void)) {
     game_entry = entry;
-    running = 1;
-    threads[1].priority = 1;
-    threads[1].state = RUNNING;
-    port_fiber_make(&threads[1].context, stacks[1], STACK_SIZE, main_entry);
-    port_fiber_switch(&host_context, &threads[1].context);
+    running = MAIN_THREAD;
+    threads[MAIN_THREAD].priority = PRIORITY_HIGHEST;
+    threads[MAIN_THREAD].state = RUNNING;
+    port_fiber_make(&threads[MAIN_THREAD].context, stacks[MAIN_THREAD], STACK_SIZE, main_entry);
+    port_fiber_switch(&host_context, &threads[MAIN_THREAD].context);
     while (host_requested) {
         host_requested = 0;
         port_state_host();

@@ -13,15 +13,21 @@
 
 enum { STRIP_COLUMNS = 27, FLAG_X = 0x80, FLAG_Y = 0x40, FLAG_W = 0x10, FLAG_ALL = 0xd0 };
 
+struct WaterSlope {
+    float row;
+    float column;
+    float weight;
+};
+
 struct WaterGrid {
     int rows;
     int columns;
-    std::vector<float> slope;
+    std::vector<WaterSlope> slope;
 };
 
 struct WaterView {
     float clip[4][4];
-    float fog[4];
+    RenderFogCurve fog;
     float far;
     float offset_x;
     float offset_y;
@@ -40,7 +46,7 @@ static std::unordered_map<const CWater *, WaterGrid> grids;
 
 static void set_weight(WaterGrid &grid, int row, int column, float value) {
     if (row < 0 || row >= grid.rows || column < 0 || column >= grid.columns) return;
-    grid.slope[(size_t)(row * grid.columns + column) * 4 + 3] = value;
+    grid.slope[(size_t)(row * grid.columns + column)].weight = value;
 }
 
 static void build_grid(const CWater *water) {
@@ -49,15 +55,15 @@ static void build_grid(const CWater *water) {
     int rows = water->rows, columns = water->columns, count = rows * columns;
     grid.rows = rows;
     grid.columns = columns;
-    grid.slope.assign((size_t)count * 4, 0.0f);
+    grid.slope.assign((size_t)count, WaterSlope{});
     for (int row = 0; row < rows; row++)
         for (int column = 0; column < columns; column++) {
             int cell = row * columns + column;
             int above = row == 0 ? cell : cell - columns;
-            float *slope = &grid.slope[(size_t)cell * 4];
-            slope[0] = water->height[above] - water->height[cell];
-            slope[1] = cell + 1 < count ? water->height[cell] - water->height[cell + 1] : 0.0f;
-            slope[3] = 1.0f;
+            WaterSlope &slope = grid.slope[(size_t)cell];
+            slope.row = water->height[above] - water->height[cell];
+            slope.column = cell + 1 < count ? water->height[cell] - water->height[cell + 1] : 0.0f;
+            slope.weight = 1.0f;
         }
     for (int row = 0; row < rows; row++) {
         set_weight(grid, row, columns - 1, 0.0f);
@@ -87,7 +93,7 @@ static float clamp(float value, float low, float high) {
     return value < low ? low : value > high ? high : value;
 }
 
-static int water_vertex(RenderVertex *vertex, const WaterView &view, const float *slope, float x, float z) {
+static int water_vertex(RenderVertex *vertex, const WaterView &view, const WaterSlope &slope, float x, float z) {
     float y = view.min_y * view.param0;
     float clip[4];
     for (int k = 0; k < 4; k++)
@@ -98,23 +104,23 @@ static int water_vertex(RenderVertex *vertex, const WaterView &view, const float
     if (xw > 1.0f && xw < 4095.0f) flags |= FLAG_X;
     if (yw > 1.0f && yw < 4095.0f) flags |= FLAG_Y;
     if (q > 1.0f / view.far && q < view.far) flags |= FLAG_W;
-    float screen[4];
+    RenderScreenMapping screen;
     float depth;
-    gs_screen_mapping(screen, &depth);
+    gs_screen_mapping(&screen, &depth);
     vertex->x = xw - view.offset_x;
     vertex->y = yw - view.offset_y;
     vertex->z = clamp((float)(long long)zw * depth, 0.0f, 1.0f);
-    float u = clamp(xw - view.offset_x + slope[0] * view.param1, 1.0f, view.width);
-    float v = clamp(yw - view.offset_y + slope[1] * view.param1, 1.0f, view.height);
+    float u = clamp(xw - view.offset_x + slope.row * view.param1, 1.0f, view.width);
+    float v = clamp(yw - view.offset_y + slope.column * view.param1, 1.0f, view.height);
     vertex->u = u / view.texture_width;
     vertex->v = v / view.texture_height;
     float fade = clamp(375.0f * q - 0.25f, 0.0f, 1.0f);
     vertex->r = colour_byte(view.colour[0]);
     vertex->g = colour_byte(view.colour[1]);
     vertex->b = colour_byte(view.colour[2]);
-    vertex->a = colour_byte(view.colour[3] * slope[3] * fade);
-    float fog = view.fog[0] + view.fog[3] * q;
-    fog = fmaxf(fminf(fog, view.fog[1]), view.fog[2]);
+    vertex->a = colour_byte(view.colour[3] * slope.weight * fade);
+    float fog = view.fog.offset + view.fog.scale * q;
+    fog = fmaxf(fminf(fog, view.fog.near_value), view.fog.far_value);
     vertex->fog = fog / 255.0f;
     return flags;
 }
@@ -128,7 +134,7 @@ static void water_strip(std::vector<RenderVertex> &out, const WaterView &view, c
     for (int i = 0; i < 2 * count; i++) {
         int line = row + (i & 1);
         int column = first + i / 2;
-        const float *slope = &grid.slope[(size_t)(line * grid.columns + column) * 4];
+        const WaterSlope &slope = grid.slope[(size_t)(line * grid.columns + column)];
         flags[i] = water_vertex(&strip[i], view, slope, water->min[0] + (float)line * row_step,
                                 water->min[2] + (float)column * column_step);
     }
@@ -150,7 +156,6 @@ PORT_OVERRIDE int CWater::CreateRenderInfoPacket(u_int *packet, float (*matrix)[
     (void)packet;
     (void)matrix;
     info->scissor = 0;
-    prmode = ((info->attr && info->attr->fog && info->fog_enable) << 5) | 0x158;
     return 0;
 }
 
@@ -172,32 +177,32 @@ PORT_OVERRIDE int CWater::Draw(u_int *tag, float (*matrix)[4], mgCDrawManager *d
         if (info->attr->fog == MG_FOG_BLACK) fog_colour = 0;
         if (info->attr->fog == MG_FOG_WHITE) fog_colour = 0xffffff;
     }
-    gs_write(SCE_GS_TEXA, 0x0000008000000080ull);
+    sceGsTexa texa = {};
+    texa.TA0 = GS_ALPHA_ONE;
+    texa.TA1 = GS_ALPHA_ONE;
+    gs_write(SCE_GS_TEXA, texa.value);
     gs_write(SCE_GS_FOGCOL, fog_colour);
 
     mgCDrawEnv env;
-    SetDrawEnvGifTag((u_long128 *)&env, info, draw_env != NULL ? draw_env : &info->draw_env[0]);
+    SetDrawEnvAttributes(&env, info, draw_env != NULL ? draw_env : &info->draw_env[0]);
     RenderState state;
     gs_base_state(&state);
     state.blend = 1;
-    state.alpha = env.alpha.value;
-    state.test = env.test.value;
+    state.blending = gs_blending(env.alpha);
+    state.tests = gs_tests(env.test);
     state.depth_write = !env.zbuf.bits.zmsk;
     state.fog = fogged;
     state.fog_color = fog_colour;
-    state.texa_register = 0x0000008000000080ull;
+    state.expansion = gs_expansion(texa);
     state.texa = 1;
-    state.linear = (int)((texture->tex1_bits >> 5) & 1);
-    state.texture = gs_sampled(gs_texture(texture->tex0_bits, mgScreenWidth, mgScreenHeight), mgScreenWidth,
+    state.linear = texture->tex1.MMAG;
+    state.texture = gs_sampled(gs_texture(texture->tex0.TBP0, mgScreenWidth, mgScreenHeight), mgScreenWidth,
                                mgScreenHeight, 0);
     if (!state.texture) return 0;
 
     WaterView view;
     mgMulMatrix(view.clip, info->world_screen, matrix);
-    view.fog[0] = info->fog.offset;
-    view.fog[1] = info->fog.near_value;
-    view.fog[2] = info->fog.far_value;
-    view.fog[3] = info->fog.scale;
+    view.fog = {info->fog.offset, info->fog.near_value, info->fog.far_value, info->fog.scale};
     view.far = info->guard_max[3];
     view.offset_x = (float)mgScreenOffx;
     view.offset_y = (float)mgScreenOffy;

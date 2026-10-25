@@ -12,6 +12,8 @@
 #include <unordered_map>
 #include <vector>
 
+int motion_bones(mgCVisualMotionMDT *visual, float (*matrix)[4], float (*bones)[4][4]);
+
 struct FaceMesh {
     std::vector<MeshVertex> vertices;
     u_short type;
@@ -20,6 +22,7 @@ struct FaceMesh {
 };
 
 enum { MESH_IDLE_FRAMES = 600, MESH_CACHE_LIMIT = 30000 };
+enum { PROGRAM_REAL = 1, PROGRAM_REF_SPHERE = 2, SPECULAR_PASSES = 3 };
 
 struct VisualDraw {
     mgCVisualMDT *visual;
@@ -27,7 +30,7 @@ struct VisualDraw {
     RenderState state;
     int cull;
     int skinned;
-    float bones[384];
+    RenderBone bones[RENDER_BONE_SLOTS];
     ShadowSetup shadow;
     const void *common;
 };
@@ -120,18 +123,18 @@ static void draw_group(const VisualDraw &draw, const mgFACE_GROUP *group) {
     MeshUniforms uniforms = draw.uniforms;
     memcpy(uniforms.diffuse, material->diffuse, sizeof uniforms.diffuse);
     memcpy(uniforms.specular, material->unk_10, sizeof uniforms.specular);
-    uniforms.flags[2] = 3;
-    gs_screen_mapping(uniforms.screen, &uniforms.depth[0]);
+    uniforms.flags.specular_passes = SPECULAR_PASSES;
+    gs_screen_mapping(&uniforms.screen, &uniforms.depth_scale);
     RenderState textured = draw.state;
-    gs_texture_state(&textured, material->texture, &uniforms.depth[1], &uniforms.depth[2]);
-    gs_sample_limits(&textured, uniforms.depth[1], uniforms.depth[2], uniforms.limits);
+    gs_texture_state(&textured, material->texture, &uniforms.texture_scale_u, &uniforms.texture_scale_v);
+    gs_sample_limits(&textured, uniforms.texture_scale_u, uniforms.texture_scale_v, &uniforms.limits);
     for (const mgCFace *face = group->face; face != NULL; face = face->next) {
         auto found = face_meshes.find(face);
         if (found == face_meshes.end()) continue;
         found->second.used = mesh_frame;
         if (found->second.vertices.empty()) continue;
         RenderState state = (found->second.type & MG_FACE_NO_TEXTURE) ? draw.state : textured;
-        uniforms.flags[1] = found->second.type;
+        uniforms.flags.face_type = found->second.type;
         render_mesh(&state, draw.cull, &uniforms, draw.skinned ? draw.bones : NULL, found->second.vertices.data(),
                     (int)found->second.vertices.size(), found->second.resident);
     }
@@ -288,7 +291,7 @@ PORT_OVERRIDE int mgCVisualMDT::CreateRenderInfoPacket(u_int *packet, float (*ma
         sceVu0ApplyMatrix(eye, inverse, eye);
         memcpy(uniforms.eye, eye, sizeof uniforms.eye);
     }
-    if (attr->program_mode & 2) {
+    if (attr->program_mode & PROGRAM_REF_SPHERE) {
         sceVu0FMATRIX view_model;
         mgMulMatrix(view_model, info->view, matrix);
         copy_matrix(uniforms.clip_or_view, view_model);
@@ -300,50 +303,42 @@ PORT_OVERRIDE int mgCVisualMDT::CreateRenderInfoPacket(u_int *packet, float (*ma
             uniforms.point_light[i][3] = light->power;
             memcpy(uniforms.point_color[i], light->color, sizeof uniforms.point_color[i]);
         }
-    uniforms.fog[0] = info->fog.offset;
-    uniforms.fog[1] = info->fog.near_value;
-    uniforms.fog[2] = info->fog.far_value;
-    uniforms.fog[3] = info->fog.scale;
+    uniforms.fog = {info->fog.offset, info->fog.near_value, info->fog.far_value, info->fog.scale};
     u_int flags = 0;
-    if ((info->clip | info->scissor) != 0) flags |= 0x1;
-    if (info->scissor != 0) flags |= 0x2;
-    if (attr->program_mode & 1) flags |= 0x8;
-    if (attr->program_mode & 2) flags |= 0x100;
-    if (attr->program_option != 0) flags |= 0x4;
-    if (info->plight_hit != 0) flags |= 0x10;
-    if (info->motion != 0) flags |= 0x40;
-    if (attr->no_light != 0 || info->lighting_enabled == 0 || attr->ambient_boost != 0) flags |= 0x20;
-    if (attr->unk_84 == 1) flags |= 0x80;
-    uniforms.flags[0] = flags;
+    if ((info->clip | info->scissor) != 0) flags |= MESH_CLIP;
+    if (info->scissor != 0) flags |= MESH_SCISSOR;
+    if (attr->program_mode & PROGRAM_REAL) flags |= MESH_REAL;
+    if (attr->program_mode & PROGRAM_REF_SPHERE) flags |= MESH_REF_SPHERE;
+    if (attr->program_option != 0) flags |= MESH_CULL;
+    if (info->plight_hit != 0) flags |= MESH_POINT_LIGHTS;
+    if (info->motion != 0) flags |= MESH_BLEND;
+    if (attr->no_light != 0 || info->lighting_enabled == 0 || attr->ambient_boost != 0) flags |= MESH_UNLIT;
+    if (attr->unk_84 == 1) flags |= MESH_COLOR_ADD;
+    uniforms.flags.program = flags;
     int fogged = attr->fog != 0 && info->fog_enable != 0;
-    prmode = (u_int)(fogged << 5) | 0x58;
     u_int fog_colour = info->fog.r | info->fog.g << 8 | info->fog.b << 16;
     if (attr->fog > MG_FOG_SCENE) {
         if (attr->fog == MG_FOG_BLACK) fog_colour = 0;
         if (attr->fog == MG_FOG_WHITE) fog_colour = 0xffffff;
     }
     mgCDrawEnv env;
-    SetDrawEnvGifTag((u_long128 *)&env, info, draw_env != NULL ? draw_env : &info->draw_env[0]);
+    SetDrawEnvAttributes(&env, info, draw_env != NULL ? draw_env : &info->draw_env[0]);
     gs_base_state(&draw.state);
     draw.state.blend = 1;
-    draw.state.alpha = env.alpha.value;
-    draw.state.test = env.test.value;
+    draw.state.blending = gs_blending(env.alpha);
+    draw.state.tests = gs_tests(env.test);
     draw.state.depth_write = !env.zbuf.bits.zmsk;
     draw.state.fog = fogged;
     draw.state.fog_color = fog_colour;
     draw.cull = RENDER_CULL_NONE;
     if (attr->program_option != 0) draw.cull = mirrored(matrix) ? RENDER_CULL_FRONT : RENDER_CULL_BACK;
     if (info->motion != 0) {
-        static u_int bone_packet[4 + 32 * 16];
-        memset(bone_packet, 0, sizeof bone_packet);
-        int size = CreateExtRenderInfoPacket(bone_packet, matrix, info);
-        int slots = size > 1 ? (size - 1) / 4 : 0;
-        for (int b = 0; b < 32; b++) {
-            const float *bone = (const float *)&bone_packet[4 + b * 16];
+        float bones[RENDER_BONE_SLOTS][4][4] = {};
+        int slots = motion_bones(static_cast<mgCVisualMotionMDT *>(this), matrix, bones);
+        for (int b = 0; b < RENDER_BONE_SLOTS; b++)
             for (int k = 0; k < 3; k++)
                 for (int c = 0; c < 4; c++)
-                    draw.bones[(b * 3 + k) * 4 + c] = b < slots ? bone[c * 4 + k] : (k == c ? 1.0f : 0.0f);
-        }
+                    draw.bones[b].rows[k][c] = b < slots ? bones[b][c][k] : (k == c ? 1.0f : 0.0f);
         draw.skinned = 1;
     }
     return 0;
@@ -384,7 +379,7 @@ PORT_OVERRIDE int mgCVisualPrim::CreateRenderInfoPacket(u_int *packet, float (*m
     if (draw_env != NULL) env = *draw_env;
     else SetDrawEnv(&env, &attr, &info->draw_env[0]);
     gs_write(SCE_GS_TEST_1, env.test.value);
-    gs_write(SCE_GS_ZBUF_1, *(u_long *)&env.zbuf);
+    gs_write(SCE_GS_ZBUF_1, env.zbuf.value);
     gs_write(SCE_GS_ALPHA_1, env.alpha.value);
     return 0;
 }

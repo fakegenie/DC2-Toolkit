@@ -125,12 +125,12 @@ void mgCFrame::GetBBoardMatrix(int mode, float (*matrix)[4], mgRENDER_INFO *info
     GetLWMatrix(world);
     sceVu0UnitMatrix(result);
     float scale = std::sqrt(world[0][0] * world[0][0] + world[0][1] * world[0][1] + world[0][2] * world[0][2]);
-    if (mode & 3) {
+    if (mode & (MG_FRAME_BILLBOARD_FULL | MG_FRAME_BILLBOARD_Y)) {
         sceVu0FVECTOR direction = {info->camera_pos[0] - world[3][0], 0.0f, info->camera_pos[2] - world[3][2], 0.0f};
         sceVu0Normalize(result[2], direction);
         result[0][0] = result[2][2];
         result[0][2] = -result[2][0];
-        if (mode & 1) {
+        if (mode & MG_FRAME_BILLBOARD_FULL) {
             sceVu0FMATRIX pitch;
             sceVu0UnitMatrix(pitch);
             direction[1] = info->camera_pos[1] - world[3][1];

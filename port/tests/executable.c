@@ -9,16 +9,16 @@ static size_t read_bytes;
 static int read_count;
 
 int port_cdvd_find(const char *path, struct sceCdlFILE *file) {
-    assert(strcmp(path, "SCES_511.90;1") == 0);
+    assert(strcmp(path, PORT_EXECUTABLE_PATH) == 0);
     if (missing) return 0;
     *file = (struct sceCdlFILE){0};
-    file->size = 32769;
+    file->size = 2 * PORT_EXECUTABLE_READ_CHUNK + 1;
     return 1;
 }
 
 int port_cdvd_read_file(const struct sceCdlFILE *file, uint64_t offset, void *buffer, size_t size) {
     assert(offset == read_bytes);
-    assert(size <= 16384 && offset + size <= file->size);
+    assert(size <= PORT_EXECUTABLE_READ_CHUNK && offset + size <= file->size);
     if (failed_read) return 0;
     memset(buffer, 'a', size);
     read_bytes += size;
@@ -61,7 +61,7 @@ int main(void) {
     port_sha256_final(&hash, digest);
     assert(strcmp(digest, "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0") == 0);
     assert(port_executable_check() == 1);
-    assert(read_count == 3 && read_bytes == 32769);
+    assert(read_count == 3 && read_bytes == 2 * PORT_EXECUTABLE_READ_CHUNK + 1);
     missing = 1;
     assert(port_executable_check() == 0);
     missing = 0;

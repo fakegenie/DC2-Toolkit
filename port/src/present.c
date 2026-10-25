@@ -79,7 +79,7 @@ static void save_requested(int target, int width, int height) {
     if (!surface || !SDL_SaveBMP(surface, requested_path)) fprintf(stderr, "display: %s\n", SDL_GetError());
     SDL_DestroySurface(surface);
     free(pixels);
-    fprintf(stderr, "display: saved field %llu to %s\n", (unsigned long long)port_graphics.fields, requested_path);
+    fprintf(stderr, "display: saved field %llu to %s\n", (unsigned long long)port_fields, requested_path);
     requested_path[0] = 0;
 }
 

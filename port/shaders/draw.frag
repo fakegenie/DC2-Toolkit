@@ -11,9 +11,13 @@ layout(set = 2, binding = 1) uniform sampler2D destination;
 
 layout(set = 3, binding = 0) uniform State {
     uint flags;
-    uint alpha;
+    uint alpha_reference;
+    uint alpha_method;
+    uint blend_fix;
+    uint texture_alpha;
     uint fog_color;
-    uint unused;
+    uint unused0;
+    uint unused1;
 };
 
 layout(location = 0) out vec4 result;
@@ -35,19 +39,26 @@ const uint OVERDRAW = 4096u;
 const uint DEST_TEST = 8192u;
 const uint DEST_SET = 16384u;
 
+const uint ALPHA_NEVER = 0u;
+const uint ALPHA_ALWAYS = 1u;
+const uint ALPHA_LESS = 2u;
+const uint ALPHA_LEQUAL = 3u;
+const uint ALPHA_EQUAL = 4u;
+const uint ALPHA_GEQUAL = 5u;
+const uint ALPHA_GREATER = 6u;
+
 const float MODULATE = 255.0 / 128.0;
 
 bool alpha_passes(float value) {
     int level = int(value * 128.0 + 0.5);
-    int reference = int(alpha & 255u);
-    uint method = (alpha >> 8) & 7u;
-    if (method == 0u) return false;
-    if (method == 1u) return true;
-    if (method == 2u) return level < reference;
-    if (method == 3u) return level <= reference;
-    if (method == 4u) return level == reference;
-    if (method == 5u) return level >= reference;
-    if (method == 6u) return level > reference;
+    int reference = int(alpha_reference);
+    if (alpha_method == ALPHA_NEVER) return false;
+    if (alpha_method == ALPHA_ALWAYS) return true;
+    if (alpha_method == ALPHA_LESS) return level < reference;
+    if (alpha_method == ALPHA_LEQUAL) return level <= reference;
+    if (alpha_method == ALPHA_EQUAL) return level == reference;
+    if (alpha_method == ALPHA_GEQUAL) return level >= reference;
+    if (alpha_method == ALPHA_GREATER) return level > reference;
     return level != reference;
 }
 
@@ -78,7 +89,7 @@ void main() {
         vec4 texel = texture(source, uv);
         if ((flags & TEXA) != 0u) {
             bool black = texel.r + texel.g + texel.b == 0.0;
-            texel.a = (flags & AEM) != 0u && black ? 0.0 : float(alpha >> 24) / 128.0;
+            texel.a = (flags & AEM) != 0u && black ? 0.0 : float(texture_alpha) / 128.0;
         }
         if ((flags & VERTEX_ALPHA) != 0u) texel.a = frag_color.a * MODULATE;
         else if ((flags & DECAL) == 0u) texel.a = texel.a * frag_color.a * MODULATE;
@@ -94,7 +105,7 @@ void main() {
         result = vec4(0.1, 0.1, 0.1, 1.0);
         return;
     }
-    float factor = (flags & FACTOR_FIX) != 0u ? float((alpha >> 16) & 255u) / 128.0 : color.a;
+    float factor = (flags & FACTOR_FIX) != 0u ? float(blend_fix) / 128.0 : color.a;
     vec3 rgb = color.rgb;
     if ((flags & SCALE_SOURCE) != 0u) rgb = rgb * (1.0 + factor);
     if ((flags & FACTOR_COLOR) != 0u) rgb = vec3(factor);

@@ -105,19 +105,19 @@ void port_sha256_final(struct port_sha256 *hash, char digest[65]) {
 
 int port_executable_check(void) {
     struct sceCdlFILE file;
-    if (!port_cdvd_find("SCES_511.90;1", &file)) {
-        fprintf(stderr, "executable: cannot find SCES_511.90 on disc\n");
+    if (!port_cdvd_find(PORT_EXECUTABLE_PATH, &file)) {
+        fprintf(stderr, "executable: cannot find %s on disc\n", PORT_EXECUTABLE_PATH);
         return 0;
     }
     struct port_sha256 hash;
-    unsigned char data[16384];
+    unsigned char data[PORT_EXECUTABLE_READ_CHUNK];
     char digest[65];
     port_sha256_init(&hash);
     for (uint64_t offset = 0; offset < file.size;) {
         size_t size = file.size - offset;
         if (size > sizeof(data)) size = sizeof(data);
         if (!port_cdvd_read_file(&file, offset, data, size)) {
-            fprintf(stderr, "executable: cannot read SCES_511.90 on disc\n");
+            fprintf(stderr, "executable: cannot read %s on disc\n", PORT_EXECUTABLE_PATH);
             return 0;
         }
         port_sha256_update(&hash, data, size);

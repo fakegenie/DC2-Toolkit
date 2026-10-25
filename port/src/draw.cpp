@@ -2,6 +2,7 @@
 #include "port_stats.h"
 #include "mg_texture.hpp"
 #include "mglib.hpp"
+#include "mg_drawprim.hpp"
 #include "port_graphics.h"
 #include "port_overrides.h"
 #include "sce/libgraph.h"
@@ -13,16 +14,82 @@
 
 enum { CACHE_LIMIT = 4096, CACHE_IDLE_FRAMES = 300, COPY_LIMIT = 8 };
 enum { LAYOUT_WIDTH = 512, LAYOUT_RIGHT = 511, WIDE_FRAME_LIMIT = 16, UV_WRAP = 1 << 14, HUD_SIDE = 85 };
-enum {
-    GS_PRIM = 0x00, GS_RGBAQ = 0x01, GS_ST = 0x02, GS_UV = 0x03, GS_XYZF2 = 0x04, GS_XYZ2 = 0x05, GS_TEX0 = 0x06,
-    GS_CLAMP = 0x08, GS_FOG = 0x0a, GS_XYZF3 = 0x0c, GS_XYZ3 = 0x0d, GS_TEX1 = 0x14, GS_XYOFFSET = 0x18,
-    GS_TEXA = 0x3b, GS_BITBLTBUF = 0x50, GS_TRXPOS = 0x51, GS_TRXREG = 0x52, GS_TRXDIR = 0x53, GS_FOGCOL = 0x3d, GS_SCISSOR = 0x40, GS_ALPHA = 0x42, GS_TEST = 0x47, GS_FRAME = 0x4c,
-    GS_ZBUF = 0x4e
-};
+enum { COORDINATE_CENTER = 2048 };
 static const float SAMPLE_OFFSET = 0.46875f;
 static const float TEXEL_TIE = 0.0625f;
 
-enum { PRIM_POINT, PRIM_LINE, PRIM_LINE_STRIP, PRIM_TRIANGLE, PRIM_TRIANGLE_STRIP, PRIM_TRIANGLE_FAN, PRIM_SPRITE };
+union GifPacked {
+    struct {
+        u_long prim : 11;
+        u_long : 53;
+        u_long : 64;
+    } prim;
+    struct {
+        u_int red : 8;
+        u_int : 24;
+        u_int green : 8;
+        u_int : 24;
+        u_int blue : 8;
+        u_int : 24;
+        u_int alpha : 8;
+        u_int : 24;
+    } rgbaq;
+    struct {
+        float s;
+        float t;
+        float q;
+        u_int : 32;
+    } st;
+    struct {
+        u_int u : 14;
+        u_int : 18;
+        u_int v : 14;
+        u_int : 18;
+        u_long : 64;
+    } uv;
+    struct {
+        u_int x : 16;
+        u_int : 16;
+        u_int y : 16;
+        u_int : 16;
+        u_int : 4;
+        u_int z : 24;
+        u_int : 4;
+        u_int : 4;
+        u_int f : 8;
+        u_int : 3;
+        u_int disable_draw : 1;
+        u_int : 16;
+    } xyzf;
+    struct {
+        u_int x : 16;
+        u_int : 16;
+        u_int y : 16;
+        u_int : 16;
+        u_int z;
+        u_int : 15;
+        u_int disable_draw : 1;
+        u_int : 16;
+    } xyz;
+    struct {
+        u_long : 64;
+        u_int : 32;
+        u_int : 4;
+        u_int f : 8;
+        u_int : 20;
+    } fog;
+    struct {
+        u_long data;
+        u_long address : 8;
+        u_long : 56;
+    } ad;
+};
+
+struct HdPictureHeader {
+    char magic[6];
+    u_int width;
+    u_int height;
+} __attribute__((packed));
 
 struct CachedTexture {
     const void *image;
@@ -62,10 +129,6 @@ static TargetCopy copies[COPY_LIMIT];
 static u_int frame_number = 1;
 static std::unordered_map<const void *, std::vector<u_int>> palettes;
 
-static u_int field(u_long value, int shift, int bits) {
-    return (u_int)((value >> shift) & ((1ull << bits) - 1));
-}
-
 static int smaller(int a, int b) {
     return a < b ? a : b;
 }
@@ -75,24 +138,30 @@ static mgCTexture *resident_texture(u_int base, int clut);
 void gs_reset() {
     memset(&gs, 0, sizeof gs);
     gs.q = 1.0f;
-    gs.tex1 = 0x20;
-    gs.texa = (u_long)0x80 << 32;
-    gs.test = (u_long)3 << 16;
-    gs.zbuf = (u_long)1 << 32;
+    gs.tex1.MMAG = 1;
+    gs.texa.TA1 = GS_ALPHA_ONE;
+    gs.test.ZTE = 1;
+    gs.test.ZTST = SCE_GS_ALWAYS;
+    gs.zbuf.ZMSK = 1;
     queued = 0;
 }
 
 void gs_frame(int fbp, int width, int height, int psm) {
     frame_shift = 0;
-    const mgCTexture *texture = resident_texture((u_int)fbp * 32, 0);
+    const mgCTexture *texture = resident_texture((u_int)fbp * GS_BLOCKS_PER_PAGE, 0);
     if (texture) frame_target = gs_texture_for(texture);
-    else frame_target = render_target((u_int)fbp * 32, width, height);
+    else frame_target = render_target((u_int)fbp * GS_BLOCKS_PER_PAGE, width, height);
     render_bind(frame_target);
-    gs.frame = (u_long)fbp | (u_long)((width + 63) / 64) << 16 | (u_long)psm << 24;
-    gs.xyoffset = (u_long)((0x800 - width / 2) * 16) | (u_long)((0x800 - height / 2) * 16) << 32;
-    int clipped_width = smaller(width, render_width(frame_target));
-    int clipped_height = smaller(height, render_height(frame_target));
-    gs.scissor = (u_long)(clipped_width - 1) << 16 | (u_long)(clipped_height - 1) << 48;
+    gs.frame = {};
+    gs.frame.FBP = fbp;
+    gs.frame.FBW = (width + GS_FRAME_WIDTH_UNIT - 1) / GS_FRAME_WIDTH_UNIT;
+    gs.frame.PSM = psm;
+    gs.xyoffset = {};
+    gs.xyoffset.OFX = (COORDINATE_CENTER - width / 2) * GS_SUBPIXELS;
+    gs.xyoffset.OFY = (COORDINATE_CENTER - height / 2) * GS_SUBPIXELS;
+    gs.scissor = {};
+    gs.scissor.SCAX1 = smaller(width, render_width(frame_target)) - 1;
+    gs.scissor.SCAY1 = smaller(height, render_height(frame_target)) - 1;
 }
 
 int gs_frame_target() {
@@ -101,7 +170,7 @@ int gs_frame_target() {
 
 void gs_frame_shift(int pixels) {
     frame_shift = pixels;
-    u_int base = field(gs.frame, 0, 9) * 32;
+    u_int base = gs.frame.FBP * GS_BLOCKS_PER_PAGE;
     int slot = WIDE_FRAME_LIMIT - 1;
     for (int i = 0; i < WIDE_FRAME_LIMIT; ++i)
         if (wide_frames[i].base == base) slot = i;
@@ -134,19 +203,17 @@ static void spread_hud(RenderVertex *vertices, int count) {
     for (int i = 0; i < count; ++i) vertices[i].x += move;
 }
 
-static u_long shifted_scissor(u_long value) {
-    u_long left = field(value, 0, 11);
-    u_long right = field(value, 16, 11);
-    if (left == 0 && right == LAYOUT_RIGHT) right += (u_long)(2 * frame_shift);
+static sceGsScissor shifted_scissor(sceGsScissor scissor) {
+    if (scissor.SCAX0 == 0 && scissor.SCAX1 == LAYOUT_RIGHT) scissor.SCAX1 += 2 * frame_shift;
     else {
-        left += (u_long)frame_shift;
-        right += (u_long)frame_shift;
+        scissor.SCAX0 += frame_shift;
+        scissor.SCAX1 += frame_shift;
     }
-    return (value & ~(u_long)0x7ff07ff) | left | right << 16;
+    return scissor;
 }
 
 static u_int gs_alpha(u_int alpha) {
-    return alpha >= 0x80 ? 255 : alpha * 2;
+    return alpha >= GS_ALPHA_ONE ? 255 : alpha * 2;
 }
 
 static u_int clut_color(const u_int *clut, int index) {
@@ -279,14 +346,12 @@ static int hd_picture(const char *name, int width, int height, std::vector<u_int
     snprintf(path, sizeof path, "%s/dc2tk-hd/%s_%dx%d.rgba", port_overrides_folder(), lower, width, height);
     FILE *file = fopen(path, "rb");
     if (!file) return 0;
-    unsigned char header[14];
+    HdPictureHeader header;
     int scale = 0;
-    if (fread(header, 1, sizeof header, file) == sizeof header && !memcmp(header, "DC2HD1", 6)) {
-        u_int hd_width = header[6] | header[7] << 8 | header[8] << 16 | (u_int)header[9] << 24;
-        u_int hd_height = header[10] | header[11] << 8 | header[12] << 16 | (u_int)header[13] << 24;
-        int found = width > 0 ? (int)(hd_width / (u_int)width) : 0;
-        if (found > 0 && hd_width == (u_int)(found * width) && hd_height == (u_int)(found * height)) {
-            pixels.resize((size_t)hd_width * hd_height);
+    if (fread(&header, sizeof header, 1, file) == 1 && !memcmp(header.magic, "DC2HD1", sizeof header.magic)) {
+        int found = width > 0 ? (int)(header.width / (u_int)width) : 0;
+        if (found > 0 && header.width == (u_int)(found * width) && header.height == (u_int)(found * height)) {
+            pixels.resize((size_t)header.width * header.height);
             if (fread(pixels.data(), 4, pixels.size(), file) == pixels.size()) scale = found;
         }
     }
@@ -349,8 +414,7 @@ static mgCTexture *resident_texture(u_int base, int clut) {
     return found;
 }
 
-int gs_texture(u_long tex0, int width, int height) {
-    u_int base = field(tex0, 0, 14);
+int gs_texture(u_int base, int width, int height) {
     const mgCTexture *texture = resident_texture(base, 0);
     if (texture) return gs_texture_for(texture);
     return render_target(base, width, height);
@@ -431,7 +495,7 @@ extern "C" void port_depth_download(int x, int y, int width, int height, unsigne
 int gs_texture_for(const mgCTexture *texture) {
     if (!texture) return 0;
     if (!texture->image[0] || texture->width <= 0 || texture->height <= 0)
-        return gs_texture(texture->tex0_bits, texture->width > 0 ? texture->width : 64,
+        return gs_texture(texture->tex0.TBP0, texture->width > 0 ? texture->width : 64,
                           texture->height > 0 ? texture->height : 64);
     CachedTexture *entry = cached(texture);
     if (!entry) return 0;
@@ -467,106 +531,121 @@ void gs_next_frame() {
     }
 }
 
-static int sampled_texture(u_long tex0, int width, int height) {
-    u_int base = field(tex0, 0, 14);
+static int sampled_texture(u_int base, int width, int height) {
     int target = resident_texture(base, 0) ? 0 : render_target_at(base);
-    return target ? target : gs_texture(tex0, width, height);
+    return target ? target : gs_texture(base, width, height);
 }
 
 static int bound_texture(int repeat, int *width, int *height) {
-    int texture_width = 1 << field(gs.tex0, 26, 4);
-    int texture_height = 1 << field(gs.tex0, 30, 4);
+    int texture_width = 1 << gs.tex0.TW;
+    int texture_height = 1 << gs.tex0.TH;
     int texture = 0;
-    if (source && source->tex0.TBP0 == field(gs.tex0, 0, 14) && source->image[0]) texture = gs_texture_for(source);
-    else texture = sampled_texture(gs.tex0, texture_width, texture_height);
+    if (source && source->tex0.TBP0 == gs.tex0.TBP0 && source->image[0]) texture = gs_texture_for(source);
+    else texture = sampled_texture(gs.tex0.TBP0, texture_width, texture_height);
     texture = gs_sampled(texture, texture_width, texture_height, repeat);
     *width = texture ? render_width(texture) : 1;
     *height = texture ? render_height(texture) : 1;
     return texture;
 }
 
+RenderBlending gs_blending(sceGsAlpha alpha) {
+    return {(uint8_t)alpha.bits.a, (uint8_t)alpha.bits.b, (uint8_t)alpha.bits.c, (uint8_t)alpha.bits.d,
+            (uint8_t)alpha.FIX};
+}
+
+RenderTests gs_tests(sceGsTest test) {
+    return {(uint8_t)test.ATE, (uint8_t)test.ATST, (uint8_t)test.AREF, (uint8_t)test.AFAIL,
+            (uint8_t)test.DATE, (uint8_t)test.DATM, (uint8_t)test.ZTE, (uint8_t)test.ZTST};
+}
+
+RenderExpansion gs_expansion(sceGsTexa texa) {
+    return {(uint8_t)texa.TA0, (uint8_t)texa.AEM, (uint8_t)texa.TA1};
+}
+
+static u_int fog_color() {
+    return gs.fogcol.FCR | gs.fogcol.FCG << 8 | gs.fogcol.FCB << 16;
+}
+
+static void scissor_state(RenderState *state) {
+    state->scissor = {(int)gs.scissor.SCAX0, (int)gs.scissor.SCAY0, (int)gs.scissor.SCAX1, (int)gs.scissor.SCAY1};
+}
+
+static void sampling_state(RenderState *state, sceGsTex0 tex0, sceGsTex1 tex1) {
+    state->linear = tex1.MMAG;
+    state->decal = tex0.TFX == GS_TFX_DECAL;
+    state->vertex_alpha = !tex0.TCC;
+    state->texa = tex0.PSM == SCE_GS_PSMCT24;
+}
+
 static void state_for(RenderState *state, int *texture_width, int *texture_height) {
     memset(state, 0, sizeof *state);
-    u_long prim = gs.prim;
     *texture_width = *texture_height = 1;
-    if (field(prim, 4, 1)) {
-        state->repeat_u = field(gs.clamp, 0, 2) == 0;
-        state->repeat_v = field(gs.clamp, 2, 2) == 0;
+    if (gs.prim.TME) {
+        state->repeat_u = gs.clamp.WMS == GS_WRAP_REPEAT;
+        state->repeat_v = gs.clamp.WMT == GS_WRAP_REPEAT;
         state->texture = bound_texture(state->repeat_u || state->repeat_v, texture_width, texture_height);
-        state->linear = field(gs.tex1, 5, 1);
-        state->decal = field(gs.tex0, 35, 2) == 1;
-        state->vertex_alpha = !field(gs.tex0, 34, 1);
-        state->texa = field(gs.tex0, 20, 6) == SCE_GS_PSMCT24;
+        sampling_state(state, gs.tex0, gs.tex1);
     }
-    state->blend = field(prim, 6, 1);
-    state->alpha = gs.alpha;
-    state->test = gs.test;
-    state->texa_register = gs.texa;
-    state->fog = field(prim, 5, 1);
-    state->fog_color = (u_int)(gs.fogcol & 0xffffff);
-    state->depth_write = !field(gs.zbuf, 32, 1);
-    state->color_mask = (u_int)(gs.frame >> 32);
-    state->scissor[0] = (int)field(gs.scissor, 0, 11);
-    state->scissor[1] = (int)field(gs.scissor, 32, 11);
-    state->scissor[2] = (int)field(gs.scissor, 16, 11);
-    state->scissor[3] = (int)field(gs.scissor, 48, 11);
+    state->blend = gs.prim.ABE;
+    state->blending = gs_blending(gs.alpha);
+    state->tests = gs_tests(gs.test);
+    state->expansion = gs_expansion(gs.texa);
+    state->fog = gs.prim.FGE;
+    state->fog_color = fog_color();
+    state->depth_write = !gs.zbuf.ZMSK;
+    state->color_mask = gs.frame.FBMSK;
+    scissor_state(state);
 }
 
 void gs_base_state(RenderState *state) {
     memset(state, 0, sizeof *state);
-    state->texa_register = gs.texa;
-    state->color_mask = (u_int)(gs.frame >> 32);
-    state->fog_color = (u_int)(gs.fogcol & 0xffffff);
-    state->scissor[0] = (int)field(gs.scissor, 0, 11);
-    state->scissor[1] = (int)field(gs.scissor, 32, 11);
-    state->scissor[2] = (int)field(gs.scissor, 16, 11);
-    state->scissor[3] = (int)field(gs.scissor, 48, 11);
+    state->expansion = gs_expansion(gs.texa);
+    state->color_mask = gs.frame.FBMSK;
+    state->fog_color = fog_color();
+    scissor_state(state);
 }
 
 void gs_texture_state(RenderState *state, const mgCTexture *texture, float *scale_u, float *scale_v) {
     *scale_u = *scale_v = 1.0f;
     if (!texture) return;
-    state->repeat_u = field(texture->clamp_bits, 0, 2) == 0;
-    state->repeat_v = field(texture->clamp_bits, 2, 2) == 0;
-    state->texture = gs_sampled(gs_texture_for(texture), 1 << field(texture->tex0_bits, 26, 4),
-                                1 << field(texture->tex0_bits, 30, 4), state->repeat_u || state->repeat_v);
+    state->repeat_u = texture->clamp.WMS == GS_WRAP_REPEAT;
+    state->repeat_v = texture->clamp.WMT == GS_WRAP_REPEAT;
+    int width = 1 << texture->tex0.TW, height = 1 << texture->tex0.TH;
+    state->texture = gs_sampled(gs_texture_for(texture), width, height, state->repeat_u || state->repeat_v);
     if (!state->texture) return;
-    state->linear = field(texture->tex1_bits, 5, 1);
-    state->decal = field(texture->tex0_bits, 35, 2) == 1;
-    state->vertex_alpha = !field(texture->tex0_bits, 34, 1);
-    state->texa = field(texture->tex0_bits, 20, 6) == SCE_GS_PSMCT24;
-    *scale_u = (float)(1 << field(texture->tex0_bits, 26, 4)) / (float)render_width(state->texture);
-    *scale_v = (float)(1 << field(texture->tex0_bits, 30, 4)) / (float)render_height(state->texture);
+    sampling_state(state, texture->tex0, texture->tex1);
+    *scale_u = (float)width / (float)render_width(state->texture);
+    *scale_v = (float)height / (float)render_height(state->texture);
 }
 
-void gs_sample_limits(const RenderState *state, float scale_u, float scale_v, float limits[4]) {
+void gs_sample_limits(const RenderState *state, float scale_u, float scale_v, RenderTexelLimits *limits) {
     RenderSlot slot;
-    limits[0] = limits[1] = limits[2] = limits[3] = 0.0f;
+    *limits = {};
     if (!render_slot(state->texture, &slot) || !slot.target || state->repeat_u || state->repeat_v) return;
-    limits[0] = 0.5f / (float)slot.width;
-    limits[1] = 0.5f / (float)slot.height;
-    limits[2] = scale_u - limits[0];
-    limits[3] = scale_v - limits[1];
+    limits->low_u = 0.5f / (float)slot.width;
+    limits->low_v = 0.5f / (float)slot.height;
+    limits->high_u = scale_u - limits->low_u;
+    limits->high_v = scale_v - limits->low_v;
 }
 
 static float depth_scale();
 
-void gs_screen_mapping(float screen[4], float *depth) {
+void gs_screen_mapping(RenderScreenMapping *screen, float *depth) {
     float width = (float)(frame_target ? render_width(frame_target) : 1);
     float height = (float)(frame_target ? render_height(frame_target) : 1);
-    float offset_x = (float)field(gs.xyoffset, 0, 16) / 16.0f;
-    float offset_y = (float)field(gs.xyoffset, 32, 16) / 16.0f;
-    screen[0] = 2.0f / width;
-    screen[1] = -2.0f * offset_x / width - 1.0f;
-    screen[2] = -2.0f / height;
-    screen[3] = 1.0f + 2.0f * offset_y / height;
+    float offset_x = (float)gs.xyoffset.OFX / GS_SUBPIXELS;
+    float offset_y = (float)gs.xyoffset.OFY / GS_SUBPIXELS;
+    screen->scale_x = 2.0f / width;
+    screen->offset_x = -2.0f * offset_x / width - 1.0f;
+    screen->scale_y = -2.0f / height;
+    screen->offset_y = 1.0f + 2.0f * offset_y / height;
     *depth = depth_scale();
 }
 
 static float depth_scale() {
-    switch (field(gs.zbuf, 24, 4)) {
-        case 0: return 1.0f / 4294967296.0f;
-        case 1: return 1.0f / 16777216.0f;
+    switch (SCE_GS_PSMZ32 + gs.zbuf.PSM) {
+        case SCE_GS_PSMZ32: return 1.0f / 4294967296.0f;
+        case SCE_GS_PSMZ24: return 1.0f / 16777216.0f;
         default: return 1.0f / 65536.0f;
     }
 }
@@ -583,29 +662,29 @@ static int sample_range(float p0, float p1, float t0, float t1, float *low, floa
 }
 
 static void round_texels_down(RenderVertex *a, RenderVertex *b) {
-    float limits[4] = {fminf(a->u, b->u), fminf(a->v, b->v), fmaxf(a->u, b->u), fmaxf(a->v, b->v)};
-    memcpy(a->limits, limits, sizeof limits);
-    memcpy(b->limits, limits, sizeof limits);
+    RenderTexelLimits limits = {fminf(a->u, b->u), fminf(a->v, b->v), fmaxf(a->u, b->u), fmaxf(a->v, b->v)};
+    a->limits = limits;
+    b->limits = limits;
     float shift_u = b->x != a->x ? TEXEL_TIE * (b->u - a->u) / (b->x - a->x) : 0.0f;
     float shift_v = b->y != a->y ? TEXEL_TIE * (b->v - a->v) / (b->y - a->y) : 0.0f;
     a->u -= shift_u, b->u -= shift_u, a->v -= shift_v, b->v -= shift_v;
 }
 
 static void align_sprite(RenderVertex *a, RenderVertex *b, int textured) {
-    float limits[4];
-    int clamped = textured && sample_range(a->x, b->x, a->u, b->u, &limits[0], &limits[2]) &&
-                  sample_range(a->y, b->y, a->v, b->v, &limits[1], &limits[3]);
+    RenderTexelLimits limits;
+    int clamped = textured && sample_range(a->x, b->x, a->u, b->u, &limits.low_u, &limits.high_u) &&
+                  sample_range(a->y, b->y, a->v, b->v, &limits.low_v, &limits.high_v);
     float shift_u = b->x != a->x ? SAMPLE_OFFSET * (b->u - a->u) / (b->x - a->x) : 0.0f;
     float shift_v = b->y != a->y ? SAMPLE_OFFSET * (b->v - a->v) / (b->y - a->y) : 0.0f;
     a->x -= SAMPLE_OFFSET, b->x -= SAMPLE_OFFSET, a->y -= SAMPLE_OFFSET, b->y -= SAMPLE_OFFSET;
     a->u -= shift_u, b->u -= shift_u, a->v -= shift_v, b->v -= shift_v;
     if (!clamped) return;
-    limits[0] = fmaxf(limits[0], a->limits[0]);
-    limits[1] = fmaxf(limits[1], a->limits[1]);
-    limits[2] = fminf(limits[2], a->limits[2]);
-    limits[3] = fminf(limits[3], a->limits[3]);
-    memcpy(a->limits, limits, sizeof limits);
-    memcpy(b->limits, limits, sizeof limits);
+    limits.low_u = fmaxf(limits.low_u, a->limits.low_u);
+    limits.low_v = fmaxf(limits.low_v, a->limits.low_v);
+    limits.high_u = fminf(limits.high_u, a->limits.high_u);
+    limits.high_v = fminf(limits.high_v, a->limits.high_v);
+    a->limits = limits;
+    b->limits = limits;
 }
 
 static void kick(u_int x, u_int y, u_int z, int fog, int draw) {
@@ -616,34 +695,29 @@ static void kick(u_int x, u_int y, u_int z, int fog, int draw) {
         queued = 2;
         vertex = &queue[2];
     }
-    vertex->x = (float)((int)(x & 0xffff) - (int)field(gs.xyoffset, 0, 16)) / 16.0f + SAMPLE_OFFSET;
-    vertex->y = (float)((int)(y & 0xffff) - (int)field(gs.xyoffset, 32, 16)) / 16.0f + SAMPLE_OFFSET;
+    vertex->x = (float)((int)x - (int)gs.xyoffset.OFX) / GS_SUBPIXELS + SAMPLE_OFFSET;
+    vertex->y = (float)((int)y - (int)gs.xyoffset.OFY) / GS_SUBPIXELS + SAMPLE_OFFSET;
     float depth = (float)z * depth_scale();
     vertex->z = depth > 1.0f ? 1.0f : depth;
-    vertex->r = (unsigned char)field(gs.rgbaq, 0, 8);
-    vertex->g = (unsigned char)field(gs.rgbaq, 8, 8);
-    vertex->b = (unsigned char)field(gs.rgbaq, 16, 8);
-    vertex->a = (unsigned char)field(gs.rgbaq, 24, 8);
+    vertex->r = gs.rgbaq.bytes.red;
+    vertex->g = gs.rgbaq.bytes.green;
+    vertex->b = gs.rgbaq.bytes.blue;
+    vertex->a = gs.rgbaq.bytes.alpha;
     vertex->fog = (float)fog / 255.0f;
-    int lift = field(gs.prim, 4, 1) ? gs_read_shift(field(gs.tex0, 0, 14)) : 0;
-    if (field(gs.prim, 8, 1)) {
-        int u = (int)field(gs.uv, 0, 14);
-        if (lift > 0 && u >= UV_WRAP - lift * 16) u -= UV_WRAP;
-        vertex->u = (float)u / 16.0f + (float)lift;
-        vertex->v = (float)field(gs.uv, 16, 14) / 16.0f;
+    int lift = gs.prim.TME ? gs_read_shift(gs.tex0.TBP0) : 0;
+    if (gs.prim.FST) {
+        int u = (int)gs.uv.U;
+        if (lift > 0 && u >= UV_WRAP - lift * GS_SUBPIXELS) u -= UV_WRAP;
+        vertex->u = (float)u / GS_SUBPIXELS + (float)lift;
+        vertex->v = (float)gs.uv.V / GS_SUBPIXELS;
     } else {
-        float s, t;
-        u_int bits = (u_int)gs.st;
-        memcpy(&s, &bits, 4);
-        bits = (u_int)(gs.st >> 32);
-        memcpy(&t, &bits, 4);
         float q = gs.q != 0.0f ? gs.q : 1.0f;
-        vertex->u = s / q * (float)(1 << field(gs.tex0, 26, 4)) + (float)lift;
-        vertex->v = t / q * (float)(1 << field(gs.tex0, 30, 4));
+        vertex->u = gs.st.S / q * (float)(1 << gs.tex0.TW) + (float)lift;
+        vertex->v = gs.st.T / q * (float)(1 << gs.tex0.TH);
     }
     queued++;
-    int type = (int)field(gs.prim, 0, 3);
-    int needed = type == PRIM_POINT ? 1 : type <= PRIM_LINE_STRIP || type == PRIM_SPRITE ? 2 : 3;
+    int type = (int)gs.prim.PRIM;
+    int needed = type == MG_PRIM_POINT ? 1 : type <= MG_PRIM_LINE_STRIP || type == MG_PRIM_SPRITE ? 2 : 3;
     if (queued < needed) return;
     if (draw && !render_toggles.no_2d) {
         RenderState state;
@@ -656,15 +730,15 @@ static void kick(u_int x, u_int y, u_int z, int fog, int draw) {
             out[i].u /= (float)width;
             out[i].v /= (float)height;
         }
-        if (!field(gs.prim, 3, 1))
+        if (!gs.prim.IIP)
             for (int i = 0; i < count - 1; ++i) {
                 out[i].r = out[count - 1].r;
                 out[i].g = out[count - 1].g;
                 out[i].b = out[count - 1].b;
                 out[i].a = out[count - 1].a;
             }
-        int topology = type == PRIM_POINT ? RENDER_POINTS : type <= PRIM_LINE_STRIP ? RENDER_LINES : RENDER_TRIANGLES;
-        if (type == PRIM_SPRITE) {
+        int topology = type == MG_PRIM_POINT ? RENDER_POINTS : type <= MG_PRIM_LINE_STRIP ? RENDER_LINES : RENDER_TRIANGLES;
+        if (type == MG_PRIM_SPRITE) {
             RenderVertex a = out[0], b = out[1];
             RenderSlot target;
             if (state.texture) round_texels_down(&a, &b);
@@ -682,11 +756,11 @@ static void kick(u_int x, u_int y, u_int z, int fog, int draw) {
         render_source = RENDER_SOURCE_GS;
         render_draw(&state, topology, out, count);
     }
-    if (type == PRIM_LINE || type == PRIM_TRIANGLE || type == PRIM_SPRITE || type == PRIM_POINT) queued = 0;
-    else if (type == PRIM_TRIANGLE_FAN) {
+    if (type == MG_PRIM_LINE || type == MG_PRIM_TRIANGLE || type == MG_PRIM_SPRITE || type == MG_PRIM_POINT) queued = 0;
+    else if (type == MG_PRIM_TRIANGLE_FAN) {
         queue[1] = queue[2];
         queued = 2;
-    } else if (type == PRIM_LINE_STRIP) {
+    } else if (type == MG_PRIM_LINE_STRIP) {
         queue[0] = queue[1];
         queued = 1;
     }
@@ -694,80 +768,95 @@ static void kick(u_int x, u_int y, u_int z, int fog, int draw) {
 
 void gs_write(int reg, u_long value) {
     switch (reg) {
-        case GS_PRIM:
-            gs.prim = value;
+        case SCE_GS_PRIM:
+            gs.prim.value = value;
             queued = 0;
             break;
-        case GS_RGBAQ: {
-            gs.rgbaq = value;
-            u_int bits = (u_int)(value >> 32);
-            memcpy(&gs.q, &bits, 4);
+        case SCE_GS_RGBAQ:
+            gs.rgbaq.value = value;
+            memcpy(&gs.q, &gs.rgbaq.bytes.q, sizeof gs.q);
+            break;
+        case SCE_GS_ST: gs.st.value = value; break;
+        case SCE_GS_UV: gs.uv.value = value; break;
+        case SCE_GS_XYZF2:
+        case SCE_GS_XYZF3: {
+            sceGsXyzf xyzf;
+            xyzf.value = value;
+            kick(xyzf.X, xyzf.Y, xyzf.Z, xyzf.F, reg == SCE_GS_XYZF2);
             break;
         }
-        case GS_ST: gs.st = value; break;
-        case GS_UV: gs.uv = value; break;
-        case GS_XYZF2:
-            kick(field(value, 0, 16), field(value, 16, 16), field(value, 32, 24), (int)field(value, 56, 8), 1);
+        case SCE_GS_XYZ2:
+        case SCE_GS_XYZ3: {
+            sceGsXyz xyz;
+            xyz.value = value;
+            kick(xyz.X, xyz.Y, xyz.Z, gs.fog.F, reg == SCE_GS_XYZ2);
             break;
-        case GS_XYZ2:
-            kick(field(value, 0, 16), field(value, 16, 16), (u_int)(value >> 32), (int)field(gs.fog, 56, 8), 1);
+        }
+        case SCE_GS_FOG: gs.fog.value = value; break;
+        case SCE_GS_TEX0_1: gs.tex0.value = value; break;
+        case SCE_GS_TEX1_1: gs.tex1.value = value; break;
+        case SCE_GS_CLAMP_1: gs.clamp.value = value; break;
+        case SCE_GS_TEXA: gs.texa.value = value; break;
+        case SCE_GS_FOGCOL: gs.fogcol.value = value; break;
+        case SCE_GS_SCISSOR_1:
+            gs.scissor.value = value;
+            if (frame_shift) gs.scissor = shifted_scissor(gs.scissor);
             break;
-        case GS_XYZF3:
-            kick(field(value, 0, 16), field(value, 16, 16), field(value, 32, 24), (int)field(value, 56, 8), 0);
+        case SCE_GS_ALPHA_1: gs.alpha.value = value; break;
+        case SCE_GS_TEST_1: gs.test.value = value; break;
+        case SCE_GS_ZBUF_1: gs.zbuf.value = value; break;
+        case SCE_GS_XYOFFSET_1:
+            gs.xyoffset.value = value;
+            gs.xyoffset.OFX -= frame_shift * GS_SUBPIXELS;
             break;
-        case GS_XYZ3:
-            kick(field(value, 0, 16), field(value, 16, 16), (u_int)(value >> 32), (int)field(gs.fog, 56, 8), 0);
+        case SCE_GS_BITBLTBUF: gs.bitbltbuf.value = value; break;
+        case SCE_GS_TRXPOS: gs.trxpos.value = value; break;
+        case SCE_GS_TRXREG: gs.trxreg.value = value; break;
+        case SCE_GS_TRXDIR: {
+            sceGsTrxdir direction;
+            direction.value = value;
+            if (direction.XDIR == SCE_GS_LOCAL_LOCAL)
+                gs_copy_image(gs.bitbltbuf.SBP, gs.trxpos.SSAX, gs.trxpos.SSAY, gs.bitbltbuf.DBP, gs.trxpos.DSAX,
+                              gs.trxpos.DSAY, gs.trxreg.RRW, gs.trxreg.RRH);
             break;
-        case GS_FOG: gs.fog = value; break;
-        case GS_TEX0: gs.tex0 = value; break;
-        case GS_TEX1: gs.tex1 = value; break;
-        case GS_CLAMP: gs.clamp = value; break;
-        case GS_TEXA: gs.texa = value; break;
-        case GS_FOGCOL: gs.fogcol = value; break;
-        case GS_SCISSOR: gs.scissor = frame_shift ? shifted_scissor(value) : value; break;
-        case GS_ALPHA: gs.alpha = value; break;
-        case GS_TEST: gs.test = value; break;
-        case GS_ZBUF: gs.zbuf = value; break;
-        case GS_XYOFFSET: gs.xyoffset = frame_shift ? value - (u_long)(frame_shift * 16) : value; break;
-        case GS_BITBLTBUF: gs.bitbltbuf = value; break;
-        case GS_TRXPOS: gs.trxpos = value; break;
-        case GS_TRXREG: gs.trxreg = value; break;
-        case GS_TRXDIR:
-            if ((value & 3) == 2)
-                gs_copy_image(field(gs.bitbltbuf, 0, 14), (int)field(gs.trxpos, 0, 11), (int)field(gs.trxpos, 16, 11),
-                              field(gs.bitbltbuf, 32, 14), (int)field(gs.trxpos, 32, 11),
-                              (int)field(gs.trxpos, 48, 11), (int)field(gs.trxreg, 0, 12),
-                              (int)field(gs.trxreg, 32, 12));
-            break;
-        case GS_FRAME:
-            gs.frame = value;
-            break;
+        }
+        case SCE_GS_FRAME_1: gs.frame.value = value; break;
     }
 }
 
-void gs_packed(int reg, const u_int *words) {
+void gs_packed(int reg, const void *qword) {
+    GifPacked packed;
+    memcpy(&packed, qword, sizeof packed);
     switch (reg) {
-        case 0x0: gs_write(GS_PRIM, words[0] & 0x7ff); break;
-        case 0x1:
-            gs.rgbaq = (u_long)(words[0] & 255) | (u_long)(words[1] & 255) << 8 | (u_long)(words[2] & 255) << 16 |
-                       (u_long)(words[3] & 255) << 24;
+        case SCE_GS_PRIM: gs_write(SCE_GS_PRIM, packed.prim.prim); break;
+        case SCE_GS_RGBAQ:
+            gs.rgbaq.value = 0;
+            gs.rgbaq.bytes.red = packed.rgbaq.red;
+            gs.rgbaq.bytes.green = packed.rgbaq.green;
+            gs.rgbaq.bytes.blue = packed.rgbaq.blue;
+            gs.rgbaq.bytes.alpha = packed.rgbaq.alpha;
             break;
-        case 0x2: {
-            gs.st = (u_long)words[0] | (u_long)words[1] << 32;
-            memcpy(&gs.q, &words[2], 4);
+        case SCE_GS_ST:
+            gs.st.S = packed.st.s;
+            gs.st.T = packed.st.t;
+            gs.q = packed.st.q;
             break;
-        }
-        case 0x3: gs.uv = (u_long)(words[0] & 0x3fff) | (u_long)(words[1] & 0x3fff) << 16; break;
-        case 0x4:
-            kick(words[0] & 0xffff, words[1] & 0xffff, (words[2] >> 4) & 0xffffff, (int)((words[3] >> 4) & 255),
-                 !((words[3] >> 15) & 1));
+        case SCE_GS_UV:
+            gs.uv.value = 0;
+            gs.uv.U = packed.uv.u;
+            gs.uv.V = packed.uv.v;
             break;
-        case 0x5: kick(words[0] & 0xffff, words[1] & 0xffff, words[2], (int)field(gs.fog, 56, 8), !((words[3] >> 15) & 1)); break;
-        case 0xa: gs.fog = (u_long)((words[3] >> 4) & 255) << 56; break;
-        case 0xe: gs_write((int)(words[2] & 255), (u_long)words[0] | (u_long)words[1] << 32); break;
+        case SCE_GS_XYZF2:
+            kick(packed.xyzf.x, packed.xyzf.y, packed.xyzf.z, packed.xyzf.f, !packed.xyzf.disable_draw);
+            break;
+        case SCE_GS_XYZ2: kick(packed.xyz.x, packed.xyz.y, packed.xyz.z, gs.fog.F, !packed.xyz.disable_draw); break;
+        case SCE_GS_FOG:
+            gs.fog.value = 0;
+            gs.fog.F = packed.fog.f;
+            break;
+        case SCE_GIF_PACKED_AD: gs_write((int)packed.ad.address, packed.ad.data); break;
     }
 }
-
 int gs_cache_info(int slot, CacheInfo *info) {
     for (int i = 0; i < CACHE_LIMIT; ++i) {
         const CachedTexture *entry = &cache[i];

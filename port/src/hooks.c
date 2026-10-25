@@ -9,9 +9,10 @@ __attribute__((weak)) void port_kernel_yield(void) {}
 
 __attribute__((weak)) void port_debug_replayed(float alpha) { (void)alpha; }
 
-__attribute__((weak)) void port_memory_set(const void *pool, const void *site, int size) {
+__attribute__((weak)) void port_memory_set(const void *pool, const char *file, int line, int size) {
     (void)pool;
-    (void)site;
+    (void)file;
+    (void)line;
     (void)size;
 }
 

@@ -1,18 +1,36 @@
 #include "cdvd.h"
+#include "executable.h"
 #include "split_data.h"
 #include "port_elf.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-_Alignas(16) unsigned char Vu_prog_3dsp[0x6d0];
-_Alignas(16) unsigned char Vu_prog_sdw[0x970];
-_Alignas(16) unsigned char Vu_progmain[0x2d0];
-_Alignas(16) unsigned char Vu_prog0[0x3040];
-_Alignas(16) unsigned char Vu_prog_wtr[0x350];
-_Alignas(16) unsigned char My_dma_start0[0xe0];
-__asm__(".globl My_DrawEnv\n.set My_DrawEnv, My_dma_start0 + 0x50");
-_Alignas(16) unsigned char _gp[16];
+#define MY_DRAW_ENV_START 0x50
+#define SYMBOL_OFFSET_TEXT(offset) #offset
+#define SYMBOL_OFFSET(offset) SYMBOL_OFFSET_TEXT(offset)
+
+enum {
+    VU_PROG_3DSP_SIZE = 0x6d0,
+    VU_PROG_SDW_SIZE = 0x970,
+    VU_PROGMAIN_SIZE = 0x2d0,
+    VU_PROG0_SIZE = 0x3040,
+    VU_PROG_WTR_SIZE = 0x350,
+    MY_DRAW_ENV_SIZE = 0x90,
+    MY_DMA_START0_SIZE = MY_DRAW_ENV_START + MY_DRAW_ENV_SIZE,
+    GP_SIZE = 16,
+    QUADWORD = 16,
+    EXECUTABLE_SIZE_LIMIT = 64 * 1024 * 1024
+};
+
+_Alignas(QUADWORD) unsigned char Vu_prog_3dsp[VU_PROG_3DSP_SIZE];
+_Alignas(QUADWORD) unsigned char Vu_prog_sdw[VU_PROG_SDW_SIZE];
+_Alignas(QUADWORD) unsigned char Vu_progmain[VU_PROGMAIN_SIZE];
+_Alignas(QUADWORD) unsigned char Vu_prog0[VU_PROG0_SIZE];
+_Alignas(QUADWORD) unsigned char Vu_prog_wtr[VU_PROG_WTR_SIZE];
+_Alignas(QUADWORD) unsigned char My_dma_start0[MY_DMA_START0_SIZE];
+__asm__(".globl My_DrawEnv\n.set My_DrawEnv, My_dma_start0 + " SYMBOL_OFFSET(MY_DRAW_ENV_START));
+_Alignas(QUADWORD) unsigned char _gp[GP_SIZE];
 
 static const struct {
     const char *name;
@@ -26,7 +44,7 @@ static const struct {
     {"Vu_progmain", "Vu_prog0", Vu_progmain, sizeof(Vu_progmain), 0},
     {"Vu_prog0", "Vu_prog_wtr", Vu_prog0, sizeof(Vu_prog0), 0},
     {"Vu_prog_wtr", "__data_start", Vu_prog_wtr, sizeof(Vu_prog_wtr), 0},
-    {"My_dma_start0", "My_DrawEnv", My_dma_start0, sizeof(My_dma_start0), 0x90}
+    {"My_dma_start0", "My_DrawEnv", My_dma_start0, sizeof(My_dma_start0), MY_DRAW_ENV_SIZE}
 };
 
 static int span(size_t size, uint64_t offset, uint64_t length) {
@@ -56,7 +74,7 @@ static int symbol(const unsigned char *data, size_t size, const Elf32_Ehdr *head
 
 int port_split_data_init(void) {
     struct sceCdlFILE file;
-    if (!port_cdvd_find("SCES_511.90;1", &file) || file.size < sizeof(Elf32_Ehdr) || file.size > 64 * 1024 * 1024) {
+    if (!port_cdvd_find(PORT_EXECUTABLE_PATH, &file) || file.size < sizeof(Elf32_Ehdr) || file.size > EXECUTABLE_SIZE_LIMIT) {
         fputs("disc executable missing or invalid\n", stderr);
         return 0;
     }

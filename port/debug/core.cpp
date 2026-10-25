@@ -76,7 +76,7 @@ static int shown_target;
 static int shown_width;
 static int shown_height;
 
-static const char *button_names[16] = {"l2", "r2", "l1", "r1", "triangle", "circle", "cross", "square",
+static const char *button_names[] = {"l2", "r2", "l1", "r1", "triangle", "circle", "cross", "square",
                                        "select", "l3", "r3", "start", "up", "right", "down", "left"};
 
 static uint64_t now_ns(void) {
@@ -307,7 +307,7 @@ static void reply_status(int client) {
     reply.client = client;
     reply.status = 200;
     debug_print(&reply, "{\"frame\": %u, \"field\": %llu, \"paused\": %d}", debug_frame_total,
-                (unsigned long long)port_graphics.fields, debug_paused);
+                (unsigned long long)port_fields, debug_paused);
     debug_finish(&reply);
 }
 
@@ -321,13 +321,52 @@ static void release_frame_waiters(void) {
     }
 }
 
+enum { PNG_BIT_DEPTH = 8, PNG_COLOR_RGB = 2, PNG_FILTER_NONE = 0 };
+enum { ZLIB_DEFLATE_32K = 0x78, ZLIB_FASTEST = 0x01, DEFLATE_STORED_LIMIT = UINT16_MAX, ADLER_MODULUS = 65521 };
+static const uint32_t crc_polynomial = 0xedb88320u;
+
+struct png_rgb {
+    uint8_t red, green, blue;
+};
+static_assert(sizeof(png_rgb) == 3, "PNG RGB pixel");
+
+struct png_chunk_head {
+    uint8_t length[4];
+    char type[4];
+};
+static_assert(sizeof(png_chunk_head) == 8, "PNG chunk header");
+
+struct png_ihdr {
+    uint8_t width[4];
+    uint8_t height[4];
+    uint8_t bit_depth;
+    uint8_t color_type;
+    uint8_t compression;
+    uint8_t filter;
+    uint8_t interlace;
+};
+static_assert(sizeof(png_ihdr) == 13, "PNG IHDR chunk");
+
+struct zlib_header {
+    uint8_t method;
+    uint8_t flags;
+};
+static_assert(sizeof(zlib_header) == 2, "zlib header");
+
+struct __attribute__((packed)) deflate_stored {
+    uint8_t final;
+    uint16_t length;
+    uint16_t inverse_length;
+};
+static_assert(sizeof(deflate_stored) == 5, "deflate stored block header");
+
 static uint32_t crc_table[256];
 
 static uint32_t crc32(uint32_t crc, const unsigned char *data, size_t length) {
     if (!crc_table[1])
         for (uint32_t n = 0; n < 256; ++n) {
             uint32_t c = n;
-            for (int k = 0; k < 8; ++k) c = c & 1 ? 0xedb88320u ^ (c >> 1) : c >> 1;
+            for (int k = 0; k < 8; ++k) c = c & 1 ? crc_polynomial ^ (c >> 1) : c >> 1;
             crc_table[n] = c;
         }
     crc = ~crc;
@@ -342,63 +381,62 @@ static void put_be32(unsigned char *out, uint32_t value) {
     out[3] = (unsigned char)value;
 }
 
-static size_t png_chunk(unsigned char *out, const char *type, const unsigned char *data, size_t length) {
-    put_be32(out, (uint32_t)length);
-    memcpy(out + 4, type, 4);
-    if (length) memcpy(out + 8, data, length);
-    put_be32(out + 8 + length, crc32(0, out + 4, length + 4));
-    return length + 12;
+static size_t png_chunk(unsigned char *out, const char *type, const void *data, size_t length) {
+    png_chunk_head head;
+    put_be32(head.length, (uint32_t)length);
+    memcpy(head.type, type, sizeof head.type);
+    memcpy(out, &head, sizeof head);
+    if (length) memcpy(out + sizeof head, data, length);
+    put_be32(out + sizeof head + length, crc32(0, out + offsetof(png_chunk_head, type), sizeof head.type + length));
+    return sizeof head + length + sizeof(uint32_t);
 }
 
 unsigned char *debug_png(const uint32_t *rgba, int width, int height, size_t *length) {
-    size_t row = (size_t)width * 3 + 1;
+    size_t row = 1 + (size_t)width * sizeof(png_rgb);
     size_t raw = row * (size_t)height;
-    size_t blocks = (raw + 65534) / 65535;
-    size_t deflated = 2 + raw + blocks * 5 + 4;
+    size_t blocks = (raw + DEFLATE_STORED_LIMIT - 1) / DEFLATE_STORED_LIMIT;
+    size_t deflated = sizeof(zlib_header) + raw + blocks * sizeof(deflate_stored) + sizeof(uint32_t);
     unsigned char *image = (unsigned char *)malloc(raw);
     for (int y = 0; y < height; ++y) {
         unsigned char *line = image + row * (size_t)y;
-        line[0] = 0;
+        line[0] = PNG_FILTER_NONE;
+        png_rgb *pixels = (png_rgb *)(line + 1);
         for (int x = 0; x < width; ++x) {
             uint32_t pixel = rgba[(size_t)y * (size_t)width + (size_t)x];
-            line[1 + x * 3] = (unsigned char)pixel;
-            line[2 + x * 3] = (unsigned char)(pixel >> 8);
-            line[3 + x * 3] = (unsigned char)(pixel >> 16);
+            pixels[x] = {(uint8_t)pixel, (uint8_t)(pixel >> 8), (uint8_t)(pixel >> 16)};
         }
     }
     unsigned char *zlib = (unsigned char *)malloc(deflated);
-    size_t at = 0;
-    zlib[at++] = 0x78;
-    zlib[at++] = 0x01;
+    const zlib_header header = {ZLIB_DEFLATE_32K, ZLIB_FASTEST};
+    memcpy(zlib, &header, sizeof header);
+    size_t at = sizeof header;
     uint32_t a = 1, b = 0;
-    for (size_t offset = 0; offset < raw; offset += 65535) {
-        size_t size = raw - offset < 65535 ? raw - offset : 65535;
-        zlib[at++] = offset + size == raw ? 1 : 0;
-        zlib[at++] = (unsigned char)size;
-        zlib[at++] = (unsigned char)(size >> 8);
-        zlib[at++] = (unsigned char)~size;
-        zlib[at++] = (unsigned char)(~size >> 8);
+    for (size_t offset = 0; offset < raw; offset += DEFLATE_STORED_LIMIT) {
+        size_t size = raw - offset < DEFLATE_STORED_LIMIT ? raw - offset : DEFLATE_STORED_LIMIT;
+        const deflate_stored stored = {(uint8_t)(offset + size == raw), (uint16_t)size, (uint16_t)~size};
+        memcpy(zlib + at, &stored, sizeof stored);
+        at += sizeof stored;
         memcpy(zlib + at, image + offset, size);
         at += size;
         for (size_t i = 0; i < size; ++i) {
-            a = (a + image[offset + i]) % 65521;
-            b = (b + a) % 65521;
+            a = (a + image[offset + i]) % ADLER_MODULUS;
+            b = (b + a) % ADLER_MODULUS;
         }
     }
     put_be32(zlib + at, (b << 16) | a);
-    at += 4;
+    at += sizeof(uint32_t);
     free(image);
-    unsigned char *png = (unsigned char *)malloc(8 + 25 + at + 12 + 12);
     static const unsigned char signature[8] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'};
-    memcpy(png, signature, 8);
-    unsigned char header[13];
-    put_be32(header, (uint32_t)width);
-    put_be32(header + 4, (uint32_t)height);
-    header[8] = 8;
-    header[9] = 2;
-    header[10] = header[11] = header[12] = 0;
-    size_t out = 8;
-    out += png_chunk(png + out, "IHDR", header, 13);
+    size_t chunk_overhead = sizeof(png_chunk_head) + sizeof(uint32_t);
+    unsigned char *png = (unsigned char *)malloc(sizeof signature + 3 * chunk_overhead + sizeof(png_ihdr) + at);
+    memcpy(png, signature, sizeof signature);
+    png_ihdr ihdr = {};
+    put_be32(ihdr.width, (uint32_t)width);
+    put_be32(ihdr.height, (uint32_t)height);
+    ihdr.bit_depth = PNG_BIT_DEPTH;
+    ihdr.color_type = PNG_COLOR_RGB;
+    size_t out = sizeof signature;
+    out += png_chunk(png + out, "IHDR", &ihdr, sizeof ihdr);
     out += png_chunk(png + out, "IDAT", zlib, at);
     out += png_chunk(png + out, "IEND", NULL, 0);
     free(zlib);
@@ -523,7 +561,7 @@ static int command_status(const DebugArgs *args, DebugReply *reply) {
     float frame_ms = average_frame_ms(50);
     debug_print(reply, "{\"frame\": %u, \"field\": %llu, \"fps\": %.2f, \"frame_ms\": %.2f, \"paused\": %d, "
                        "\"speed\": %.2f, \"debug_flag\": %d, \"loop\": %d",
-                debug_frame_total, (unsigned long long)port_graphics.fields, frame_ms > 0 ? 1000.0f / frame_ms : 0.0f,
+                debug_frame_total, (unsigned long long)port_fields, frame_ms > 0 ? 1000.0f / frame_ms : 0.0f,
                 frame_ms, debug_paused, debug_speed, DebugFlag, GetNowLoopNo());
     debug_scenario_status(reply);
     debug_print(reply, "}");
@@ -623,7 +661,7 @@ static uint16_t parse_buttons(const char *text, int *bad) {
     snprintf(copy, sizeof copy, "%s", text);
     for (char *name = strtok(copy, ",+"); name; name = strtok(NULL, ",+")) {
         int found = 0;
-        for (int i = 0; i < 16; ++i)
+        for (int i = 0; i < (int)(sizeof button_names / sizeof button_names[0]); ++i)
             if (!strcmp(name, button_names[i])) {
                 buttons |= (uint16_t)(1u << i);
                 found = 1;
@@ -857,7 +895,7 @@ extern "C" void debug_input(struct port_input_state *state) {
 
 static void record_frame(uint64_t exit_time) {
     DebugFrame *frame = &debug_frames[debug_frame_total % DEBUG_HISTORY];
-    frame->field = port_graphics.fields;
+    frame->field = port_fields;
     frame->frame = debug_frame_total;
     frame->frame_ms = previous_enter ? (float)(time_enter - previous_enter) / 1e6f : 0.0f;
     frame->game_ms = time_exit ? (float)((time_enter - time_exit) - (wait_enter - wait_exit)) / 1e6f : 0.0f;

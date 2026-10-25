@@ -105,32 +105,42 @@ def capture():
     return shot["png"]
 
 
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+PNG_CHUNK_HEAD = struct.Struct(">I4s")
+PNG_CHUNK_CRC = struct.Struct(">I")
+PNG_IHDR = struct.Struct(">IIBBBBB")
+PNG_BIT_DEPTH = 8
+PNG_COLOR_RGB = 2
+PNG_FILTER_NONE = b"\0"
+RGB_BYTES = 3
+
+
 def decode_png(data):
-    position = 8
+    position = len(PNG_SIGNATURE)
     pixels = b""
     while position < len(data):
-        length, kind = struct.unpack(">I4s", data[position:position + 8])
-        body = data[position + 8:position + 8 + length]
+        length, kind = PNG_CHUNK_HEAD.unpack_from(data, position)
+        body = data[position + PNG_CHUNK_HEAD.size:position + PNG_CHUNK_HEAD.size + length]
         if kind == b"IHDR":
-            width, height = struct.unpack(">II", body[:8])
+            width, height, *_ = PNG_IHDR.unpack(body[:PNG_IHDR.size])
         if kind == b"IDAT":
             pixels += body
-        position += 12 + length
+        position += PNG_CHUNK_HEAD.size + length + PNG_CHUNK_CRC.size
     raw = zlib.decompress(pixels)
-    stride = width * 3 + 1
-    if any(raw[row * stride] for row in range(height)):
+    stride = width * RGB_BYTES + len(PNG_FILTER_NONE)
+    if any(raw[row * stride:row * stride + 1] != PNG_FILTER_NONE for row in range(height)):
         sys.exit("only the unfiltered PNGs the debug API writes are supported")
-    return width, height, b"".join(raw[row * stride + 1:(row + 1) * stride] for row in range(height))
+    return width, height, b"".join(raw[row * stride + len(PNG_FILTER_NONE):(row + 1) * stride] for row in range(height))
 
 
 def encode_png(width, height, rgb):
     def chunk(kind, body):
-        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+        return PNG_CHUNK_HEAD.pack(len(body), kind) + body + PNG_CHUNK_CRC.pack(zlib.crc32(kind + body))
 
-    stride = width * 3
-    raw = b"".join(b"\0" + rgb[row * stride:(row + 1) * stride] for row in range(height))
-    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
-    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+    stride = width * RGB_BYTES
+    raw = b"".join(PNG_FILTER_NONE + rgb[row * stride:(row + 1) * stride] for row in range(height))
+    header = PNG_IHDR.pack(width, height, PNG_BIT_DEPTH, PNG_COLOR_RGB, 0, 0, 0)
+    return PNG_SIGNATURE + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
 
 
 def compare(actual, expected, tolerance):

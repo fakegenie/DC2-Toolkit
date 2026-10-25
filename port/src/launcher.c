@@ -1,5 +1,6 @@
 #include "launcher.h"
 #include "cdvd.h"
+#include "executable.h"
 #include "icon.h"
 #include "port_mod.h"
 #include "port_overrides.h"
@@ -257,7 +258,7 @@ static void check_disc(const char *path) {
     snprintf(disc_path, sizeof disc_path, "%s", path);
     disc_state = DISC_NONE;
     if (!*disc_path) return;
-    disc_state = port_cdvd_init(disc_path) && port_cdvd_find("SCES_511.90;1", &boot) ? DISC_GOOD : DISC_WRONG;
+    disc_state = port_cdvd_init(disc_path) && port_cdvd_find(PORT_EXECUTABLE_PATH, &boot) ? DISC_GOOD : DISC_WRONG;
     port_cdvd_close();
     if (disc_state == DISC_GOOD && page == PAGE_MAIN) menu_selected = MENU_PLAY;
 }

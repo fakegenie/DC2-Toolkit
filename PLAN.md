@@ -179,11 +179,10 @@ What the fishing work kept needing, in the order to build it:
    - macOS links the image at `0x3E91_0000_0000`, so a host pointer's high half is a value PS2
      data never holds (at the old `0x1_0000_0000` any `{n, 1}` int pair looked like a pointer and
      got moved, which showed up as seams on walls).
-   - Data the engine reaches through 32-bit PS2 addresses sits in its own pinned segment,
-     `__PS2RAM` (engine files plus `memory.c`'s arena and `split_data.c`); restored port files'
-     data sits in `__PS2PORT` and the rest of the port's data in `__DATA`, all pinned
-     (`tools/port.py` `SEGMENTS`, `ENGINE_PORT_FILES`, `RESTORED_PORT_FILES`). Port changes
-     never move engine memory; a build that does is refused unless `load ... force=1`.
+   - Engine data sits in its own segment, `__PS2RAM`; restored port files' data (with
+     `memory.c`'s arena and `split_data.c`) sits in `__PS2PORT` and the rest of the port's data in
+     `__DATA` (`tools/port.py` `SEGMENTS`, `RESTORED_PORT_FILES`). States keep only the first
+     two, and engine data moves by symbol like any other.
    - Functions that can be on a game stack when a state is taken (`mgEndFrame`,
      `port_mods_frame_exit`, `debug_frame_exit`, `debug_savestate_frame`, `port_state_frame`) are
      `STATE_RESUMABLE` (unoptimised), as the engine and `kernel.c` already are, so no register
@@ -552,18 +551,19 @@ does the same and is kept in step with `native.rs` (fix 7):
 
 ### Choices
 
-- **64-bit, with the game's addresses in a 32-bit window.** Retail data on the disc and in
-  memory holds 32-bit pointers, and the game masks addresses with `0x0FFFFFFF`. On macOS the
-  binary places its data, BSS and a 768 MB zero-fill segment at `0x100000000` and above,
-  re-executes itself once with ASLR off so they land there, and mirrors the window at `+0x20000000`
-  and `+0x30000000` for the uncached segments; the scratchpad is a 16 KB segment of its own.
-  Linux uses a memfd at low addresses. Struct fields that held a PS2 pointer are
-  `ps2_pointer<T>`. Removing the window would mean changing every loader that fixes up pointers
-  in place, so it stays.
+- **64-bit, with no PS2 addresses.** No code reaches memory through a PS2 address: hardware
+  registers are port functions (`port_timer_lines`, `port_display_field`), and the engine writes
+  no VIF, GIF or DMA words: every Draw goes through a native override, `mgVif1Packet` is only a
+  cursor, and the dead packet builders are stripped (`UNUSED_DEFINITIONS` in `tools/port.py`).
+  Retail records keep their size:
+  the DATA.HD4 index is read through `name_offset`, and the 4-byte pointers in photo records and
+  `mgMEMORY_BLOCK` are `relative_pointer<T>`, an offset from the field to its target, which
+  always lies in the same object or heap. On macOS the binary still re-executes itself once with
+  ASLR off, so states load without moving pointers.
 - **Upstream's `PORT` macro and headers**, with `-DPORT -DPAL`; `port.h` undoes the NTSC timing
   `PORT` alone selects.
 - **The MWCC asm**: 54 functions are guarded out under `PORT`. 44 come from ChronicleTwo's four
-  files; the port writes mg_frame's 7, `ClipBoxXZ`, `PlaneNormalXZ` and `SendDMA`.
+  files; the port writes mg_frame's 7, `ClipBoxXZ` and `PlaneNormalXZ`, and `SendDMA` is stripped.
 - **Shaders** are GLSL, compiled ahead of time to SPIR-V and Metal source by
   `tools/port_shaders.py` (`spirv-cross --msl-decoration-binding`, or Metal buffer slots follow
   use order).
@@ -579,7 +579,7 @@ does the same and is kept in step with `native.rs` (fix 7):
 | `main.c`, `memory.c`, `kernel.c`, `runtime.c` | start, the address window, the engine's arena, EE threads as fibers, semaphores, VBlank, MW runtime | 630 |
 | `cdvd.c`, `executable.c`, `split_data.c`, `devices.c` | the ISO, `cdrom0:` files, the executable's symbols, split data, SIF devices | 590 |
 | `render.c`, `render.h`, `port/shaders` | SDL_GPU: targets, textures, pipelines, batching, present | 1,040 |
-| `draw.cpp`, `mg_drawprim.cpp`, `mglib.cpp`, `prespr.cpp`, `packets.c`, `graphics.c`, `dma.cpp`, `present.c` | the GS state machine, the texture cache, 2D drawing, frame and display | 1,460 |
+| `draw.cpp`, `mg_drawprim.cpp`, `mg_texture.cpp`, `mglib.cpp`, `prespr.cpp`, `gs.cpp`, `packets.c`, `graphics.c`, `dma.cpp`, `present.c` | the GS state machine, the texture cache, 2D drawing, frame and display | 1,630 |
 | `mg_visual.cpp`, `visualmotion.cpp`, `mg_sprite.cpp`, `mg_shadow.cpp`, `water.cpp` | models, 3D sprites, shadows, water | 920 |
 | `audio.c`, `midi.c`, `spu2.c`, `sound.cpp`, `ezbgm.cpp`, `iop.c` | the sound library and the `CSound` replacements | 1,560 |
 | `input.c`, `memory_card.c`, `movie.cpp`, `movie_decode.c` | pads, cards, movies | 1,000 |

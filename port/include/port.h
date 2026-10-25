@@ -3,7 +3,6 @@
 #include <new>
 #include <strings.h>
 #include <sys/types.h>
-#include "port_window.h"
 
 #define PORT_INIT(...) = __VA_ARGS__
 #define PORT_RETURN(...) return __VA_ARGS__
@@ -36,16 +35,13 @@ constexpr int PORT_MENU_QUADWORDS = 2 * 200000;
 #undef PAL_TIMING
 #define PAL_TIMING(pal, ntsc) pal
 
-template <typename T> struct ps2_pointer {
-    unsigned int address;
-    operator T *() const { return address ? reinterpret_cast<T *>(PORT_WINDOW + address) : nullptr; }
+template <typename T> struct relative_pointer {
+    int offset;
+    operator T *() const { return offset ? (T *)((const char *)this + offset) : nullptr; }
     T *operator->() const { return *this; }
-    ps2_pointer &operator=(T *pointer) {
-        address = pointer ? static_cast<unsigned int>(reinterpret_cast<__UINTPTR_TYPE__>(pointer) - PORT_WINDOW) : 0u;
+    relative_pointer &operator=(T *pointer) {
+        offset = pointer ? (int)((const char *)pointer - (const char *)this) : 0;
         return *this;
     }
-    ps2_pointer &operator+=(__PTRDIFF_TYPE__ count) {
-        address += static_cast<unsigned int>(count * sizeof(T));
-        return *this;
-    }
+    relative_pointer &operator=(const relative_pointer &other) { return *this = (T *)other; }
 };

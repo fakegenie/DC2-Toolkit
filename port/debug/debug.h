@@ -114,6 +114,14 @@ void debug_watch_panel(void);
 void debug_blackbox_panel(void);
 void debug_reload_bar(void);
 void debug_helpers_panel(void);
+enum {
+    DEBUG_BUTTON_L2 = 1 << 0, DEBUG_BUTTON_R2 = 1 << 1, DEBUG_BUTTON_L1 = 1 << 2, DEBUG_BUTTON_R1 = 1 << 3,
+    DEBUG_BUTTON_TRIANGLE = 1 << 4, DEBUG_BUTTON_CIRCLE = 1 << 5, DEBUG_BUTTON_CROSS = 1 << 6,
+    DEBUG_BUTTON_SQUARE = 1 << 7, DEBUG_BUTTON_SELECT = 1 << 8, DEBUG_BUTTON_L3 = 1 << 9, DEBUG_BUTTON_R3 = 1 << 10,
+    DEBUG_BUTTON_START = 1 << 11, DEBUG_BUTTON_UP = 1 << 12, DEBUG_BUTTON_RIGHT = 1 << 13,
+    DEBUG_BUTTON_DOWN = 1 << 14, DEBUG_BUTTON_LEFT = 1 << 15
+};
+
 void debug_hold(uint16_t buttons, int frames);
 void debug_start(void);
 int debug_event(const void *event);

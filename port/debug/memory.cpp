@@ -4,13 +4,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <cxxabi.h>
-#include <dlfcn.h>
 
 enum { SITE_LIMIT = 1024, POOL_LIMIT = 16384 };
 
 typedef struct {
-    const void *site;
+    const char *file;
+    int line;
     int size;
     int peak;
     int peak_size;
@@ -37,32 +36,28 @@ static Pool *pool_of(const void *pool) {
     return NULL;
 }
 
-static int site_index(const void *site) {
+static int site_index(const char *file, int line) {
     for (int i = 1; i < site_count; ++i)
-        if (sites[i].site == site) return i;
+        if (sites[i].line == line && !strcmp(sites[i].file, file)) return i;
     if (site_count == SITE_LIMIT) return 0;
-    sites[site_count].site = site;
+    sites[site_count].file = file;
+    sites[site_count].line = line;
     return site_count++;
 }
 
-static void site_name(const void *site, char *text, size_t size) {
-    Dl_info info;
-    if (!site || !dladdr(site, &info) || !info.dli_sname) {
-        snprintf(text, size, "%p", site);
+static void site_name(const Site *site, char *text, size_t size) {
+    if (!site->file) {
+        snprintf(text, size, "unknown");
         return;
     }
-    int status = 0;
-    char *readable = abi::__cxa_demangle(info.dli_sname, NULL, NULL, &status);
-    snprintf(text, size, "%s+0x%lx", status == 0 ? readable : info.dli_sname,
-             (unsigned long)((const char *)site - (const char *)info.dli_saddr));
-    free(readable);
+    snprintf(text, size, "%s:%d", site->file, site->line);
 }
 
-extern "C" void port_memory_set(const void *pool, const void *site, int size) {
+extern "C" void port_memory_set(const void *pool, const char *file, int line, int size) {
     Pool *slot = pool_of(pool);
     if (!slot) return;
     slot->pool = pool;
-    slot->site = site_index(site);
+    slot->site = site_index(file, line);
     if (size > sites[slot->site].size) sites[slot->site].size = size;
 }
 
@@ -77,7 +72,7 @@ extern "C" void port_memory_use(const void *pool, int used, int size) {
     if (used < size) return;
     if (!site->overflows++) {
         char name[256];
-        site_name(site->site, name, sizeof name);
+        site_name(site, name, sizeof name);
         fprintf(stderr, "memory over %d/%d in the pool set up at %s\n", used, size, name);
         if (getenv("DC2TK_MEMORY_STRICT")) abort();
     }
@@ -107,20 +102,18 @@ static int command_memory(const DebugArgs *args, DebugReply *reply) {
         Site *site = &sites[order[i]];
         if (!site->peak_size && !(seen && order[i])) continue;
         if (site->peak_size && (double)site->peak / site->peak_size < least && !site->overflows) continue;
-        Dl_info info;
         char name[256];
-        site_name(site->site, name, sizeof name);
-        long offset = site->site && dladdr(site->site, &info) ? (long)((const char *)site->site - (const char *)info.dli_fbase) : 0;
+        site_name(site, name, sizeof name);
         debug_print(reply, "%s{\"site\": ", shown++ ? ", " : "");
-        debug_print_string(reply, order[i] ? name : "unknown");
-        debug_print(reply, ", \"offset\": \"0x%lx\", \"size\": %d, \"peak\": %d, \"peak_size\": %d, \"full\": %.3f, "
+        debug_print_string(reply, name);
+        debug_print(reply, ", \"size\": %d, \"peak\": %d, \"peak_size\": %d, \"full\": %.3f, "
                            "\"overflows\": %d, \"worst\": %d, \"worst_size\": %d}",
-                    offset, site->size, site->peak, site->peak_size, site->peak_size ? (double)site->peak / site->peak_size : 0.0, site->overflows,
+                    site->size, site->peak, site->peak_size, site->peak_size ? (double)site->peak / site->peak_size : 0.0, site->overflows,
                     site->worst, site->worst_size);
     }
     debug_print(reply, "]}");
     if (debug_arg_int(args, "reset", 0))
-        for (int i = 0; i < site_count; ++i) sites[i] = (Site){sites[i].site, sites[i].size, 0, 0, 0, 0, 0};
+        for (int i = 0; i < site_count; ++i) sites[i] = (Site){sites[i].file, sites[i].line, sites[i].size, 0, 0, 0, 0, 0};
     return 0;
 }
 

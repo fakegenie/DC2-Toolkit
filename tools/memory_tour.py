@@ -152,7 +152,7 @@ def collect():
         return
     seen = load_seen()
     for pool in reply["pools"]:
-        known = seen.setdefault(pool["offset"], {"site": pool["site"], "full": 0.0, "overflows": 0, "size": 0})
+        known = seen.setdefault(pool["site"], {"full": 0.0, "overflows": 0, "size": 0})
         known["full"] = max(known["full"], pool["full"])
         known["overflows"] += pool["overflows"]
         known["size"] = max(known["size"], pool["size"])
@@ -332,31 +332,20 @@ def setup_sites():
 
 
 def seen_lines():
-    offsets = list(load_seen())
-    if not offsets:
-        return set()
-    addresses = [hex(0x100000000 + int(offset, 16) - 1) for offset in offsets]
-    output = subprocess.run(["atos", "-o", str(BINARY), "-l", "0x100000000", *addresses], capture_output=True,
-                            text=True).stdout
-    return {match.group(1) for match in re.finditer(r"\(([^()]+:\d+)\)", output)}
+    return {site for site in load_seen() if site != "unknown"}
 
 
 def tour_untested():
     reached = seen_lines()
     reached_files = {line.split(":")[0] for line in reached}
-    untested = []
-    for site in setup_sites():
-        name, number = site.split(":")
-        near = any(line.split(":")[0] == name and abs(int(line.split(":")[1]) - int(number)) <= 2 for line in reached)
-        if not near:
-            untested.append(site)
+    untested = [site for site in setup_sites() if site not in reached]
     results["untested"] = untested
     print(json.dumps({"untested": len(untested), "reached_files": len(reached_files)}), flush=True)
 
 
 def report():
     seen = load_seen()
-    results["fullest"] = sorted(({"offset": offset, **pool} for offset, pool in seen.items() if pool.get("used")),
+    results["fullest"] = sorted(({"site": site, **pool} for site, pool in seen.items() if pool.get("used")),
                                 key=lambda pool: -pool["full"])[:30]
     (OUT / "report.json").write_text(json.dumps(results, indent=1))
     print(f"{len(results['visits'])} visits, {len(results['overflows'])} overflows, {len(results['faults'])} faults, "

@@ -73,28 +73,28 @@ static const int scales[] = {1, 2, 3, 4};
 static const int sample_counts[] = {1, 2, 4, 8};
 
 static void describe(const RenderState &state, Described *text) {
-    int a = (int)(state.alpha & 3), b = (int)((state.alpha >> 2) & 3), c = (int)((state.alpha >> 4) & 3),
-        d = (int)((state.alpha >> 6) & 3);
+    const RenderBlending &blending = state.blending;
+    const RenderTests &tests = state.tests;
     if (!state.blend) snprintf(text->blend, sizeof text->blend, "off");
-    else if (c == 2)
-        snprintf(text->blend, sizeof text->blend, "(%s - %s) * %u/128 + %s", blend_colors[a], blend_colors[b],
-                 (unsigned)((state.alpha >> 32) & 255), blend_colors[d]);
+    else if (blending.c == RENDER_BLEND_FIX)
+        snprintf(text->blend, sizeof text->blend, "(%s - %s) * %u/128 + %s", blend_colors[blending.a],
+                 blend_colors[blending.b], (unsigned)blending.fix, blend_colors[blending.d]);
     else
-        snprintf(text->blend, sizeof text->blend, "(%s - %s) * %s + %s", blend_colors[a], blend_colors[b],
-                 blend_alphas[c], blend_colors[d]);
-    if (!(state.test & 1)) snprintf(text->alpha_test, sizeof text->alpha_test, "off");
+        snprintf(text->blend, sizeof text->blend, "(%s - %s) * %s + %s", blend_colors[blending.a],
+                 blend_colors[blending.b], blend_alphas[blending.c], blend_colors[blending.d]);
+    if (!tests.alpha_test) snprintf(text->alpha_test, sizeof text->alpha_test, "off");
     else
-        snprintf(text->alpha_test, sizeof text->alpha_test, "%s ref %u fail %s", alpha_tests[(state.test >> 1) & 7],
-                 (unsigned)((state.test >> 4) & 255), alpha_fails[(state.test >> 12) & 3]);
-    if ((state.test >> 14) & 1) {
+        snprintf(text->alpha_test, sizeof text->alpha_test, "%s ref %u fail %s", alpha_tests[tests.alpha_method],
+                 (unsigned)tests.alpha_reference, alpha_fails[tests.alpha_fail]);
+    if (tests.destination_test) {
         size_t used = strlen(text->alpha_test);
         snprintf(text->alpha_test + used, sizeof text->alpha_test - used, ", destination alpha %d",
-                 (int)((state.test >> 15) & 1));
+                 (int)tests.destination_mode);
     }
-    if (!((state.test >> 16) & 1)) snprintf(text->depth, sizeof text->depth, "off, write %d", state.depth_write);
-    else snprintf(text->depth, sizeof text->depth, "%s, write %d", depth_tests[(state.test >> 17) & 3], state.depth_write);
-    snprintf(text->texa, sizeof text->texa, "%d aem %d ta0 %u ta1 %u", state.texa, (int)((state.texa_register >> 15) & 1),
-             (unsigned)(state.texa_register & 255), (unsigned)((state.texa_register >> 32) & 255));
+    if (!tests.depth_test) snprintf(text->depth, sizeof text->depth, "off, write %d", state.depth_write);
+    else snprintf(text->depth, sizeof text->depth, "%s, write %d", depth_tests[tests.depth_method], state.depth_write);
+    snprintf(text->texa, sizeof text->texa, "%d aem %d ta0 %u ta1 %u", state.texa, (int)state.expansion.aem,
+             (unsigned)state.expansion.ta0, (unsigned)state.expansion.ta1);
 }
 
 static void print_draw(DebugReply *reply, int index) {
@@ -119,12 +119,12 @@ static void print_draw(DebugReply *reply, int index) {
                 text.alpha_test, text.depth, text.texa);
     debug_print(reply, ", \"fog\": %d, \"fog_color\": %u, \"decal\": %d, \"vertex_alpha\": %d, \"linear\": %d, \"repeat\": [%d, %d]",
                 s.fog, s.fog_color, s.decal, s.vertex_alpha, s.linear, s.repeat_u, s.repeat_v);
-    debug_print(reply, ", \"color_mask\": %u, \"scissor\": [%d, %d, %d, %d]", s.color_mask, s.scissor[0], s.scissor[1],
-                s.scissor[2], s.scissor[3]);
+    debug_print(reply, ", \"color_mask\": %u, \"scissor\": [%d, %d, %d, %d]", s.color_mask, s.scissor.left, s.scissor.top,
+                s.scissor.right, s.scissor.bottom);
     if (r.source == RENDER_SOURCE_MESH) {
         const MeshUniforms &u = r.uniforms;
         debug_print(reply, ", \"flags\": [%u, %u, %u, %u], \"ambient\": [%.1f, %.1f, %.1f, %.1f], \"object_color\": [%.1f, %.1f, %.1f, %.1f]",
-                    u.flags[0], u.flags[1], u.flags[2], u.flags[3], u.ambient[0], u.ambient[1], u.ambient[2], u.ambient[3],
+                    u.flags.program, u.flags.face_type, u.flags.specular_passes, u.flags.bone_set, u.ambient[0], u.ambient[1], u.ambient[2], u.ambient[3],
                     u.object_color[0], u.object_color[1], u.object_color[2], u.object_color[3]);
         debug_print(reply, ", \"diffuse\": [%.3f, %.3f, %.3f, %.3f], \"light_color\": [", u.diffuse[0], u.diffuse[1],
                     u.diffuse[2], u.diffuse[3]);
@@ -134,7 +134,7 @@ static void print_draw(DebugReply *reply, int index) {
         for (int k = 0; k < 4; ++k)
             debug_print(reply, "%s[%.1f, %.1f, %.1f, %.1f]", k ? ", " : "", u.point_color[k][0], u.point_color[k][1],
                         u.point_color[k][2], u.point_light[k][3]);
-        debug_print(reply, "], \"fog_params\": [%.3f, %.3f, %.3f, %.3f]", u.fog[0], u.fog[1], u.fog[2], u.fog[3]);
+        debug_print(reply, "], \"fog_params\": [%.3f, %.3f, %.3f, %.3f]", u.fog.offset, u.fog.near_value, u.fog.far_value, u.fog.scale);
     }
     if (r.source != RENDER_SOURCE_MESH)
         debug_print(reply, ", \"bounds\": [%.1f, %.1f, %.1f, %.1f]", r.bounds[0], r.bounds[1], r.bounds[2], r.bounds[3]);
@@ -458,7 +458,7 @@ static void draw_details(const Draw &draw) {
                 s.repeat_u, s.repeat_v);
     ImGui::Text("fog %d  color %06x  color mask %08x  cull %s", s.fog, s.fog_color, s.color_mask,
                 r.source == RENDER_SOURCE_MESH ? culls[r.cull % 3] : "none");
-    ImGui::Text("scissor %d %d %d %d", s.scissor[0], s.scissor[1], s.scissor[2], s.scissor[3]);
+    ImGui::Text("scissor %d %d %d %d", s.scissor.left, s.scissor.top, s.scissor.right, s.scissor.bottom);
     if (r.source != RENDER_SOURCE_MESH)
         ImGui::Text("bounds %.1f %.1f - %.1f %.1f", r.bounds[0], r.bounds[1], r.bounds[2], r.bounds[3]);
     ImGui::Text("GPU command %d%s  render pass %d", r.command, r.merged ? " (merged)" : "", r.pass);

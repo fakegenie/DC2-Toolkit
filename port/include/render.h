@@ -7,12 +7,45 @@ extern "C" {
 
 enum { RENDER_POINTS, RENDER_LINES, RENDER_TRIANGLES };
 
+enum {
+    MESH_CLIP = 0x001, MESH_SCISSOR = 0x002, MESH_CULL = 0x004, MESH_REAL = 0x008, MESH_POINT_LIGHTS = 0x010,
+    MESH_UNLIT = 0x020, MESH_BLEND = 0x040, MESH_COLOR_ADD = 0x080, MESH_REF_SPHERE = 0x100
+};
+
+typedef struct {
+    float low_u;
+    float low_v;
+    float high_u;
+    float high_v;
+} RenderTexelLimits;
+
+typedef struct {
+    float offset;
+    float near_value;
+    float far_value;
+    float scale;
+} RenderFogCurve;
+
+typedef struct {
+    float scale_x;
+    float offset_x;
+    float scale_y;
+    float offset_y;
+} RenderScreenMapping;
+
+typedef struct {
+    uint32_t program;
+    uint32_t face_type;
+    uint32_t specular_passes;
+    uint32_t bone_set;
+} RenderMeshFlags;
+
 typedef struct {
     float x, y, z;
     float u, v;
     uint8_t r, g, b, a;
     float fog;
-    float limits[4];
+    RenderTexelLimits limits;
 } RenderVertex;
 
 typedef struct {
@@ -37,14 +70,58 @@ typedef struct {
     float specular[4];
     float point_light[4][4];
     float point_color[4][4];
-    float fog[4];
-    float screen[4];
-    float depth[4];
-    float limits[4];
-    uint32_t flags[4];
+    RenderFogCurve fog;
+    RenderScreenMapping screen;
+    float depth_scale;
+    float texture_scale_u;
+    float texture_scale_v;
+    float unused;
+    RenderTexelLimits limits;
+    RenderMeshFlags flags;
 } MeshUniforms;
 
+enum { RENDER_BONE_SLOTS = 32 };
+
+typedef struct {
+    float rows[3][4];
+} RenderBone;
+
 enum { RENDER_CULL_NONE, RENDER_CULL_FRONT, RENDER_CULL_BACK };
+
+typedef struct {
+    int left;
+    int top;
+    int right;
+    int bottom;
+} RenderRectangle;
+
+enum { RENDER_BLEND_SOURCE, RENDER_BLEND_DESTINATION, RENDER_BLEND_ZERO, RENDER_BLEND_FIX = RENDER_BLEND_ZERO };
+enum { RENDER_DEPTH_NEVER, RENDER_DEPTH_ALWAYS, RENDER_DEPTH_GEQUAL, RENDER_DEPTH_GREATER };
+
+typedef struct {
+    uint8_t a;
+    uint8_t b;
+    uint8_t c;
+    uint8_t d;
+    uint8_t fix;
+} RenderBlending;
+
+typedef struct {
+    uint8_t alpha_test;
+    uint8_t alpha_method;
+    uint8_t alpha_reference;
+    uint8_t alpha_fail;
+    uint8_t destination_test;
+    uint8_t destination_mode;
+    uint8_t depth_test;
+    uint8_t depth_method;
+} RenderTests;
+
+typedef struct {
+    uint8_t ta0;
+    uint8_t aem;
+    uint8_t ta1;
+} RenderExpansion;
 
 typedef struct {
     int texture;
@@ -56,14 +133,14 @@ typedef struct {
     int depth_read;
     int texa;
     int blend;
-    uint64_t alpha;
-    uint64_t test;
-    uint64_t texa_register;
+    RenderBlending blending;
+    RenderTests tests;
+    RenderExpansion expansion;
     int fog;
     uint32_t fog_color;
     int depth_write;
     uint32_t color_mask;
-    int scissor[4];
+    RenderRectangle scissor;
 } RenderState;
 
 enum { RENDER_SOURCE_GS, RENDER_SOURCE_MESH, RENDER_SOURCE_SHADOW, RENDER_SOURCE_SPRITE, RENDER_SOURCE_WATER,
@@ -148,16 +225,24 @@ void render_copy(int source, int source_x, int source_y, int destination, int de
 void render_bind(int target);
 int render_bound(void);
 void render_draw(const RenderState *state, int topology, const RenderVertex *vertices, int count);
-void render_mesh(const RenderState *state, int cull, const MeshUniforms *uniforms, const float *bones,
+void render_mesh(const RenderState *state, int cull, const MeshUniforms *uniforms, const RenderBone *bones,
                  const MeshVertex *vertices, int count, int resident);
 int render_mesh_store(const MeshVertex *vertices, int count);
 void render_mesh_forget(int first, int count);
-void render_shadow_place(RenderVertex *vertex, const float *clip, const float *screen, const float *mapping, float depth);
-enum { SHADOW_PRISM = 4096 };
+void render_shadow_place(RenderVertex *vertex, const float *clip, const float *screen, const RenderScreenMapping *mapping,
+                         float depth);
+typedef struct {
+    float position[3];
+    int cast_side;
+    int back;
+    int index;
+    int prism;
+} ShadowPoint;
 int render_shadow_setup(const void *key, const float *world, const float *camera, const float *light, const float *screen,
-                        const float *mapping, float depth, const float (*shape)[4], int count, int prisms);
-void render_sprite(const RenderState *state, const RenderVertex *vertices, int count, const float *mapping, float depth);
-void render_shadow(const RenderState *state, const RenderVertex *vertices, const float (*points)[4], int count, int setup);
+                        const RenderScreenMapping *mapping, float depth, const float (*shape)[4], int count, int prisms);
+void render_sprite(const RenderState *state, const RenderVertex *vertices, int count, const RenderScreenMapping *mapping,
+                   float depth);
+void render_shadow(const RenderState *state, const RenderVertex *vertices, const ShadowPoint *points, int count, int setup);
 void render_present(int target, int width, int height);
 
 void render_capture_begin(void);

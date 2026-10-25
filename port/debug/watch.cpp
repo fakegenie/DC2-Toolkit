@@ -1,7 +1,6 @@
 #include "debug.h"
 #include "imgui.h"
 #include "port_symbols.h"
-#include "port_window.h"
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -31,9 +30,14 @@ typedef struct {
     char label[160];
 } Target;
 
+enum {
+    TYPE_I8, TYPE_U8, TYPE_I16, TYPE_U16, TYPE_I32, TYPE_U32, TYPE_I64, TYPE_U64, TYPE_F32, TYPE_F64, TYPE_PTR,
+    TYPE_STR, TYPE_HEX
+};
+
 static const Type types[] = {{"i8", 1},  {"u8", 1},  {"i16", 2}, {"u16", 2}, {"i32", 4}, {"u32", 4}, {"i64", 8},
                              {"u64", 8}, {"f32", 4}, {"f64", 8}, {"ptr", 8}, {"str", 1}, {"hex", 1}};
-static const int TYPE_STR = 11, TYPE_HEX = 12;
+static_assert(sizeof types / sizeof types[0] == TYPE_HEX + 1);
 
 static Watch watches[WATCH_LIMIT];
 static int watch_count;
@@ -127,8 +131,6 @@ static void describe_pointer(char *text, size_t size, uint64_t value) {
     if (symbol)
         snprintf(text, size, "0x%llx %s+0x%llx", (unsigned long long)value, port_symbol_pretty(symbol->name).c_str(),
                  (unsigned long long)(value - symbol->address));
-    else if (value >= PORT_WINDOW + 0x10000000 && value < PORT_WINDOW + 0x40000000)
-        snprintf(text, size, "0x%llx window+0x%llx", (unsigned long long)value, (unsigned long long)(value - PORT_WINDOW));
     else snprintf(text, size, "0x%llx", (unsigned long long)value);
 }
 
@@ -140,17 +142,17 @@ static void format_value(char *text, size_t size, int type, const unsigned char 
     float f32;
     double f64;
     switch (type) {
-    case 0: memcpy(&i8, bytes, 1); snprintf(text, size, "%d", i8); break;
-    case 1: snprintf(text, size, "%u", bytes[0]); break;
-    case 2: memcpy(&i16, bytes, 2); snprintf(text, size, "%d", i16); break;
-    case 3: memcpy(&i16, bytes, 2); snprintf(text, size, "%u", (uint16_t)i16); break;
-    case 4: memcpy(&i32, bytes, 4); snprintf(text, size, "%d", i32); break;
-    case 5: memcpy(&i32, bytes, 4); snprintf(text, size, "%u", (uint32_t)i32); break;
-    case 6: memcpy(&i64, bytes, 8); snprintf(text, size, "%lld", (long long)i64); break;
-    case 7: memcpy(&i64, bytes, 8); snprintf(text, size, "%llu", (unsigned long long)i64); break;
-    case 8: memcpy(&f32, bytes, 4); snprintf(text, size, std::isfinite(f32) ? "%.6g" : "\"%f\"", f32); break;
-    case 9: memcpy(&f64, bytes, 8); snprintf(text, size, std::isfinite(f64) ? "%.10g" : "\"%f\"", f64); break;
-    case 10: memcpy(&i64, bytes, 8); describe_pointer(text, size, (uint64_t)i64); break;
+    case TYPE_I8: memcpy(&i8, bytes, 1); snprintf(text, size, "%d", i8); break;
+    case TYPE_U8: snprintf(text, size, "%u", bytes[0]); break;
+    case TYPE_I16: memcpy(&i16, bytes, 2); snprintf(text, size, "%d", i16); break;
+    case TYPE_U16: memcpy(&i16, bytes, 2); snprintf(text, size, "%u", (uint16_t)i16); break;
+    case TYPE_I32: memcpy(&i32, bytes, 4); snprintf(text, size, "%d", i32); break;
+    case TYPE_U32: memcpy(&i32, bytes, 4); snprintf(text, size, "%u", (uint32_t)i32); break;
+    case TYPE_I64: memcpy(&i64, bytes, 8); snprintf(text, size, "%lld", (long long)i64); break;
+    case TYPE_U64: memcpy(&i64, bytes, 8); snprintf(text, size, "%llu", (unsigned long long)i64); break;
+    case TYPE_F32: memcpy(&f32, bytes, 4); snprintf(text, size, std::isfinite(f32) ? "%.6g" : "\"%f\"", f32); break;
+    case TYPE_F64: memcpy(&f64, bytes, 8); snprintf(text, size, std::isfinite(f64) ? "%.10g" : "\"%f\"", f64); break;
+    case TYPE_PTR: memcpy(&i64, bytes, 8); describe_pointer(text, size, (uint64_t)i64); break;
     default: snprintf(text, size, "%02x", bytes[0]); break;
     }
 }
@@ -174,7 +176,7 @@ static int read_values(uint64_t address, int type, int count, std::string *out) 
 }
 
 static void print_value(DebugReply *reply, int type, const std::string &text) {
-    if (type == TYPE_STR || type == TYPE_HEX || type == 10) {
+    if (type == TYPE_STR || type == TYPE_HEX || type == TYPE_PTR) {
         debug_print_string(reply, text.c_str());
         return;
     }
@@ -233,8 +235,8 @@ static int command_poke(const DebugArgs *args, DebugReply *reply) {
     float f32 = strtof(value, NULL);
     double f64 = strtod(value, NULL);
     long long whole = strtoll(value, NULL, 0);
-    if (type == 8) memcpy(bytes, &f32, 4);
-    else if (type == 9) memcpy(bytes, &f64, 8);
+    if (type == TYPE_F32) memcpy(bytes, &f32, sizeof f32);
+    else if (type == TYPE_F64) memcpy(bytes, &f64, sizeof f64);
     else memcpy(bytes, &whole, 8);
     memcpy((void *)(uintptr_t)target.address, bytes, (size_t)size);
     std::string now;

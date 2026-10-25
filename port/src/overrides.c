@@ -15,8 +15,58 @@
 #endif
 
 enum { OVERRIDE_LIMIT = 4096, OVERRIDE_PATH = 256, PAK_LIMIT = 32, PAK_PATH = 1024, PAK_TEXT = 256 };
-enum { PAK_FILE_LIMIT = 512, PAK_NUMBER_LIMIT = 64, ZIP_TAIL = 65557, ZIP_END = 22, ZIP_CENTRAL = 46 };
-enum { ZIP_LOCAL = 30, ZIP_STORED = 0, FROM_FOLDER = -1 };
+enum { PAK_FILE_LIMIT = 512, PAK_NUMBER_LIMIT = 64, ZIP_STORED = 0, FROM_FOLDER = -1 };
+enum { ZIP_LOCAL_SIGNATURE = 0x04034b50, ZIP_CENTRAL_SIGNATURE = 0x02014b50, ZIP_END_SIGNATURE = 0x06054b50 };
+
+struct __attribute__((packed)) zip_local_header {
+    uint32_t signature;
+    uint16_t version_needed;
+    uint16_t flags;
+    uint16_t compression;
+    uint16_t modified_time;
+    uint16_t modified_date;
+    uint32_t crc32;
+    uint32_t compressed_size;
+    uint32_t uncompressed_size;
+    uint16_t name_length;
+    uint16_t extra_length;
+};
+_Static_assert(sizeof(struct zip_local_header) == 30, "ZIP local file header");
+
+struct __attribute__((packed)) zip_central_header {
+    uint32_t signature;
+    uint16_t version_made;
+    uint16_t version_needed;
+    uint16_t flags;
+    uint16_t compression;
+    uint16_t modified_time;
+    uint16_t modified_date;
+    uint32_t crc32;
+    uint32_t compressed_size;
+    uint32_t uncompressed_size;
+    uint16_t name_length;
+    uint16_t extra_length;
+    uint16_t comment_length;
+    uint16_t disk_start;
+    uint16_t internal_attributes;
+    uint32_t external_attributes;
+    uint32_t local_header_offset;
+};
+_Static_assert(sizeof(struct zip_central_header) == 46, "ZIP central directory header");
+
+struct __attribute__((packed)) zip_end_record {
+    uint32_t signature;
+    uint16_t disk;
+    uint16_t central_disk;
+    uint16_t disk_entries;
+    uint16_t total_entries;
+    uint32_t central_size;
+    uint32_t central_offset;
+    uint16_t comment_length;
+};
+_Static_assert(sizeof(struct zip_end_record) == 22, "ZIP end of central directory record");
+
+enum { ZIP_TAIL = sizeof(struct zip_end_record) + UINT16_MAX };
 
 typedef struct {
     char file[PAK_PATH];
@@ -91,12 +141,6 @@ const char *port_paks_folder(void) {
 }
 #endif
 
-static uint32_t read32(const unsigned char *at) {
-    return (uint32_t)at[0] | (uint32_t)at[1] << 8 | (uint32_t)at[2] << 16 | (uint32_t)at[3] << 24;
-}
-
-static uint32_t read16(const unsigned char *at) { return (uint32_t)at[0] | (uint32_t)at[1] << 8; }
-
 static int read_at(int file, uint64_t offset, void *buffer, size_t size) {
     unsigned char *out = buffer;
     while (size) {
@@ -128,10 +172,18 @@ static void read_config(Pak *pak, char *text) {
 }
 
 static int member_data(int file, uint32_t local, uint32_t *offset) {
-    unsigned char header[ZIP_LOCAL];
-    if (!read_at(file, local, header, sizeof header) || read32(header) != 0x04034b50) return 0;
-    *offset = local + ZIP_LOCAL + read16(header + 26) + read16(header + 28);
+    struct zip_local_header header;
+    if (!read_at(file, local, &header, sizeof header) || header.signature != ZIP_LOCAL_SIGNATURE) return 0;
+    *offset = local + sizeof header + header.name_length + header.extra_length;
     return 1;
+}
+
+static const struct zip_end_record *find_end_record(const unsigned char *tail, size_t size) {
+    for (size_t at = size >= sizeof(struct zip_end_record) ? size - sizeof(struct zip_end_record) + 1 : 0; at-- > 0;) {
+        const struct zip_end_record *record = (const struct zip_end_record *)(tail + at);
+        if (record->signature == ZIP_END_SIGNATURE) return record;
+    }
+    return NULL;
 }
 
 static void add_member(Pak *pak, int file, const char *name, uint32_t size, uint32_t local) {
@@ -162,28 +214,27 @@ static int read_pak(Pak *pak, const char *path) {
     if (file < 0) return 0;
     struct stat info;
     unsigned char tail[ZIP_TAIL];
-    size_t tail_size = fstat(file, &info) || info.st_size < ZIP_END ? 0
-                       : info.st_size < ZIP_TAIL               ? (size_t)info.st_size
-                                                               : ZIP_TAIL;
+    size_t tail_size = fstat(file, &info) || info.st_size < (off_t)sizeof(struct zip_end_record) ? 0
+                       : info.st_size < ZIP_TAIL                                    ? (size_t)info.st_size
+                                                                                    : ZIP_TAIL;
     uint64_t tail_at = (uint64_t)info.st_size - tail_size;
     int found = tail_size && read_at(file, tail_at, tail, tail_size);
-    size_t end = tail_size >= ZIP_END ? tail_size - ZIP_END + 1 : 0;
-    while (found && end-- > 0 && read32(tail + end) != 0x06054b50) {}
-    if (!found || read32(tail + end) != 0x06054b50) {
+    const struct zip_end_record *record = found ? find_end_record(tail, tail_size) : NULL;
+    if (!record) {
         close(file);
         return 0;
     }
-    uint32_t entries = read16(tail + end + 10), central_size = read32(tail + end + 12), central_at = read32(tail + end + 16);
+    uint32_t entries = record->total_entries, central_size = record->central_size, central_at = record->central_offset;
     unsigned char *central = malloc(central_size ? central_size : 1);
     int ok = central && read_at(file, central_at, central, central_size);
-    for (uint32_t i = 0, at = 0; ok && i < entries && at + ZIP_CENTRAL <= central_size; i++) {
-        const unsigned char *entry = central + at;
-        uint32_t name_length = read16(entry + 28), extra = read16(entry + 30), comment = read16(entry + 32);
-        if (read32(entry) != 0x02014b50 || at + ZIP_CENTRAL + name_length > central_size) break;
+    for (uint32_t i = 0, at = 0; ok && i < entries && at + sizeof(struct zip_central_header) <= central_size; i++) {
+        const struct zip_central_header *entry = (const struct zip_central_header *)(central + at);
+        uint32_t name_length = entry->name_length;
+        if (entry->signature != ZIP_CENTRAL_SIGNATURE || at + sizeof *entry + name_length > central_size) break;
         char name[OVERRIDE_PATH + 16];
-        snprintf(name, sizeof name, "%.*s", (int)name_length, (const char *)entry + ZIP_CENTRAL);
-        if (read16(entry + 10) == ZIP_STORED) add_member(pak, file, name, read32(entry + 24), read32(entry + 42));
-        at += ZIP_CENTRAL + name_length + extra + comment;
+        snprintf(name, sizeof name, "%.*s", (int)name_length, (const char *)(entry + 1));
+        if (entry->compression == ZIP_STORED) add_member(pak, file, name, entry->uncompressed_size, entry->local_header_offset);
+        at += sizeof *entry + name_length + entry->extra_length + entry->comment_length;
     }
     free(central);
     close(file);

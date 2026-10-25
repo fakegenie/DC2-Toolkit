@@ -1,4 +1,5 @@
 #include "sound.hpp"
+#include "snd_mngr.hpp"
 
 extern "C" {
 #include "audio.h"
@@ -6,11 +7,12 @@ extern "C" {
 #include "spu2.h"
 }
 
-PORT_OVERRIDE void CSound::StopVoice(int core) { spu_voices_stop(core, 0xFFFFFF); }
+PORT_OVERRIDE void CSound::StopVoice(int core) { spu_voices_stop(core, (1u << SPU_CORE_VOICES) - 1); }
 
 PORT_OVERRIDE void CSound::SndInReverb(bool enable) {
-    spu_core_mixer(0, enable ? -4 : -0x34);
-    spu_core_mixer(1, enable ? -4 : -0x34);
+    unsigned mix = enable ? SPU_MIX_ALL & ~SPU_MIX_EXTERNAL_WET : SPU_MIX_ALL & ~(SPU_MIX_EXTERNAL_WET | SPU_MIX_INPUT_WET);
+    spu_core_mixer(0, mix);
+    spu_core_mixer(1, mix);
 }
 
 PORT_OVERRIDE void CSound::SetReverb(int core, int mode, int depth) { spu_core_reverb(core, mode, depth); }
@@ -113,7 +115,16 @@ PORT_OVERRIDE void CSound::StreamRePlay(int channel) { audio_stream_play(channel
 
 PORT_OVERRIDE void CSound::StreamSetVol(int channel, int left, int right) { audio_stream_volume(channel, left, right); }
 
-PORT_OVERRIDE int CSound::StreamGetState(int channel) { return audio_stream_state(channel) & ~0xFFF; }
+PORT_OVERRIDE int CSound::StreamGetState(int channel) {
+    switch (audio_stream_state(channel)) {
+    case AUDIO_STREAM_PLAYING:
+        return SND_STREAM_STATE_PLAYING;
+    case AUDIO_STREAM_ENDED:
+        return SND_STREAM_STATE_END;
+    default:
+        return 0;
+    }
+}
 
 PORT_OVERRIDE int CSound::StreamGetLevel(int channel) { return audio_stream_level(channel); }
 

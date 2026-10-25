@@ -317,7 +317,7 @@ static void performance_tab(void) {
     float busy_average = counted ? busy / (float)counted : 0.0f;
     ImGui::Text("%.1f fps (%.2f ms average over %d frames)   busy %.2f ms, %.0f fps uncapped   frame %u   field %llu",
                 average > 0 ? 1000.0f / average : 0.0f, average, counted, busy_average,
-                busy_average > 0 ? 1000.0f / busy_average : 0.0f, debug_frame_total, (unsigned long long)port_graphics.fields);
+                busy_average > 0 ? 1000.0f / busy_average : 0.0f, debug_frame_total, (unsigned long long)port_fields);
     if (selected_back >= 0) {
         ImGui::SameLine();
         if (ImGui::SmallButton("clear selection")) selected_back = -1;

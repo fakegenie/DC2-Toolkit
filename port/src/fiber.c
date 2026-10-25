@@ -12,51 +12,60 @@
 #define SYMBOL(name) #name
 #endif
 
+enum { STACK_ALIGNMENT = 16 };
+
 void port_fiber_start(void);
 
 __asm__(".text\n"
-        ".p2align 2\n"
-        ".globl " SYMBOL(port_fiber_switch) "\n"
-        SYMBOL(port_fiber_switch) ":\n"
-        "    stp x19, x20, [x0, #0]\n"
-        "    stp x21, x22, [x0, #16]\n"
-        "    stp x23, x24, [x0, #32]\n"
-        "    stp x25, x26, [x0, #48]\n"
-        "    stp x27, x28, [x0, #64]\n"
-        "    stp x29, x30, [x0, #80]\n"
-        "    mov x9, sp\n"
-        "    str x9, [x0, #96]\n"
-        "    stp d8, d9, [x0, #104]\n"
-        "    stp d10, d11, [x0, #120]\n"
-        "    stp d12, d13, [x0, #136]\n"
-        "    stp d14, d15, [x0, #152]\n"
-        "    ldp x19, x20, [x1, #0]\n"
-        "    ldp x21, x22, [x1, #16]\n"
-        "    ldp x23, x24, [x1, #32]\n"
-        "    ldp x25, x26, [x1, #48]\n"
-        "    ldp x27, x28, [x1, #64]\n"
-        "    ldp x29, x30, [x1, #80]\n"
-        "    ldr x9, [x1, #96]\n"
-        "    mov sp, x9\n"
-        "    ldp d8, d9, [x1, #104]\n"
-        "    ldp d10, d11, [x1, #120]\n"
-        "    ldp d12, d13, [x1, #136]\n"
-        "    ldp d14, d15, [x1, #152]\n"
-        "    ret\n"
         ".p2align 2\n"
         ".globl " SYMBOL(port_fiber_start) "\n"
         SYMBOL(port_fiber_start) ":\n"
         "    blr x19\n"
         "    brk #1\n");
 
-void port_fiber_make(PortFiber *fiber, void *stack, size_t size, void (*entry)(void)) {
-    memset(fiber, 0, sizeof *fiber);
-    fiber->registers[0] = (uint64_t)(uintptr_t)entry;
-    fiber->registers[11] = (uint64_t)(uintptr_t)port_fiber_start;
-    fiber->registers[12] = ((uint64_t)(uintptr_t)stack + size) & ~UINT64_C(15);
+__attribute__((naked)) void port_fiber_switch(PortFiber *from, PortFiber *to) {
+    __asm__ volatile("    stp x19, x20, [x0, #%[x19]]\n"
+                     "    stp x21, x22, [x0, #%[x21]]\n"
+                     "    stp x23, x24, [x0, #%[x23]]\n"
+                     "    stp x25, x26, [x0, #%[x25]]\n"
+                     "    stp x27, x28, [x0, #%[x27]]\n"
+                     "    stp x29, x30, [x0, #%[frame]]\n"
+                     "    mov x9, sp\n"
+                     "    str x9, [x0, #%[stack]]\n"
+                     "    stp d8, d9, [x0, #%[d8]]\n"
+                     "    stp d10, d11, [x0, #%[d10]]\n"
+                     "    stp d12, d13, [x0, #%[d12]]\n"
+                     "    stp d14, d15, [x0, #%[d14]]\n"
+                     "    ldp x19, x20, [x1, #%[x19]]\n"
+                     "    ldp x21, x22, [x1, #%[x21]]\n"
+                     "    ldp x23, x24, [x1, #%[x23]]\n"
+                     "    ldp x25, x26, [x1, #%[x25]]\n"
+                     "    ldp x27, x28, [x1, #%[x27]]\n"
+                     "    ldp x29, x30, [x1, #%[frame]]\n"
+                     "    ldr x9, [x1, #%[stack]]\n"
+                     "    mov sp, x9\n"
+                     "    ldp d8, d9, [x1, #%[d8]]\n"
+                     "    ldp d10, d11, [x1, #%[d10]]\n"
+                     "    ldp d12, d13, [x1, #%[d12]]\n"
+                     "    ldp d14, d15, [x1, #%[d14]]\n"
+                     "    ret\n"
+                     :
+                     : [x19] "i"(offsetof(PortFiber, x19)), [x21] "i"(offsetof(PortFiber, x21)),
+                       [x23] "i"(offsetof(PortFiber, x23)), [x25] "i"(offsetof(PortFiber, x25)),
+                       [x27] "i"(offsetof(PortFiber, x27)), [frame] "i"(offsetof(PortFiber, frame_pointer)),
+                       [stack] "i"(offsetof(PortFiber, stack_pointer)), [d8] "i"(offsetof(PortFiber, d8)),
+                       [d10] "i"(offsetof(PortFiber, d10)), [d12] "i"(offsetof(PortFiber, d12)),
+                       [d14] "i"(offsetof(PortFiber, d14)));
 }
 
-uintptr_t port_fiber_frame(const PortFiber *fiber) { return (uintptr_t)fiber->registers[10]; }
+void port_fiber_make(PortFiber *fiber, void *stack, size_t size, void (*entry)(void)) {
+    memset(fiber, 0, sizeof *fiber);
+    fiber->x19 = (uint64_t)(uintptr_t)entry;
+    fiber->link_register = (uint64_t)(uintptr_t)port_fiber_start;
+    fiber->stack_pointer = ((uint64_t)(uintptr_t)stack + size) & ~(uint64_t)(STACK_ALIGNMENT - 1);
+}
+
+uintptr_t port_fiber_frame(const PortFiber *fiber) { return (uintptr_t)fiber->frame_pointer; }
 
 #else
 

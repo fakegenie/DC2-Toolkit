@@ -3,6 +3,8 @@
 #else
 #define _POSIX_C_SOURCE 200809L
 #endif
+#include "memory_card.h"
+#include "sce/sifdev.h"
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -14,24 +16,44 @@
 #include <sys/statvfs.h>
 #include <time.h>
 #include <unistd.h>
-#include "memory_card.h"
 
-static int cards[2] = {-1, -1};
-static char directories[2][1024];
-static int files[32];
-static int owners[32];
+enum {
+    MC_PORTS = 2,
+    MC_SLOTS = 2,
+    MC_FILES = 32,
+    MC_NAME_SIZE = sizeof(((struct sceMcTblGetDir *)0)->entry_name),
+    MC_PATH_SIZE = 1024,
+    MC_CARD_DIRECTORY_SIZE = 16,
+    MC_CARD_KILOBYTES = 8192,
+    KILOBYTE = 1024,
+    MC_DIR_FIRST = 0,
+    MC_DIR_NEXT = 1,
+    MC_OPEN_MODE = SCE_RDONLY | SCE_WRONLY | SCE_RDWR,
+    MC_OPEN_FLAGS = MC_OPEN_MODE | SCE_APPEND | SCE_CREAT | SCE_TRUNC,
+    MC_ATTR_COMMON = sceMcFileAttrExists | sceMcFile0400 | sceMcFileAttrReadable | sceMcFileAttrWriteable | sceMcFileAttrExecutable,
+    MC_ATTR_DIRECTORY = MC_ATTR_COMMON | sceMcFileAttrSubdir,
+    MC_ATTR_FILE = MC_ATTR_COMMON | sceMcFileAttrClosed | sceMcFileAttrFile,
+    TM_YEAR_BASE = 1900,
+    TM_MONTH_BASE = 1,
+    NO_FILE = -1
+};
+
+static int cards[MC_PORTS] = {-1, -1};
+static char directories[MC_PORTS][MC_PATH_SIZE];
+static int files[MC_FILES];
+static int owners[MC_FILES];
 static int initialized;
 static int pending;
 static int last_command;
 static int last_result;
 static DIR *listing;
-static char pattern[32];
+static char pattern[MC_NAME_SIZE];
 static int listing_port = -1;
 
 static int error_result(void) {
-    if (errno == ENOENT || errno == ENOTDIR || errno == EEXIST) return -4;
-    if (errno == ENOSPC || errno == EDQUOT) return -3;
-    return -5;
+    if (errno == ENOENT || errno == ENOTDIR || errno == EEXIST) return sceMcResNoEntry;
+    if (errno == ENOSPC || errno == EDQUOT) return sceMcResFullDevice;
+    return sceMcResDeniedPermit;
 }
 
 static void close_listing(void) {
@@ -42,11 +64,11 @@ static void close_listing(void) {
 
 int sceMcEnd(void) {
     close_listing();
-    for (int i = 0; i < 32; ++i) {
+    for (int i = 0; i < MC_FILES; ++i) {
         if (initialized && files[i] >= 0) close(files[i]);
-        files[i] = -1;
+        files[i] = NO_FILE;
     }
-    for (int i = 0; i < 2; ++i) {
+    for (int i = 0; i < MC_PORTS; ++i) {
         if (cards[i] >= 0) close(cards[i]);
         cards[i] = -1;
         directories[i][0] = 0;
@@ -58,24 +80,24 @@ int sceMcEnd(void) {
 
 int port_memory_card_init(const char *root) {
     sceMcEnd();
-    if (!root || !root[0]) return -101;
-    if (mkdir(root, 0700) && errno != EEXIST) return -101;
+    if (!root || !root[0]) return sceMcIniErrKernel;
+    if (mkdir(root, S_IRWXU) && errno != EEXIST) return sceMcIniErrKernel;
     int base = open(root, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-    if (base < 0) return -101;
-    for (int i = 0; i < 2; ++i) {
-        char name[16];
+    if (base < 0) return sceMcIniErrKernel;
+    for (int i = 0; i < MC_PORTS; ++i) {
+        char name[MC_CARD_DIRECTORY_SIZE];
         snprintf(name, sizeof(name), "card%d", i);
-        if (mkdirat(base, name, 0700) && errno != EEXIST) break;
+        if (mkdirat(base, name, S_IRWXU) && errno != EEXIST) break;
         cards[i] = openat(base, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
         if (cards[i] < 0) break;
     }
     close(base);
     initialized = 1;
-    return cards[0] >= 0 ? 0 : -101;
+    return cards[0] >= 0 ? sceMcIniSucceed : sceMcIniErrKernel;
 }
 
 static const char *default_root(void) {
-    static char path[1024];
+    static char path[MC_PATH_SIZE];
     const char *home = getenv("HOME");
     struct stat info;
     if (!home) return "saves";
@@ -91,36 +113,36 @@ const char *port_memory_card_root(void) {
 }
 
 int sceMcInit(void) {
-    if (initialized) return cards[0] >= 0 ? 0 : -101;
+    if (initialized) return cards[0] >= 0 ? sceMcIniSucceed : sceMcIniErrKernel;
     return port_memory_card_init(port_memory_card_root());
 }
 
 static int request(int command) {
-    if (pending) return -200;
+    if (pending) return PORT_MC_BUSY;
     pending = 1;
     last_command = command;
-    last_result = -5;
+    last_result = sceMcResDeniedPermit;
     return 0;
 }
 
 int sceMcSync(int mode, int *command, int *result) {
     (void)mode;
-    if (!pending) return -1;
+    if (!pending) return sceMcExecIdle;
     if (command) *command = last_command;
     if (result) *result = last_result;
     pending = 0;
-    return 1;
+    return sceMcExecFinish;
 }
 
 static int card_status(int port, int slot) {
-    if (port < 0 || port > 1 || slot < 0 || slot > 1 || cards[port] < 0) return -12;
+    if (port < 0 || port >= MC_PORTS || slot < 0 || slot >= MC_SLOTS || cards[port] < 0) return sceMcResFailDetect;
     struct stat status;
-    if (!fstatat(cards[port], ".unformatted", &status, AT_SYMLINK_NOFOLLOW)) return -2;
-    return 0;
+    if (!fstatat(cards[port], ".unformatted", &status, AT_SYMLINK_NOFOLLOW)) return sceMcResNoFormat;
+    return sceMcResSucceed;
 }
 
 static int path_name(int port, const char *name, char *path) {
-    if (!name || !name[0]) return -5;
+    if (!name || !name[0]) return sceMcResDeniedPermit;
     size_t used = 0;
     if (name[0] != '/' && directories[port][0]) {
         used = strlen(directories[port]);
@@ -133,14 +155,14 @@ static int path_name(int port, const char *name, char *path) {
         size_t length = (size_t)(name - start);
         if (!length) break;
         if (length == 1 && start[0] == '.') continue;
-        if ((length == 2 && !memcmp(start, "..", 2)) || length > 31 || start[0] == '.') return -5;
-        if (used + length + 1 >= 1024) return -5;
+        if ((length == 2 && !memcmp(start, "..", 2)) || length >= MC_NAME_SIZE || start[0] == '.') return sceMcResDeniedPermit;
+        if (used + length + 1 >= MC_PATH_SIZE) return sceMcResDeniedPermit;
         if (used) path[used++] = '/';
         memcpy(path + used, start, length);
         used += length;
     }
     path[used] = 0;
-    return 0;
+    return sceMcResSucceed;
 }
 
 static int parent_path(int port, const char *path, char *leaf) {
@@ -165,7 +187,7 @@ static int parent_path(int port, const char *path, char *leaf) {
 static int resolve(int port, int slot, const char *name, char *leaf) {
     int status = card_status(port, slot);
     if (status) { last_result = status; return -1; }
-    char path[1024];
+    char path[MC_PATH_SIZE];
     status = path_name(port, name, path);
     if (status) { last_result = status; return -1; }
     int parent = parent_path(port, path, leaf);
@@ -174,35 +196,35 @@ static int resolve(int port, int slot, const char *name, char *leaf) {
 }
 
 int sceMcGetInfo(int port, int slot, int *type, int *free_size, int *formatted) {
-    if (request(1)) return -200;
+    if (request(sceMcFuncNoCardInfo)) return PORT_MC_BUSY;
     last_result = card_status(port, slot);
-    if (type) *type = last_result == -12 ? 0 : 2;
-    if (formatted) *formatted = last_result == 0;
+    if (type) *type = last_result == sceMcResFailDetect ? sceMcTypeNoCard : sceMcTypePS2;
+    if (formatted) *formatted = last_result == sceMcResSucceed;
     if (free_size) {
         *free_size = 0;
         struct statvfs space;
-        if (last_result == 0 && !fstatvfs(cards[port], &space)) {
-            unsigned long long available = (unsigned long long)space.f_bavail * space.f_frsize / 1024;
-            *free_size = available > 8192 ? 8192 : (int)available;
+        if (last_result == sceMcResSucceed && !fstatvfs(cards[port], &space)) {
+            unsigned long long available = (unsigned long long)space.f_bavail * space.f_frsize / KILOBYTE;
+            *free_size = available > MC_CARD_KILOBYTES ? MC_CARD_KILOBYTES : (int)available;
         }
     }
     return 0;
 }
 
 int sceMcOpen(int port, int slot, const char *name, int flags) {
-    if (request(2)) return -200;
-    char leaf[32];
+    if (request(sceMcFuncNoOpen)) return PORT_MC_BUSY;
+    char leaf[MC_NAME_SIZE];
     int parent = resolve(port, slot, name, leaf);
     if (parent < 0) return 0;
-    int mode = flags & 3;
-    if (!mode || (flags & ~(3 | 0x100 | 0x200 | 0x400))) { close(parent); return 0; }
-    int host_flags = mode == 1 ? O_RDONLY : mode == 2 ? O_WRONLY : O_RDWR;
-    if (flags & 0x100) host_flags |= O_APPEND;
-    if (flags & 0x200) host_flags |= O_CREAT;
-    if (flags & 0x400) host_flags |= O_TRUNC;
-    for (int i = 0; i < 32; ++i) {
+    int mode = flags & MC_OPEN_MODE;
+    if (!mode || (flags & ~MC_OPEN_FLAGS)) { close(parent); return 0; }
+    int host_flags = mode == SCE_RDONLY ? O_RDONLY : mode == SCE_WRONLY ? O_WRONLY : O_RDWR;
+    if (flags & SCE_APPEND) host_flags |= O_APPEND;
+    if (flags & SCE_CREAT) host_flags |= O_CREAT;
+    if (flags & SCE_TRUNC) host_flags |= O_TRUNC;
+    for (int i = 0; i < MC_FILES; ++i) {
         if (files[i] >= 0) continue;
-        int fd = openat(parent, leaf, host_flags | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0600);
+        int fd = openat(parent, leaf, host_flags | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, S_IRUSR | S_IWUSR);
         close(parent);
         if (fd < 0) { last_result = error_result(); return 0; }
         struct stat status;
@@ -217,31 +239,32 @@ int sceMcOpen(int port, int slot, const char *name, int flags) {
 }
 
 static int file_request(int command, int fd) {
-    if (request(command)) return -200;
-    if (!initialized || fd < 0 || fd >= 32 || files[fd] < 0) return -1;
+    if (request(command)) return PORT_MC_BUSY;
+    if (!initialized || fd < 0 || fd >= MC_FILES || files[fd] < 0) return NO_FILE;
     return 0;
 }
 
 int sceMcClose(int fd) {
-    int status = file_request(3, fd);
-    if (status) return status == -200 ? -200 : 0;
-    last_result = close(files[fd]) ? error_result() : 0;
-    files[fd] = -1;
+    int status = file_request(sceMcFuncNoClose, fd);
+    if (status) return status == PORT_MC_BUSY ? PORT_MC_BUSY : 0;
+    last_result = close(files[fd]) ? error_result() : sceMcResSucceed;
+    files[fd] = NO_FILE;
     return 0;
 }
 
 int sceMcSeek(int fd, int offset, int origin) {
-    int status = file_request(4, fd);
-    if (status) return status == -200 ? -200 : 0;
-    if (origin < 0 || origin > 2) return 0;
-    off_t result = lseek(files[fd], offset, origin);
-    last_result = result < 0 ? error_result() : result > INT_MAX ? -5 : (int)result;
+    static const int whence[] = {[SCE_SEEK_SET] = SEEK_SET, [SCE_SEEK_CUR] = SEEK_CUR, [SCE_SEEK_END] = SEEK_END};
+    int status = file_request(sceMcFuncNoSeek, fd);
+    if (status) return status == PORT_MC_BUSY ? PORT_MC_BUSY : 0;
+    if (origin < SCE_SEEK_SET || origin > SCE_SEEK_END) return 0;
+    off_t result = lseek(files[fd], offset, whence[origin]);
+    last_result = result < 0 ? error_result() : result > INT_MAX ? sceMcResDeniedPermit : (int)result;
     return 0;
 }
 
 int sceMcRead(int fd, void *buffer, int size) {
-    int status = file_request(5, fd);
-    if (status) return status == -200 ? -200 : 0;
+    int status = file_request(sceMcFuncNoRead, fd);
+    if (status) return status == PORT_MC_BUSY ? PORT_MC_BUSY : 0;
     if (size < 0 || (!buffer && size)) return 0;
     ssize_t result = read(files[fd], buffer, (size_t)size);
     last_result = result < 0 ? error_result() : (int)result;
@@ -249,8 +272,8 @@ int sceMcRead(int fd, void *buffer, int size) {
 }
 
 int sceMcWrite(int fd, void *buffer, int size) {
-    int status = file_request(6, fd);
-    if (status) return status == -200 ? -200 : 0;
+    int status = file_request(sceMcFuncNoWrite, fd);
+    if (status) return status == PORT_MC_BUSY ? PORT_MC_BUSY : 0;
     if (size < 0 || (!buffer && size)) return 0;
     ssize_t result = write(files[fd], buffer, (size_t)size);
     last_result = result < 0 ? error_result() : (int)result;
@@ -258,25 +281,25 @@ int sceMcWrite(int fd, void *buffer, int size) {
 }
 
 int sceMcFlush(int fd) {
-    int status = file_request(10, fd);
-    if (status) return status == -200 ? -200 : 0;
-    last_result = fsync(files[fd]) ? error_result() : 0;
+    int status = file_request(sceMcFuncNoFlush, fd);
+    if (status) return status == PORT_MC_BUSY ? PORT_MC_BUSY : 0;
+    last_result = fsync(files[fd]) ? error_result() : sceMcResSucceed;
     return 0;
 }
 
 int sceMcMkdir(int port, int slot, const char *name) {
-    if (request(11)) return -200;
-    char leaf[32];
+    if (request(sceMcFuncNoMkdir)) return PORT_MC_BUSY;
+    char leaf[MC_NAME_SIZE];
     int parent = resolve(port, slot, name, leaf);
     if (parent < 0) return 0;
-    last_result = mkdirat(parent, leaf, 0700) ? error_result() : 0;
+    last_result = mkdirat(parent, leaf, S_IRWXU) ? error_result() : sceMcResSucceed;
     close(parent);
     return 0;
 }
 
 int sceMcChdir(int port, int slot, const char *name, char *current) {
-    if (request(12)) return -200;
-    char leaf[32], path[1024];
+    if (request(sceMcFuncNoChDir)) return PORT_MC_BUSY;
+    char leaf[MC_NAME_SIZE], path[MC_PATH_SIZE];
     int parent = resolve(port, slot, name, leaf);
     if (parent < 0) return 0;
     int fd = openat(parent, leaf, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
@@ -286,19 +309,19 @@ int sceMcChdir(int port, int slot, const char *name, char *current) {
     if (current) { current[0] = '/'; strcpy(current + 1, directories[port]); }
     path_name(port, name, path);
     strcpy(directories[port], path);
-    last_result = 0;
+    last_result = sceMcResSucceed;
     return 0;
 }
 
 static void entry_time(struct sceMcStDateTime *date, time_t timestamp) {
     struct tm value;
     if (!localtime_r(&timestamp, &value)) return;
-    date->second = (uint8_t)value.tm_sec;
-    date->minute = (uint8_t)value.tm_min;
-    date->hour = (uint8_t)value.tm_hour;
-    date->day = (uint8_t)value.tm_mday;
-    date->month = (uint8_t)(value.tm_mon + 1);
-    date->year = (uint16_t)(value.tm_year + 1900);
+    date->sec = (u_char)value.tm_sec;
+    date->min = (u_char)value.tm_min;
+    date->hour = (u_char)value.tm_hour;
+    date->day = (u_char)value.tm_mday;
+    date->month = (u_char)(value.tm_mon + TM_MONTH_BASE);
+    date->year = (u_short)(value.tm_year + TM_YEAR_BASE);
 }
 
 static int name_matches(const char *filter, const char *name) {
@@ -325,14 +348,14 @@ static int name_matches(const char *filter, const char *name) {
 }
 
 int sceMcGetDir(int port, int slot, const char *name, int mode, int count, struct sceMcTblGetDir *table) {
-    if (request(13)) return -200;
+    if (request(sceMcFuncNoGetDir)) return PORT_MC_BUSY;
     last_result = card_status(port, slot);
     if (last_result) return 0;
-    last_result = -5;
-    if (count < 0 || (!table && count) || (mode != 0 && mode != 1)) return 0;
-    if (!mode) {
+    last_result = sceMcResDeniedPermit;
+    if (count < 0 || (!table && count) || (mode != MC_DIR_FIRST && mode != MC_DIR_NEXT)) return 0;
+    if (mode == MC_DIR_FIRST) {
         close_listing();
-        char leaf[32];
+        char leaf[MC_NAME_SIZE];
         int parent = resolve(port, slot, name, leaf);
         if (parent < 0) return 0;
         listing = fdopendir(parent);
@@ -345,7 +368,7 @@ int sceMcGetDir(int port, int slot, const char *name, int mode, int count, struc
     while (last_result < count) {
         struct dirent *entry = readdir(listing);
         if (!entry) break;
-        if (entry->d_name[0] == '.' || strlen(entry->d_name) > 31 || !name_matches(pattern, entry->d_name)) continue;
+        if (entry->d_name[0] == '.' || strlen(entry->d_name) >= MC_NAME_SIZE || !name_matches(pattern, entry->d_name)) continue;
         struct stat info;
         if (fstatat(dirfd(listing), entry->d_name, &info, AT_SYMLINK_NOFOLLOW)) continue;
         if (!S_ISREG(info.st_mode) && !S_ISDIR(info.st_mode)) continue;
@@ -354,35 +377,35 @@ int sceMcGetDir(int port, int slot, const char *name, int mode, int count, struc
         entry_time(&row->create, info.st_ctime);
         entry_time(&row->modify, info.st_mtime);
         row->file_size_byte = info.st_size > UINT32_MAX ? UINT32_MAX : (uint32_t)info.st_size;
-        row->attr_file = S_ISDIR(info.st_mode) ? 0x8427 : 0x8497;
+        row->attr_file = S_ISDIR(info.st_mode) ? MC_ATTR_DIRECTORY : MC_ATTR_FILE;
         strcpy(row->entry_name, entry->d_name);
     }
     return 0;
 }
 
 int sceMcRename(int port, int slot, char *old_name, char *new_name) {
-    if (request(14)) return -200;
-    char old_leaf[32], new_leaf[32];
+    if (request(sceMcFuncNoFileInfo)) return PORT_MC_BUSY;
+    char old_leaf[MC_NAME_SIZE], new_leaf[MC_NAME_SIZE];
     int old_parent = resolve(port, slot, old_name, old_leaf);
     if (old_parent < 0) return 0;
     int new_parent = resolve(port, slot, new_name, new_leaf);
     if (new_parent < 0) { close(old_parent); return 0; }
     struct stat info;
-    if (!fstatat(new_parent, new_leaf, &info, AT_SYMLINK_NOFOLLOW)) last_result = -8;
-    else last_result = renameat(old_parent, old_leaf, new_parent, new_leaf) ? error_result() : 0;
+    if (!fstatat(new_parent, new_leaf, &info, AT_SYMLINK_NOFOLLOW)) last_result = sceMcResFailReplace;
+    else last_result = renameat(old_parent, old_leaf, new_parent, new_leaf) ? error_result() : sceMcResSucceed;
     close(old_parent);
     close(new_parent);
     return 0;
 }
 
 int sceMcDelete(int port, int slot, char *name) {
-    if (request(15)) return -200;
-    char leaf[32];
+    if (request(sceMcFuncNoDelete)) return PORT_MC_BUSY;
+    char leaf[MC_NAME_SIZE];
     int parent = resolve(port, slot, name, leaf);
     if (parent < 0) return 0;
     struct stat info;
     if (fstatat(parent, leaf, &info, AT_SYMLINK_NOFOLLOW)) last_result = error_result();
-    else last_result = unlinkat(parent, leaf, S_ISDIR(info.st_mode) ? AT_REMOVEDIR : 0) ? error_result() : 0;
+    else last_result = unlinkat(parent, leaf, S_ISDIR(info.st_mode) ? AT_REMOVEDIR : 0) ? error_result() : sceMcResSucceed;
     close(parent);
     return 0;
 }
@@ -412,22 +435,22 @@ static int clear_directory(int fd) {
 }
 
 static int format_card(int command, int port, int slot) {
-    if (request(command)) return -200;
+    if (request(command)) return PORT_MC_BUSY;
     last_result = card_status(port, slot);
-    if (last_result == -12) return 0;
+    if (last_result == sceMcResFailDetect) return 0;
     close_listing();
-    for (int i = 0; i < 32; ++i) {
-        if (files[i] >= 0 && owners[i] == port) { close(files[i]); files[i] = -1; }
+    for (int i = 0; i < MC_FILES; ++i) {
+        if (files[i] >= 0 && owners[i] == port) { close(files[i]); files[i] = NO_FILE; }
     }
     directories[port][0] = 0;
-    last_result = clear_directory(cards[port]) ? error_result() : 0;
-    if (!last_result && command == 17) {
-        int marker = openat(cards[port], ".unformatted", O_WRONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
+    last_result = clear_directory(cards[port]) ? error_result() : sceMcResSucceed;
+    if (!last_result && command == sceMcFuncNoUnformat) {
+        int marker = openat(cards[port], ".unformatted", O_WRONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC, S_IRUSR | S_IWUSR);
         if (marker < 0) last_result = error_result();
         else close(marker);
     }
     return 0;
 }
 
-int sceMcFormat(int port, int slot) { return format_card(16, port, slot); }
-int sceMcUnformat(int port, int slot) { return format_card(17, port, slot); }
+int sceMcFormat(int port, int slot) { return format_card(sceMcFuncNoFormat, port, slot); }
+int sceMcUnformat(int port, int slot) { return format_card(sceMcFuncNoUnformat, port, slot); }

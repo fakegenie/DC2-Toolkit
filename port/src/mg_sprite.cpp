@@ -13,12 +13,27 @@
 
 enum { SPRITE_ENV, SPRITE_TEXTURE, SPRITE_BATCH, SPRITE_ITEM };
 
+constexpr float GS_COORDINATE_LIMIT = 4095.0f;
+
+struct SpriteItem {
+    float position[4];
+    float width;
+    float height;
+    float sine;
+    float cosine;
+    float color[4];
+    float u0;
+    float v0;
+    float u1;
+    float v1;
+};
+
 struct SpriteOp {
     int kind;
     mgCDrawEnv env;
     const mgCTexture *texture;
     int mode;
-    float data[5][4];
+    SpriteItem item;
 };
 
 static std::unordered_map<const void *, std::vector<SpriteOp>> sprite_packets;
@@ -76,15 +91,18 @@ PORT_OVERRIDE void mgC3DSprite::CPSetSprite(float *first, float *second, float *
     memset(&op, 0, sizeof op);
     op.kind = SPRITE_ITEM;
     op.mode = mode;
-    memcpy(op.data[0], first, 16);
-    memcpy(op.data[1], second, 16);
-    if (mode == 1) {
-        op.data[1][2] = sinf(second[2]);
-        op.data[1][3] = cosf(second[2]);
+    memcpy(op.item.position, first, sizeof op.item.position);
+    op.item.width = second[0];
+    op.item.height = second[1];
+    if (mode == MG_3DSPRITE_MODE_ROTATE) {
+        op.item.sine = sinf(second[2]);
+        op.item.cosine = cosf(second[2]);
     }
-    memcpy(op.data[2], third, 16);
-    memcpy(op.data[3], fourth, 16);
-    memcpy(op.data[4], fifth, 16);
+    memcpy(op.item.color, third, sizeof op.item.color);
+    op.item.u0 = fourth[0];
+    op.item.v0 = fourth[1];
+    op.item.u1 = fifth[0];
+    op.item.v1 = fifth[1];
     ops_for(this).push_back(op);
     sprite_num++;
 }
@@ -97,7 +115,7 @@ struct SpriteFrame {
     float local_screen[4][4];
     float axis_x;
     float axis_y;
-    float fog[4];
+    RenderFogCurve fog;
     float near;
     float far;
 };
@@ -107,23 +125,22 @@ static u_char vu_byte(float value) {
 }
 
 static void sprite_vertex(RenderVertex *vertex, float x, float y, float z, float u, float v, const SpriteOp &item,
-                          float fog, const float screen[4], float depth) {
-    vertex->x = (x * screen[0] + screen[1] + 1.0f) / screen[0];
-    vertex->y = (y * screen[2] + screen[3] - 1.0f) / screen[2];
+                          float fog, const RenderScreenMapping &screen, float depth) {
+    vertex->x = (x * screen.scale_x + screen.offset_x + 1.0f) / screen.scale_x;
+    vertex->y = (y * screen.scale_y + screen.offset_y - 1.0f) / screen.scale_y;
     vertex->z = z * depth > 1.0f ? 1.0f : z * depth;
     vertex->u = u;
     vertex->v = v;
-    vertex->r = vu_byte(item.data[2][0]);
-    vertex->g = vu_byte(item.data[2][1]);
-    vertex->b = vu_byte(item.data[2][2]);
-    vertex->a = vu_byte(item.data[2][3]);
+    vertex->r = vu_byte(item.item.color[0]);
+    vertex->g = vu_byte(item.item.color[1]);
+    vertex->b = vu_byte(item.item.color[2]);
+    vertex->a = vu_byte(item.item.color[3]);
     vertex->fog = fog / 255.0f;
 }
 
 static void draw_sprite(const SpriteFrame &frame, const SpriteOp &item, const RenderState &state, int width,
                         int height) {
-    const float *p = item.data[0];
-    const float *s = item.data[1];
+    const float *p = item.item.position;
     float clip[4];
     for (int k = 0; k < 4; k++)
         clip[k] = p[0] * frame.local_screen[0][k] + p[1] * frame.local_screen[1][k] + p[2] * frame.local_screen[2][k] +
@@ -132,18 +149,19 @@ static void draw_sprite(const SpriteFrame &frame, const SpriteOp &item, const Re
     float q = 1.0f / clip[3];
     float cx = clip[0] * q, cy = clip[1] * q, cz = clip[2] * q;
     if (!(clip[3] > frame.near && clip[3] < frame.far)) return;
-    float fog = frame.fog[0] + frame.fog[3] * q;
-    fog = fmaxf(fminf(fog, frame.fog[1]), frame.fog[2]);
-    float u0 = item.data[3][0], v0 = item.data[3][1], u1 = item.data[4][0], v1 = item.data[4][1];
-    float screen[4];
+    float fog = frame.fog.offset + frame.fog.scale * q;
+    fog = fmaxf(fminf(fog, frame.fog.near_value), frame.fog.far_value);
+    float u0 = item.item.u0, v0 = item.item.v0, u1 = item.item.u1, v1 = item.item.v1;
+    float width_scale = item.item.width, height_scale = item.item.height;
+    RenderScreenMapping screen;
     float depth;
-    gs_screen_mapping(screen, &depth);
+    gs_screen_mapping(&screen, &depth);
     RenderVertex out[6];
-    if (item.mode != 1) {
-        float hx = s[0] * frame.axis_x * 0.5f * q;
-        float hy = s[1] * frame.axis_y * 0.5f * q;
+    if (item.mode != MG_3DSPRITE_MODE_ROTATE) {
+        float hx = width_scale * frame.axis_x * 0.5f * q;
+        float hy = height_scale * frame.axis_y * 0.5f * q;
         float x0 = cx - hx, y0 = cy - hy, x1 = cx + hx, y1 = cy + hy;
-        if (!(x0 > 1.0f && y0 > 1.0f && x1 < 4095.0f && y1 < 4095.0f)) return;
+        if (!(x0 > 1.0f && y0 > 1.0f && x1 < GS_COORDINATE_LIMIT && y1 < GS_COORDINATE_LIMIT)) return;
         RenderVertex a = {}, b = {}, c = {}, d = {};
         sprite_vertex(&a, x0, y0, cz, u0, v0, item, fog, screen, depth);
         sprite_vertex(&b, x1, y0, cz, u1, v0, item, fog, screen, depth);
@@ -151,13 +169,13 @@ static void draw_sprite(const SpriteFrame &frame, const SpriteOp &item, const Re
         sprite_vertex(&d, x1, y1, cz, u1, v1, item, fog, screen, depth);
         out[0] = a, out[1] = b, out[2] = c, out[3] = b, out[4] = d, out[5] = c;
     } else {
-        float sine = s[2], cosine = s[3];
-        float ax = cosine * frame.axis_x * s[0] * 0.5f * q, ay = sine * frame.axis_x * s[0] * 0.5f * q;
-        float bx = -sine * frame.axis_y * s[1] * 0.5f * q, by = cosine * frame.axis_y * s[1] * 0.5f * q;
+        float sine = item.item.sine, cosine = item.item.cosine;
+        float ax = cosine * frame.axis_x * width_scale * 0.5f * q, ay = sine * frame.axis_x * width_scale * 0.5f * q;
+        float bx = -sine * frame.axis_y * height_scale * 0.5f * q, by = cosine * frame.axis_y * height_scale * 0.5f * q;
         float corners[4][2] = {{cx - ax - bx, cy - ay - by}, {cx + ax - bx, cy + ay - by},
                                {cx - ax + bx, cy - ay + by}, {cx + ax + bx, cy + ay + by}};
         float low_x = corners[0][0], low_y = corners[0][1], high_x = corners[3][0], high_y = corners[3][1];
-        if (!(low_x > 1.0f && low_y > 1.0f && high_x < 4095.0f && high_y < 4095.0f)) return;
+        if (!(low_x > 1.0f && low_y > 1.0f && high_x < GS_COORDINATE_LIMIT && high_y < GS_COORDINATE_LIMIT)) return;
         float uvs[4][2] = {{u0, v0}, {u1, v0}, {u0, v1}, {u1, v1}};
         RenderVertex v[4] = {};
         for (int i = 0; i < 4; i++)
@@ -169,7 +187,14 @@ static void draw_sprite(const SpriteFrame &frame, const SpriteOp &item, const Re
         out[i].v /= (float)height;
     }
     render_source = RENDER_SOURCE_SPRITE;
-    render_sprite(&state, out, 6, screen, depth);
+    render_sprite(&state, out, 6, &screen, depth);
+}
+
+PORT_OVERRIDE int mgC3DSprite::CreateRenderInfoPacket(u_int *dest, float (*matrix)[4], mgRENDER_INFO *render_info) {
+    (void)dest;
+    (void)matrix;
+    render_info->scissor = 0;
+    return 0;
 }
 
 PORT_OVERRIDE int mgC3DSprite::Draw(u_int *tag, float (*matrix)[4], mgCDrawManager *manager) {
@@ -187,10 +212,7 @@ PORT_OVERRIDE int mgC3DSprite::Draw(u_int *tag, float (*matrix)[4], mgCDrawManag
     mgMulMatrix(frame.local_screen, info->world_screen, matrix);
     frame.axis_x = info->view_screen[0][0] * mgDistVector(matrix[0]);
     frame.axis_y = info->view_screen[1][1] * mgDistVector(matrix[1]);
-    frame.fog[0] = info->fog.offset;
-    frame.fog[1] = info->fog.near_value;
-    frame.fog[2] = info->fog.far_value;
-    frame.fog[3] = info->fog.scale;
+    frame.fog = {info->fog.offset, info->fog.near_value, info->fog.far_value, info->fog.scale};
     frame.near = info->guard_min[3];
     frame.far = info->guard_max[3];
     int fogged = info->attr->fog != 0 && info->fog_enable != 0;
@@ -199,16 +221,16 @@ PORT_OVERRIDE int mgC3DSprite::Draw(u_int *tag, float (*matrix)[4], mgCDrawManag
     RenderState state;
     gs_base_state(&state);
     state.blend = 1;
-    state.alpha = gs.alpha;
-    state.test = gs.test;
-    state.depth_write = !((gs.zbuf >> 32) & 1);
+    state.blending = gs_blending(gs.alpha);
+    state.tests = gs_tests(gs.test);
+    state.depth_write = !gs.zbuf.ZMSK;
     state.fog = fogged;
     state.fog_color = fog_colour;
     int width = 1, height = 1;
     for (const SpriteOp &op : found->second) {
         if (op.kind == SPRITE_ENV) {
-            state.test = op.env.test.value;
-            state.alpha = op.env.alpha.value;
+            state.tests = gs_tests(op.env.test);
+            state.blending = gs_blending(op.env.alpha);
             state.depth_write = !op.env.zbuf.bits.zmsk;
             int macro = ((mgCDrawEnv &)op.env).GetAlphaMacroID();
             if (macro == 2 || macro == 3) state.fog_color = 0;
@@ -221,8 +243,8 @@ PORT_OVERRIDE int mgC3DSprite::Draw(u_int *tag, float (*matrix)[4], mgCDrawManag
             state.decal = textured.decal;
             state.vertex_alpha = textured.vertex_alpha;
             state.texa = textured.texa;
-            state.repeat_u = ((gs.clamp >> 0) & 3) == 0;
-            state.repeat_v = ((gs.clamp >> 2) & 3) == 0;
+            state.repeat_u = gs.clamp.WMS == GS_WRAP_REPEAT;
+            state.repeat_v = gs.clamp.WMT == GS_WRAP_REPEAT;
             width = state.texture ? render_width(state.texture) : 1;
             height = state.texture ? render_height(state.texture) : 1;
         } else if (op.kind == SPRITE_ITEM) {
@@ -245,14 +267,22 @@ PORT_OVERRIDE uptr mgCSprite::CreatePacket(mgCDrawManager *manager) {
         int projected[4];
         if (mgTransViewPrim(projected, position) != 0) screen_z = projected[2];
     }
-    u_long z = (u_long)(u_int)screen_z << 32;
-    gs_write(SCE_GS_PRIM, ((u_long)(texture != NULL) << 4) | 0x146);
-    gs_write(SCE_GS_RGBAQ, *(u_long *)&color);
-    gs_write(SCE_GS_UV, (u_long)(u_int)uv.left | (u_long)(u_int)uv.top << 16);
-    gs_write(SCE_GS_XYZ2, z | (u_long)((screen.left + mgScreenOffx * 16) & 0xffff) |
-                              (u_long)((screen.top + mgScreenOffy * 16) & 0xffff) << 16);
-    gs_write(SCE_GS_UV, (u_long)(u_int)uv.right | (u_long)(u_int)uv.bottom << 16);
-    gs_write(SCE_GS_XYZ2, z | (u_long)((screen.right + mgScreenOffx * 16) & 0xffff) |
-                              (u_long)((screen.bottom + mgScreenOffy * 16) & 0xffff) << 16);
+    gs_write(SCE_GS_PRIM, SCE_GS_SET_PRIM(SCE_GS_PRIM_SPRITE, 0, texture != NULL, 0, 1, 0, 1, 0, 0));
+    gs_write(SCE_GS_RGBAQ, color.value);
+    sceGsUv corner_uv = {};
+    sceGsXyz corner = {};
+    corner.Z = (u_int)screen_z;
+    corner_uv.U = uv.left;
+    corner_uv.V = uv.top;
+    corner.X = screen.left + mgScreenOffx * GS_SUBPIXELS;
+    corner.Y = screen.top + mgScreenOffy * GS_SUBPIXELS;
+    gs_write(SCE_GS_UV, corner_uv.value);
+    gs_write(SCE_GS_XYZ2, corner.value);
+    corner_uv.U = uv.right;
+    corner_uv.V = uv.bottom;
+    corner.X = screen.right + mgScreenOffx * GS_SUBPIXELS;
+    corner.Y = screen.bottom + mgScreenOffy * GS_SUBPIXELS;
+    gs_write(SCE_GS_UV, corner_uv.value);
+    gs_write(SCE_GS_XYZ2, corner.value);
     return 0;
 }

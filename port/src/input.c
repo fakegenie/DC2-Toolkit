@@ -6,48 +6,57 @@
 #include "port_graphics.h"
 #include "touch.h"
 
+enum { TRIGGER_PRESS = 4096, AXIS_STEP = 256 };
+
 static struct port_input_state input;
 
 unsigned char port_input_axis(int value) {
-    if (value < -32768) value = -32768;
-    if (value > 32767) value = 32767;
-    return (unsigned char)((value + 32768) / 256);
+    if (value < INT16_MIN) value = INT16_MIN;
+    if (value > INT16_MAX) value = INT16_MAX;
+    return (unsigned char)((value - INT16_MIN) / AXIS_STEP);
 }
 
-void port_input_report(const struct port_input_state *state, unsigned char data[32]) {
-    static const uint16_t pressure_buttons[12] = {
-        PORT_INPUT_RIGHT, PORT_INPUT_LEFT, PORT_INPUT_UP, PORT_INPUT_DOWN,
-        PORT_INPUT_TRIANGLE, PORT_INPUT_CIRCLE, PORT_INPUT_CROSS, PORT_INPUT_SQUARE,
-        PORT_INPUT_L1, PORT_INPUT_R1, PORT_INPUT_L2, PORT_INPUT_R2
+static int trigger_depth(int value) {
+    if (value < 0) return 0;
+    return value > INT16_MAX ? INT16_MAX : value;
+}
+
+void port_input_report(const struct port_input_state *state, struct pad_dualshock2_report *report) {
+    static const uint16_t pressure_buttons[PORT_INPUT_PRESSURES] = {
+        [PORT_INPUT_PRESSURE_RIGHT] = PORT_INPUT_RIGHT, [PORT_INPUT_PRESSURE_LEFT] = PORT_INPUT_LEFT,
+        [PORT_INPUT_PRESSURE_UP] = PORT_INPUT_UP, [PORT_INPUT_PRESSURE_DOWN] = PORT_INPUT_DOWN,
+        [PORT_INPUT_PRESSURE_TRIANGLE] = PORT_INPUT_TRIANGLE, [PORT_INPUT_PRESSURE_CIRCLE] = PORT_INPUT_CIRCLE,
+        [PORT_INPUT_PRESSURE_CROSS] = PORT_INPUT_CROSS, [PORT_INPUT_PRESSURE_SQUARE] = PORT_INPUT_SQUARE,
+        [PORT_INPUT_PRESSURE_L1] = PORT_INPUT_L1, [PORT_INPUT_PRESSURE_R1] = PORT_INPUT_R1,
+        [PORT_INPUT_PRESSURE_L2] = PORT_INPUT_L2, [PORT_INPUT_PRESSURE_R2] = PORT_INPUT_R2,
     };
     uint16_t buttons = state->buttons;
-    int left = state->left_trigger;
-    int right = state->right_trigger;
-    if (left < 0) left = 0;
-    if (left > 32767) left = 32767;
-    if (right < 0) right = 0;
-    if (right > 32767) right = 32767;
-    if (left > 4096) buttons |= PORT_INPUT_L2;
-    if (right > 4096) buttons |= PORT_INPUT_R2;
-    memset(data, 0, 32);
-    data[1] = 0x79;
-    data[2] = (unsigned char)(~buttons >> 8);
-    data[3] = (unsigned char)~buttons;
-    data[4] = port_input_axis(state->right_x);
-    data[5] = port_input_axis(state->right_y);
-    data[6] = port_input_axis(state->left_x);
-    data[7] = port_input_axis(state->left_y);
-    for (int i = 0; i < 12; ++i) {
-        if (buttons & pressure_buttons[i]) data[8 + i] = 255;
+    int left = trigger_depth(state->left_trigger);
+    int right = trigger_depth(state->right_trigger);
+    if (left > TRIGGER_PRESS) buttons |= PORT_INPUT_L2;
+    if (right > TRIGGER_PRESS) buttons |= PORT_INPUT_R2;
+    uint16_t released = (uint16_t)~buttons;
+    *report = (struct pad_dualshock2_report){
+        .halfwords = PORT_INPUT_REPORT_HALFWORDS,
+        .terminal = PORT_INPUT_TERMINAL_DUALSHOCK,
+        .released_high = (uint8_t)(released >> 8),
+        .released_low = (uint8_t)released,
+        .right_x = port_input_axis(state->right_x),
+        .right_y = port_input_axis(state->right_y),
+        .left_x = port_input_axis(state->left_x),
+        .left_y = port_input_axis(state->left_y),
+    };
+    for (int i = 0; i < PORT_INPUT_PRESSURES; ++i) {
+        if (buttons & pressure_buttons[i]) report->pressure[i] = PORT_INPUT_PRESSURE_FULL;
     }
-    if (!(state->buttons & PORT_INPUT_L2)) data[18] = (unsigned char)(left * 255 / 32767);
-    if (!(state->buttons & PORT_INPUT_R2)) data[19] = (unsigned char)(right * 255 / 32767);
+    if (!(state->buttons & PORT_INPUT_L2)) report->pressure[PORT_INPUT_PRESSURE_L2] = (uint8_t)(left * PORT_INPUT_PRESSURE_FULL / INT16_MAX);
+    if (!(state->buttons & PORT_INPUT_R2)) report->pressure[PORT_INPUT_PRESSURE_R2] = (uint8_t)(right * PORT_INPUT_PRESSURE_FULL / INT16_MAX);
 }
 
-void port_input_read(unsigned char data[32]) {
+void port_input_read(struct pad_dualshock2_report *report) {
     struct port_input_state state = input;
     port_mods_input(&state);
-    port_input_report(&state, data);
+    port_input_report(&state, report);
 }
 
 #ifdef PORT_GRAPHICS

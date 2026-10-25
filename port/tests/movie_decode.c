@@ -11,10 +11,10 @@ static unsigned changed;
 static size_t audio_frames;
 static uint64_t audio_hash = 1469598103934665603ull;
 static unsigned audible;
-PortGraphicsState port_graphics;
+uint64_t port_fields;
 
 static void step(void) {
-    port_graphics.fields += 2;
+    port_fields += 2;
     port_movie_step();
 }
 
@@ -43,24 +43,37 @@ void audio_movie_pcm(const int16_t *samples, size_t frames, unsigned rate, unsig
 
 static void parser(void) {
     struct port_pss_packet packet;
-    unsigned char pes[] = {0,0,1,0xe0,0,11,0x80,0x80,5,0x21,0,1,0,3,1,2,3};
+    struct {
+        struct mpeg_pes_packet header;
+        unsigned char payload[3];
+    } pes = {
+        .header = {
+            .header = {.start = {.prefix = {0, 0, 1}, .stream = MPEG_STREAM_VIDEO}, .length = {0, 11}},
+            .extension = {.marker = MPEG_PES_MARKER, .pts_dts = MPEG_PES_HAS_PTS, .header_length = sizeof(struct mpeg_pts)},
+            .pts = {.marker_high = 1, .prefix = 2, .marker_middle = 1, .marker_low = 1, .low_low = 1},
+        },
+        .payload = {1, 2, 3},
+    };
+    unsigned char *pes_bytes = (unsigned char *)&pes;
     assert(port_pss_packet(NULL, 0, &packet) == 0);
-    for (size_t i = 0; i < sizeof(pes); i++) assert(port_pss_packet(pes, i, &packet) == 0);
-    assert(port_pss_packet(pes, sizeof(pes), &packet) == sizeof(pes));
-    assert(packet.stream == 0xe0 && packet.pts == 1 && packet.size == 3 && !memcmp(packet.data, "\1\2\3", 3));
-    pes[8] = 20;
-    assert(port_pss_packet(pes, sizeof(pes), &packet) == -1);
-    pes[8] = 5;
-    pes[11] = 0;
-    assert(port_pss_packet(pes, sizeof(pes), &packet) == -1);
-    unsigned char pack[21] = {0,0,1,0xba,0x44};
-    pack[13] = 7;
-    assert(port_pss_packet(pack, 20, &packet) == 0);
-    assert(port_pss_packet(pack, 21, &packet) == 21);
-    unsigned char end[] = {0,0,1,0xb9};
-    assert(port_pss_packet(end, sizeof(end), &packet) == 4);
-    end[0] = 1;
-    assert(port_pss_packet(end, sizeof(end), &packet) == -1);
+    for (size_t i = 0; i < sizeof(pes); i++) assert(port_pss_packet(pes_bytes, i, &packet) == 0);
+    assert(port_pss_packet(pes_bytes, sizeof(pes), &packet) == sizeof(pes));
+    assert(packet.stream == MPEG_STREAM_VIDEO && packet.pts == 1 && packet.size == sizeof pes.payload && !memcmp(packet.data, pes.payload, sizeof pes.payload));
+    pes.header.extension.header_length = 20;
+    assert(port_pss_packet(pes_bytes, sizeof(pes), &packet) == -1);
+    pes.header.extension.header_length = sizeof(struct mpeg_pts);
+    pes.header.pts.marker_middle = 0;
+    assert(port_pss_packet(pes_bytes, sizeof(pes), &packet) == -1);
+    struct {
+        struct mpeg_pack_header header;
+        unsigned char stuffing[7];
+    } pack = {.header = {.start = {.prefix = {0, 0, 1}, .stream = MPEG_STREAM_PACK}, .scr_high = 4, .version = MPEG_PACK_VERSION_2, .stuffing_length = 7}};
+    assert(port_pss_packet((unsigned char *)&pack, sizeof pack - 1, &packet) == 0);
+    assert(port_pss_packet((unsigned char *)&pack, sizeof pack, &packet) == sizeof pack);
+    struct mpeg_start_code end = {.prefix = {0, 0, 1}, .stream = MPEG_STREAM_END};
+    assert(port_pss_packet((unsigned char *)&end, sizeof(end), &packet) == sizeof end);
+    end.prefix[0] = 1;
+    assert(port_pss_packet((unsigned char *)&end, sizeof(end), &packet) == -1);
 }
 
 int main(int argc, char **argv) {

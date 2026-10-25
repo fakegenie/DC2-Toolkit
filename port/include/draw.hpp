@@ -1,31 +1,39 @@
 #pragma once
 #include "render.h"
+#include "sce/libgraph.h"
 #include <vector>
 
 class mgCTexture;
 class mgCVisualMDT;
 struct mgFACE_GROUP;
 
+constexpr int GS_BLOCKS_PER_PAGE = 32;
+constexpr int GS_FRAME_WIDTH_UNIT = 64;
+constexpr int GS_SUBPIXELS = 16;
+constexpr int GS_ALPHA_ONE = 0x80;
+constexpr int GS_WRAP_REPEAT = 0;
+constexpr int GS_TFX_DECAL = 1;
+
 struct GsRegisters {
-    u_long prim;
-    u_long rgbaq;
-    u_long st;
-    u_long uv;
-    u_long tex0;
-    u_long tex1;
-    u_long clamp;
-    u_long texa;
-    u_long fogcol;
-    u_long scissor;
-    u_long alpha;
-    u_long test;
-    u_long zbuf;
-    u_long frame;
-    u_long xyoffset;
-    u_long fog;
-    u_long bitbltbuf;
-    u_long trxpos;
-    u_long trxreg;
+    sceGsPrim prim;
+    sceGsRgbaq rgbaq;
+    sceGsSt st;
+    sceGsUv uv;
+    sceGsTex0 tex0;
+    sceGsTex1 tex1;
+    sceGsClamp clamp;
+    sceGsTexa texa;
+    sceGsFogcol fogcol;
+    sceGsScissor scissor;
+    sceGsAlpha alpha;
+    sceGsTest test;
+    sceGsZbuf zbuf;
+    sceGsFrame frame;
+    sceGsXyOffset xyoffset;
+    sceGsFog fog;
+    sceGsBitbltbuf bitbltbuf;
+    sceGsTrxpos trxpos;
+    sceGsTrxreg trxreg;
     float q;
 };
 
@@ -38,9 +46,9 @@ void gs_frame_shift(int pixels);
 int gs_read_shift(u_int base);
 extern "C" int port_screen_width(void);
 void gs_write(int reg, u_long value);
-void gs_packed(int reg, const u_int *words);
+void gs_packed(int reg, const void *qword);
 void gs_texture_source(const mgCTexture *texture);
-int gs_texture(u_long tex0, int width, int height);
+int gs_texture(u_int base, int width, int height);
 int gs_sampled(int texture, int width, int height, int repeat);
 void gs_copy_image(u_int source_base, int source_x, int source_y, u_int destination_base, int destination_x,
                    int destination_y, int width, int height);
@@ -48,8 +56,11 @@ int gs_texture_for(const mgCTexture *texture);
 void gs_next_frame();
 void gs_base_state(RenderState *state);
 void gs_texture_state(RenderState *state, const mgCTexture *texture, float *scale_u, float *scale_v);
-void gs_sample_limits(const RenderState *state, float scale_u, float scale_v, float limits[4]);
-void gs_screen_mapping(float screen[4], float *depth);
+RenderBlending gs_blending(sceGsAlpha alpha);
+RenderTests gs_tests(sceGsTest test);
+RenderExpansion gs_expansion(sceGsTexa texa);
+void gs_sample_limits(const RenderState *state, float scale_u, float scale_v, RenderTexelLimits *limits);
+void gs_screen_mapping(RenderScreenMapping *screen, float *depth);
 
 int visual_packet_draw(const void *common, const void *packet);
 void visual_next_frame();

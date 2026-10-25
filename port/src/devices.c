@@ -1,10 +1,10 @@
 #include <string.h>
 #include "sce/libpad.h"
-#ifdef PORT_GRAPHICS
 #include "input.h"
-#endif
 
-static unsigned char pad_open[2];
+enum { PAD_PORTS = 2 };
+
+static unsigned char pad_open[PAD_PORTS];
 
 int scePadInit(int mode) {
     memset(pad_open, 0, sizeof(pad_open));
@@ -17,13 +17,13 @@ int scePadEnd(void) {
 }
 
 int scePadPortOpen(int port, int slot, unsigned char *buffer) {
-    if (port < 0 || port > 1 || slot != 0 || !buffer) return 0;
+    if (port < 0 || port >= PAD_PORTS || slot != 0 || !buffer) return 0;
     pad_open[port] = 1;
     return 1;
 }
 
 int scePadPortClose(int port, int slot) {
-    if (port < 0 || port > 1 || slot != 0) return 0;
+    if (port < 0 || port >= PAD_PORTS || slot != 0) return 0;
     pad_open[port] = 0;
     return 1;
 }
@@ -35,21 +35,28 @@ int scePadGetState(int port, int slot) {
 
 int scePadRead(int port, int slot, unsigned char *data) {
     if (!data || scePadGetState(port, slot) != scePadStateStable) return 0;
+    struct pad_dualshock2_report report;
 #ifdef PORT_GRAPHICS
-    port_input_read(data);
+    port_input_read(&report);
 #else
-    memset(data, 0, 32);
-    data[1] = 0x79;
-    data[2] = 0xff;
-    data[3] = 0xff;
-    memset(data + 4, 0x80, 4);
+    report = (struct pad_dualshock2_report){
+        .halfwords = PORT_INPUT_REPORT_HALFWORDS,
+        .terminal = PORT_INPUT_TERMINAL_DUALSHOCK,
+        .released_high = UINT8_MAX,
+        .released_low = UINT8_MAX,
+        .right_x = PORT_INPUT_AXIS_CENTER,
+        .right_y = PORT_INPUT_AXIS_CENTER,
+        .left_x = PORT_INPUT_AXIS_CENTER,
+        .left_y = PORT_INPUT_AXIS_CENTER,
+    };
 #endif
+    memcpy(data, &report, sizeof(report));
     return 1;
 }
 
 int scePadInfoMode(int port, int slot, int info, int index) {
     if (scePadGetState(port, slot) != scePadStateStable) return 0;
-    if (info == InfoModeCurID || info == InfoModeCurExID) return 7;
+    if (info == InfoModeCurID || info == InfoModeCurExID) return PORT_INPUT_TERMINAL_DUALSHOCK;
     return 0;
 }
 

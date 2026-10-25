@@ -91,18 +91,13 @@
   },
   {
     "file": "ps2/include/dataread.hpp",
-    "find": "char *name;",
-    "replace": "ps2_pointer<char> name;"
+    "find": "    union {\n        int   name_offset; /**< Offset of the file name from the start of the index, as stored on the disc. */\n        char *name;        /**< File name, once the index has been loaded. */\n    };\n",
+    "replace": "    int name_offset; /**< Offset of the file name from the start of the index. */\n"
   },
   {
     "file": "ps2/include/dataread.hpp",
     "find": "STATIC_ASSERT(sizeof(DATA_HEADER) == 0xC);",
     "replace": "PORT_RECORD_ASSERT(sizeof(DATA_HEADER) == 0xC);"
-  },
-  {
-    "file": "ps2/src/mg_texture.cpp",
-    "find": "if (packet != NULL) {\n                    packet += mgLoadImage(packet, tex0.TBP0",
-    "replace": "if (packet != NULL) {\n                    port_texture_loaded(*image);\n                    packet += mgLoadImage(packet, tex0.TBP0"
   },
   {
     "file": "ps2/src/mg_texture.cpp",
@@ -208,16 +203,6 @@
     "file": "ps2/src/mg_dataset.cpp",
     "find": "blocks = (mds->object_num * 4) >> 4;",
     "replace": "blocks = (mds->object_num * sizeof(mgCFrame *)) >> 4;"
-  },
-  {
-    "file": "ps2/include/inventmn.hpp",
-    "find": "char *name;     /**< Name of the idea. */",
-    "replace": "ps2_pointer<char> name;     /**< Name of the idea. */"
-  },
-  {
-    "file": "ps2/include/inventmn.hpp",
-    "find": "STATIC_ASSERT(sizeof(PIC_NAME_INFO) == 0x8);",
-    "replace": "PORT_RECORD_ASSERT(sizeof(PIC_NAME_INFO) == 0x8);"
   },
   {
     "file": "ps2/src/mg_drawprim.cpp",
@@ -583,7 +568,7 @@
   {
     "file": "ps2/include/userdata.hpp",
     "find": "char *image; /**< Byte view of the photo's 64x64 packed 16-bit pixels. */",
-    "replace": "ps2_pointer<char> image; /**< Byte view of the photo's 64x64 packed 16-bit pixels. */"
+    "replace": "relative_pointer<char> image; /**< Byte view of the photo's 64x64 packed 16-bit pixels. */"
   },
   {
     "file": "ps2/include/userdata.hpp",
@@ -703,17 +688,32 @@
   {
     "file": "ps2/include/mg_memory.hpp",
     "find": "u_long128      *data;",
-    "replace": "ps2_pointer<u_long128> data;"
+    "replace": "relative_pointer<u_long128> data;"
   },
   {
     "file": "ps2/include/mg_memory.hpp",
     "find": "mgMEMORY_BLOCK *next;",
-    "replace": "ps2_pointer<mgMEMORY_BLOCK> next;"
+    "replace": "relative_pointer<mgMEMORY_BLOCK> next;"
   },
   {
     "file": "ps2/include/mg_memory.hpp",
     "find": "STATIC_ASSERT(sizeof(mgMEMORY_BLOCK) == 0x10);",
     "replace": "PORT_RECORD_ASSERT(sizeof(mgMEMORY_BLOCK) == 0x10);"
+  },
+  {
+    "file": "ps2/include/mg_memory.hpp",
+    "find": "    u_long128 *StartStackMode(int mode, int size);",
+    "replace": "    u_long128 *StartStackMode(int mode, int size, const char *file, int line);"
+  },
+  {
+    "file": "ps2/include/mg_memory.hpp",
+    "find": "    void stSetBuffer(u_long128 *buffer, int size);",
+    "replace": "    void stSetBuffer(u_long128 *buffer, int size, const char *file, int line);"
+  },
+  {
+    "file": "ps2/include/mg_memory.hpp",
+    "find": "        return stack_bytes;\n    }\n};\n",
+    "replace": "        return stack_bytes;\n    }\n};\n\n#define StartStackMode(mode, size) StartStackMode(mode, size, __FILE_NAME__, __LINE__)\n#define stSetBuffer(buffer, size) stSetBuffer(buffer, size, __FILE_NAME__, __LINE__)\n"
   },
   {
     "file": "ps2/include/effscript.hpp",
@@ -742,58 +742,55 @@
   },
   {
     "file": "ps2/src/mglib.cpp",
-    "find": "static const u_int timer0_count = 0x10000000;",
-    "replace": "static const uptr timer0_count = PORT_WINDOW + 0x10000000;"
+    "find": "/**\n *\n * TIMER0 count register sampled for frame timing.\n *\n */\nstatic const u_int timer0_count = 0x10000000;\n/**\n *\n * TIMER0 mode register controlling the frame timer clock and counter enable.\n *\n */\nstatic const u_int timer0_mode = 0x10000010;\n/**\n *\n * GS status register sampled for the displayed interlace field.\n *\n */\nstatic const u_int gs_csr = 0x12001000;\n/**\n *\n * GS PMODE register selecting and blending the display read circuits.\n *\n */\nstatic const u_int gs_pmode = 0x12000000;\n/**\n *\n * GS DISPFB1 register addressing the frame buffer of read circuit 1.\n *\n */\nstatic const u_int gs_dispfb1 = 0x12000070;\n/**\n *\n * GS DISPLAY1 register positioning the display area of read circuit 1.\n *\n */\nstatic const u_int gs_display1 = 0x12000080;\n/**\n *\n * GS DISPFB2 register addressing the frame buffer of read circuit 2.\n *\n */\nstatic const u_int gs_dispfb2 = 0x12000090;\n/**\n *\n * GS DISPLAY2 register positioning the display area of read circuit 2.\n *\n */\nstatic const u_int gs_display2 = 0x120000A0;",
+    "replace": "#include \"port_graphics.h\""
   },
   {
     "file": "ps2/src/mglib.cpp",
-    "find": "static const u_int timer0_mode = 0x10000010;",
-    "replace": "static const uptr timer0_mode = PORT_WINDOW + 0x10000010;"
+    "find": "    u_long csr = *(volatile u_long *) gs_csr;\n    VSyncField = !((csr >> 13) & 1);",
+    "replace": "    VSyncField = !port_display_field();"
   },
   {
     "file": "ps2/src/mglib.cpp",
-    "find": "static const u_int gs_csr = 0x12001000;",
-    "replace": "static const uptr gs_csr = PORT_WINDOW + 0x12001000;"
+    "find": "    *(volatile u_int *) timer0_mode = 0x83;\n",
+    "replace": ""
   },
   {
     "file": "ps2/src/mglib.cpp",
-    "find": "static const u_int gs_pmode = 0x12000000;",
-    "replace": "static const uptr gs_pmode = PORT_WINDOW + 0x12000000;"
+    "find": "    *(int *) timer0_count = 0;\n    h_count = *(int *) timer0_count;",
+    "replace": "    port_timer_reset();\n    h_count = port_timer_lines();"
   },
   {
     "file": "ps2/src/mglib.cpp",
-    "find": "static const u_int gs_dispfb1 = 0x12000070;",
-    "replace": "static const uptr gs_dispfb1 = PORT_WINDOW + 0x12000070;"
+    "find": "*(volatile u_int *) timer0_count",
+    "replace": "port_timer_lines()",
+    "count": 4
   },
   {
     "file": "ps2/src/mglib.cpp",
-    "find": "static const u_int gs_display1 = 0x12000080;",
-    "replace": "static const uptr gs_display1 = PORT_WINDOW + 0x12000080;"
+    "find": "        *(volatile u_long *) gs_pmode = 0xFF23;\n",
+    "replace": ""
   },
   {
     "file": "ps2/src/mglib.cpp",
-    "find": "static const u_int gs_dispfb2 = 0x12000090;",
-    "replace": "static const uptr gs_dispfb2 = PORT_WINDOW + 0x12000090;"
-  },
-  {
-    "file": "ps2/src/mglib.cpp",
-    "find": "static const u_int gs_display2 = 0x120000A0;",
-    "replace": "static const uptr gs_display2 = PORT_WINDOW + 0x120000A0;"
+    "find": "    *(volatile u_long *) gs_dispfb1 = (u_long) frame->FBP | ((u_long) frame->FBW << 9) | ((u_long) frame->PSM << 15) | ((u_long) 1 << 43);\n    *(volatile u_long *) gs_display1 = (u_long) 0x290 | ((u_long) (offset_y + 72) << 12) | ((u_long) magnification << 23) | ((u_long) (mgScreenWidth * (magnification + 1) - 1) << 32) | ((u_long) (mgScreenHeight - 2) << 44);\n    *(volatile u_long *) gs_dispfb2 = (u_long) frame->FBP | ((u_long) frame->FBW << 9) | ((u_long) frame->PSM << 15);\n    *(volatile u_long *) gs_display2 = (u_long) 0x290 | ((u_long) (offset_y + 72) << 12) | ((u_long) magnification << 23) | ((u_long) (mgScreenWidth * (magnification + 1) - 1) << 32) | ((u_long) (mgScreenHeight - 2) << 44);\n",
+    "replace": ""
   },
   {
     "file": "ps2/src/sceneload.cpp",
-    "find": "static const u_int timer0_count = 0x10000000;",
-    "replace": "static const uptr timer0_count = PORT_WINDOW + 0x10000000;"
+    "find": "static const u_int timer0_count = 0x10000000;\n",
+    "replace": "#include \"port_graphics.h\"\n"
+  },
+  {
+    "file": "ps2/src/sceneload.cpp",
+    "find": "*(volatile u_int *) timer0_count",
+    "replace": "port_timer_lines()",
+    "count": 3
   },
   {
     "file": "ps2/src/mg_visual.cpp",
-    "find": "    return (u_int *) (buff_id ? 0x70002000 : 0x70000000);",
-    "replace": "    return (u_int *) (PORT_WINDOW + (buff_id ? 0x70002000 : 0x70000000));"
-  },
-  {
-    "file": "ps2/src/mg_visual.cpp",
-    "find": "    *(u_int *) 0x1000E010 = 0x100;",
-    "replace": "    *(u_int *) (PORT_WINDOW + 0x1000E010) = 0x100;"
+    "find": "u_int *GetScrPad() {\n    return (u_int *) (buff_id ? 0x70002000 : 0x70000000);\n}",
+    "replace": ""
   },
   {
     "file": "ps2/src/dataread.cpp",
@@ -807,13 +804,38 @@
   },
   {
     "file": "ps2/src/inventmn.cpp",
+    "find": "static u_long128 pic_name_text_buff_1660[0x248];",
+    "replace": "constexpr int PIC_NAME_TEXT_QUADWORDS = 2 * 0x248;\nstatic u_long128 pic_name_text_buff_1660[PIC_NAME_TEXT_QUADWORDS];"
+  },
+  {
+    "file": "ps2/src/inventmn.cpp",
+    "find": "stack.stSetBuffer(pic_name_text_buff_1660, 0x248);",
+    "replace": "stack.stSetBuffer(pic_name_text_buff_1660, PIC_NAME_TEXT_QUADWORDS);"
+  },
+  {
+    "file": "ps2/src/inventmn.cpp",
     "find": "            textures[i]->image[0] = (u_long128 *) info[i].image;",
     "replace": "            textures[i]->image[0] = (u_long128 *) (char *) info[i].image;"
   },
   {
     "file": "ps2/src/dataread.cpp",
+    "find": "static u_char header_buff[0x50000];\n",
+    "replace": "static u_char header_buff[0x50000];\n\nstatic char *GetDataName(DATA_HEADER *header) {\n    return (char *) header_buff + header->name_offset;\n}\n"
+  },
+  {
+    "file": "ps2/src/dataread.cpp",
+    "find": "strcasecmp(header->name, name)",
+    "replace": "strcasecmp(GetDataName(header), name)"
+  },
+  {
+    "file": "ps2/src/dataread.cpp",
+    "find": "        entry->name += base;\n        name = entry->name;",
+    "replace": "        name = GetDataName(entry);"
+  },
+  {
+    "file": "ps2/src/dataread.cpp",
     "find": "    printf(\"%s %d %d\\n\", entry->name, entry->sector, size_to_sector(entry->size));",
-    "replace": "    printf(\"%s %d %d\\n\", (char *) entry->name, entry->sector, size_to_sector(entry->size));"
+    "replace": "    printf(\"%s %d %d\\n\", GetDataName(entry), entry->sector, size_to_sector(entry->size));"
   },
   {
     "file": "ps2/src/inventmn.cpp",
@@ -901,11 +923,6 @@
     "replace": "void mgEndFrameRetail(mgCDrawManager *manager) {"
   },
   {
-    "file": "ps2/src/mglib.cpp",
-    "find": "void mgSetPkTextureRepeat(sceGsClamp clamp) {",
-    "replace": "void mgSetPkTextureRepeatRetail(sceGsClamp clamp) {"
-  },
-  {
     "file": "ps2/src/sceneseq.cpp",
     "find": "float time = (now_frame - key[now_key].frame) / key[now_key].length;",
     "replace": "float time = (now_frame - key[now_key].frame) / (key[now_key].length + (key[now_key].length == 0));",
@@ -951,11 +968,6 @@
     "file": "ps2/src/dataread.cpp",
     "find": "int LoadFile2(char *path, void *buffer, int *out_size, int mode) {",
     "replace": "int LoadFile2Retail(char *path, void *buffer, int *out_size, int mode) {"
-  },
-  {
-    "file": "ps2/src/dataread.cpp",
-    "find": "        entry->name += base;",
-    "replace": "        entry->name = (char *) (base + entry->name_offset);"
   },
   {
     "file": "ps2/src/gameutil.cpp",
@@ -1106,12 +1118,12 @@
   {
     "file": "ps2/src/mg_memory.cpp",
     "find": "#include \"mg_memory.hpp\"\n",
-    "replace": "#include \"mg_memory.hpp\"\n#include \"port_memory.h\"\n"
+    "replace": "#include \"mg_memory.hpp\"\n#include \"port_memory.h\"\n\n#undef StartStackMode\n#undef stSetBuffer\n"
   },
   {
     "file": "ps2/src/mg_memory.cpp",
     "find": "        stack_size = spare;\n        return stack_block->data;",
-    "replace": "        stack_size = spare;\n        port_memory_set(this, __builtin_return_address(0), spare);\n        return stack_block->data;"
+    "replace": "        stack_size = spare;\n        port_memory_set(this, file, line, spare);\n        return stack_block->data;"
   },
   {
     "file": "ps2/src/mg_memory.cpp",
@@ -1127,7 +1139,17 @@
   {
     "file": "ps2/src/mg_memory.cpp",
     "find": "    stack = buffer;\n    stack_used = 0;\n    stack_size = size;\n",
-    "replace": "    stack = buffer;\n    stack_used = 0;\n    stack_size = size;\n    port_memory_set(this, __builtin_return_address(0), size);\n"
+    "replace": "    stack = buffer;\n    stack_used = 0;\n    stack_size = size;\n    port_memory_set(this, file, line, size);\n"
+  },
+  {
+    "file": "ps2/src/mg_memory.cpp",
+    "find": "u_long128 *mgCMemory::StartStackMode(int mode, int size) {",
+    "replace": "u_long128 *mgCMemory::StartStackMode(int mode, int size, const char *file, int line) {"
+  },
+  {
+    "file": "ps2/src/mg_memory.cpp",
+    "find": "void mgCMemory::stSetBuffer(u_long128 *buffer, int size) {",
+    "replace": "void mgCMemory::stSetBuffer(u_long128 *buffer, int size, const char *file, int line) {"
   },
   {
     "file": "ps2/src/editloop.cpp",
@@ -1270,5 +1292,481 @@
     "file": "ps2/src/dng_main.cpp",
     "find": "#include \"common.h\"\n",
     "replace": "#include \"common.h\"\n#include \"port_menu.h\"\n"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "    if (mgAntialiasing != 0) {\n        mgDBuff.disp[mgDBuffID].pmode = 0x7F23;\n    } else {\n        mgDBuff.disp[mgDBuffID].pmode = 0xFF23;\n    }\n\n    *(u_long *) &mgDBuff.disp[mgDBuffID].bgcolor = 0;\n    *(u_long *) &mgDBuff.disp[mgDBuffID].smode2 = 1;\n    frame = mgDBuffID != 0 ? &mgDBuff.draw1.frame1 : &mgDBuff.draw0.frame1;\n    magnification = mgScreenWidth == 512 ? 4 : 3;\n    offset_y = (524 - mgScreenHeight) / 2;\n    *(u_long *) &mgDBuff.disp[mgDBuffID].dispfb = (u_long) frame->FBP | ((u_long) frame->FBW << 9) | ((u_long) frame->PSM << 15);\n    *(u_long *) &mgDBuff.disp[mgDBuffID].display = (u_long) 0x290 | ((u_long) (offset_y + 72) << 12) | ((u_long) magnification << 23) | ((u_long) (mgScreenWidth * (magnification + 1) - 1) << 32) | ((u_long) (mgScreenHeight - 1) << 44);\n    FlushCache(0);\n    sceGsSwapDBuff(&mgDBuff, mgDBuffID);\n",
+    "replace": "    FlushCache(0);\n"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "    sceGsFrame  *frame;\n    float        packet_free;\n    float        data_free;\n    int          wait_start;\n    int          sample;\n    int          top;\n    int          magnification;\n    int          offset_y;\n",
+    "replace": "    float        packet_free;\n    float        data_free;\n    int          wait_start;\n    int          sample;\n    int          top;\n"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "void StoreImage(int front_buffer) {",
+    "replace": "constexpr int STORE_IMAGE_MAX_WIDTH = 640;\nconstexpr int STORE_IMAGE_MAX_HEIGHT = 512;\nstatic u_long128 store_image_pixels[STORE_IMAGE_MAX_WIDTH * STORE_IMAGE_MAX_HEIGHT * sizeof(u_int) / sizeof(u_long128)];\n\nvoid StoreImage(int front_buffer) {"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "(u_long128 *) 0x2100000",
+    "replace": "store_image_pixels",
+    "count": 3
+  },
+  {
+    "file": "ps2/include/sce/libgraph.h",
+    "find": "/* The read-back packet the SDK builds and the game only ever passes by address. Its extent is the\n   one thing about it the image states, and it is what the executable gives gs_simage. */\ntypedef struct {\n    u_long chain[7][2];\n} sceGsStoreImage;",
+    "replace": "typedef struct {\n    short sbp;\n    short sbw;\n    short spsm;\n    short ssax;\n    short ssay;\n    short rrw;\n    short rrh;\n} sceGsStoreImage;"
+  },
+  {
+    "file": "ps2/include/sce/libgraph.h",
+    "find": "typedef struct {\n    u_long OFX : 16;\n    u_long pad16 : 16;\n    u_long OFY : 16;\n    u_long pad48 : 16;\n} sceGsXyOffset;",
+    "replace": "typedef struct {\n    union {\n        u_long value;\n\n        struct {\n            u_long OFX : 16;\n            u_long pad16 : 16;\n            u_long OFY : 16;\n            u_long pad48 : 16;\n        };\n    };\n} sceGsXyOffset;"
+  },
+  {
+    "file": "ps2/include/sce/libgraph.h",
+    "find": "typedef struct {\n    u_long SCAX0 : 11;\n    u_long pad11 : 5;\n    u_long SCAX1 : 11;\n    u_long pad27 : 5;\n    u_long SCAY0 : 11;\n    u_long pad43 : 5;\n    u_long SCAY1 : 11;\n    u_long pad59 : 5;\n} sceGsScissor;",
+    "replace": "typedef struct {\n    union {\n        u_long value;\n\n        struct {\n            u_long SCAX0 : 11;\n            u_long pad11 : 5;\n            u_long SCAX1 : 11;\n            u_long pad27 : 5;\n            u_long SCAY0 : 11;\n            u_long pad43 : 5;\n            u_long SCAY1 : 11;\n            u_long pad59 : 5;\n        };\n    };\n} sceGsScissor;"
+  },
+  {
+    "file": "ps2/include/sce/libgraph.h",
+    "find": "typedef struct {\n    u_long LCM : 1;\n    u_long pad1 : 1;\n    u_long MXL : 3;\n    u_long MMAG : 1;\n    u_long MMIN : 3;\n    u_long MTBA : 1;\n    u_long pad10 : 9;\n    u_long L : 2;\n    u_long pad21 : 11;\n    u_long K : 12;\n    u_long pad44 : 20;\n} sceGsTex1;",
+    "replace": "typedef struct {\n    union {\n        u_long value;\n\n        struct {\n            u_long LCM : 1;\n            u_long pad1 : 1;\n            u_long MXL : 3;\n            u_long MMAG : 1;\n            u_long MMIN : 3;\n            u_long MTBA : 1;\n            u_long pad10 : 9;\n            u_long L : 2;\n            u_long pad21 : 11;\n            u_long K : 12;\n            u_long pad44 : 20;\n        };\n    };\n} sceGsTex1;"
+  },
+  {
+    "file": "ps2/include/sce/libgraph.h",
+    "find": "typedef struct sceGsClamp {\n    u_long WMS : 2;\n    u_long WMT : 2;\n    u_long MINU : 10;\n    u_long MAXU : 10;\n    u_long MINV : 10;\n    u_long MAXV : 10;\n    u_long pad44 : 20;\n} sceGsClamp;",
+    "replace": "typedef struct sceGsClamp {\n    union {\n        u_long value;\n\n        struct {\n            u_long WMS : 2;\n            u_long WMT : 2;\n            u_long MINU : 10;\n            u_long MAXU : 10;\n            u_long MINV : 10;\n            u_long MAXV : 10;\n            u_long pad44 : 20;\n        };\n    };\n} sceGsClamp;"
+  },
+  {
+    "file": "ps2/include/sce/libgraph.h",
+    "find": "typedef struct {\n    u_long PRIM : 3;\n    u_long IIP : 1;\n    u_long TME : 1;\n    u_long FGE : 1;\n    u_long ABE : 1;\n    u_long AA1 : 1;\n    u_long FST : 1;\n    u_long CTXT : 1;\n    u_long FIX : 1;\n    u_long pad11 : 53;\n} sceGsPrim;",
+    "replace": "typedef struct {\n    union {\n        u_long value;\n\n        struct {\n            u_long PRIM : 3;\n            u_long IIP : 1;\n            u_long TME : 1;\n            u_long FGE : 1;\n            u_long ABE : 1;\n            u_long AA1 : 1;\n            u_long FST : 1;\n            u_long CTXT : 1;\n            u_long FIX : 1;\n            u_long pad11 : 53;\n        };\n    };\n} sceGsPrim;"
+  },
+  {
+    "file": "ps2/include/sce/libgraph.h",
+    "find": "typedef struct {\n    u_long X : 16;\n    u_long Y : 16;\n    u_long Z : 32;\n} sceGsXyz;",
+    "replace": "typedef struct {\n    union {\n        u_long value;\n\n        struct {\n            u_long X : 16;\n            u_long Y : 16;\n            u_long Z : 32;\n        };\n    };\n} sceGsXyz;"
+  },
+  {
+    "file": "ps2/include/sce/libgraph.h",
+    "find": "typedef struct {\n    u_long TA0 : 8;\n    u_long pad8 : 7;\n    u_long AEM : 1;\n    u_long pad16 : 16;\n    u_long TA1 : 8;\n    u_long pad40 : 24;\n} sceGsTexa;",
+    "replace": "typedef struct {\n    union {\n        u_long value;\n\n        struct {\n            u_long TA0 : 8;\n            u_long pad8 : 7;\n            u_long AEM : 1;\n            u_long pad16 : 16;\n            u_long TA1 : 8;\n            u_long pad40 : 24;\n        };\n    };\n} sceGsTexa;"
+  },
+  {
+    "file": "ps2/include/sce/libgraph.h",
+    "find": "/* Five registers rather than a layout the code states",
+    "replace": "typedef struct {\n    union {\n        u_long value;\n\n        struct {\n            u_long X : 16;\n            u_long Y : 16;\n            u_long Z : 24;\n            u_long F : 8;\n        };\n    };\n} sceGsXyzf;\n\ntypedef struct {\n    union {\n        u_long value;\n\n        struct {\n            float S;\n            float T;\n        };\n    };\n} sceGsSt;\n\ntypedef struct {\n    union {\n        u_long value;\n\n        struct {\n            u_long U : 14;\n            u_long pad14 : 2;\n            u_long V : 14;\n            u_long pad30 : 34;\n        };\n    };\n} sceGsUv;\n\ntypedef struct {\n    union {\n        u_long value;\n\n        struct {\n            u_long pad0 : 56;\n            u_long F : 8;\n        };\n    };\n} sceGsFog;\n\ntypedef struct {\n    union {\n        u_long value;\n\n        struct {\n            u_long FCR : 8;\n            u_long FCG : 8;\n            u_long FCB : 8;\n            u_long pad24 : 40;\n        };\n    };\n} sceGsFogcol;\n\ntypedef struct {\n    union {\n        u_long value;\n\n        struct {\n            u_long SBP : 14;\n            u_long pad14 : 2;\n            u_long SBW : 6;\n            u_long pad22 : 2;\n            u_long SPSM : 6;\n            u_long pad30 : 2;\n            u_long DBP : 14;\n            u_long pad46 : 2;\n            u_long DBW : 6;\n            u_long pad54 : 2;\n            u_long DPSM : 6;\n            u_long pad62 : 2;\n        };\n    };\n} sceGsBitbltbuf;\n\ntypedef struct {\n    union {\n        u_long value;\n\n        struct {\n            u_long SSAX : 11;\n            u_long pad11 : 5;\n            u_long SSAY : 11;\n            u_long pad27 : 5;\n            u_long DSAX : 11;\n            u_long pad43 : 5;\n            u_long DSAY : 11;\n            u_long DIR : 2;\n            u_long pad61 : 3;\n        };\n    };\n} sceGsTrxpos;\n\ntypedef struct {\n    union {\n        u_long value;\n\n        struct {\n            u_long RRW : 12;\n            u_long pad12 : 20;\n            u_long RRH : 12;\n            u_long pad44 : 20;\n        };\n    };\n} sceGsTrxreg;\n\ntypedef struct {\n    union {\n        u_long value;\n\n        struct {\n            u_long XDIR : 2;\n            u_long pad2 : 62;\n        };\n    };\n} sceGsTrxdir;\n\n/* Five registers rather than a layout the code states"
+  },
+  {
+    "file": "ps2/include/sce/libgraph.h",
+    "find": "#define SCE_GS_UV 3\n",
+    "replace": "#define SCE_GS_ST 2\n#define SCE_GS_UV 3\n"
+  },
+  {
+    "file": "ps2/include/sce/libgraph.h",
+    "find": "#define SCE_GS_XYZF3 12\n",
+    "replace": "#define SCE_GS_FOG 10\n#define SCE_GS_XYZF3 12\n#define SCE_GS_XYZ3 13\n"
+  },
+  {
+    "file": "ps2/src/mg_texture.cpp",
+    "find": "static int GetZBufVram(int *size) {",
+    "replace": "int GetZBufVram(int *size) {"
+  },
+  {
+    "file": "ps2/src/mg_texture.cpp",
+    "find": "static int CheckCopyToZBufVram(mgCTexture *texture, int *size) {",
+    "replace": "int CheckCopyToZBufVram(mgCTexture *texture, int *size) {"
+  },
+  {
+    "file": "ps2/src/mg_tanime.cpp",
+    "find": "    if (packet == NULL) {\n        packet = mgVif1Packet;\n    }\n\n    sceVif1PkCnt(packet, 0);\n    sceVif1PkOpenDirectCode(packet, 0);\n    sceVif1PkOpenGifTag(packet, *(u_long128 *) &mgGiftagAD);\n    sceVif1PkAddGsAD(packet, SCE_GS_TEXFLUSH, 0);\n    // TA0 = TA1 = 0x80: alpha of 24-bit and 16-bit texels.\n    sceVif1PkAddGsAD(packet, SCE_GS_TEXA, 0x80 | ((u_long) 0x80 << 32));\n    sceVif1PkCloseGifTag(packet);\n    sceVif1PkCloseDirectCode(packet);\n\n",
+    "replace": ""
+  },
+  {
+    "file": "ps2/src/mg_tanime.cpp",
+    "find": "\n    sceVif1PkCnt(packet, 0);\n    sceVif1PkOpenDirectCode(packet, 0);\n    sceVif1PkOpenGifTag(packet, *(u_long128 *) &mgGiftagAD);\n    sceVif1PkAddGsAD(packet, SCE_GS_TEXFLUSH, 0);\n    sceVif1PkCloseGifTag(packet);\n    sceVif1PkCloseDirectCode(packet);\n}",
+    "replace": "}"
+  },
+  {
+    "file": "ps2/src/mg_drawprim.cpp",
+    "find": "    sceVif1PkTerminate(vif_packet);\n    manager->ReloadTexture(group, vif_packet);",
+    "replace": "    manager->ReloadTexture(group, vif_packet);"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "    sceDmaEnv      dma_env;\n    u_long128      clear_pixels[8192];\n    sceGsLoadImage load_image;\n    int            aligned_height;\n    int            buffer;\n    int            i;\n",
+    "replace": "    int            aligned_height;\n"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "    sceDmaReset(1);\n    sceDmaGetEnv(&dma_env);\n    dma_env.notify = 0x100;\n    sceDmaPutEnv(&dma_env);\n    sceGsResetPath();\n",
+    "replace": ""
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "    DmaCH1 = sceDmaGetChan(MG_DMA_CHANNEL_VIF1);\n    DmaCH2 = sceDmaGetChan(MG_DMA_CHANNEL_GIF);\n    DmaCH8 = sceDmaGetChan(MG_DMA_CHANNEL_FROM_SPR);\n    DmaCH1->chcr.TTE = 1;\n    *(u_long128 *) &mgGiftagAD = 0;\n    mgGiftagAD.EOP = 1;\n    mgGiftagAD.NREG = 1;\n    mgGiftagAD.REGS0 = SCE_GIF_PACKED_AD;\n    mgScreenMode",
+    "replace": "    mgScreenMode"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "    sceGsResetGraph(0, SCE_GS_INTERLACE, video_mode, 0);\n\n    for (i = 0; i < 8192; i++) {\n        clear_pixels[i] = 0;\n    }\n\n    for (buffer = 0; buffer < 32; buffer++) {\n        sceGsSetDefLoadImage(&load_image, buffer * 0x200, 2, SCE_GS_PSMCT32, 0, 0, 128, 256);\n        FlushCache(0);\n        sceGsExecLoadImage(&load_image, clear_pixels);\n    }\n\n",
+    "replace": ""
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "    *(u_long *) &mgTEX1_1 = 0x261;\n",
+    "replace": "    mgTEX1_1.value = 0;\n    mgTEX1_1.LCM = 1;\n    mgTEX1_1.MMAG = MG_TEXTURE_FILTER_LINEAR;\n    mgTEX1_1.MMIN = MG_TEXTURE_FILTER_LINEAR;\n    mgTEX1_1.MTBA = 1;\n"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "    *(u_long *) &mgTEST_1 = 0x5000B;\n",
+    "replace": "    mgTEST_1.value = 0;\n    mgTEST_1.ATE = 1;\n    mgTEST_1.ATST = SCE_GS_GEQUAL;\n    mgTEST_1.ZTE = 1;\n    mgTEST_1.ZTST = SCE_GS_ZGEQUAL;\n"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "    *(u_long *) &mgALPHA_1 = 0x44;\n",
+    "replace": "    mgALPHA_1.value = SCE_GS_SET_ALPHA(SCE_GS_ALPHA_CS, SCE_GS_ALPHA_CD, SCE_GS_ALPHA_AS, SCE_GS_ALPHA_CD, 0);\n"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "    *(u_long *) &mgTEXA_1 = 0x100400000ULL;\n",
+    "replace": "    mgTEXA_1.value = 0;\n    mgTEXA_1.TA1 = 1;\n"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "    FlushCache(0);\n    sceDmaSend(DmaCH1, My_dma_start0);\n    sceGsSyncPath(0, 0);\n    FlushCache(0);\n    sceDmaSend(DmaCH1, Vu_progmain);\n    sceGsSyncPath(0, 0);\n    {\n        u_long128 *program = mgGetVuProgPacket(MG_VU_PROG_MAIN);\n\n        FlushCache(0);\n        sceDmaSend(DmaCH1, program);\n        sceGsSyncPath(0, 0);\n    }\n",
+    "replace": ""
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "    FlushCache(0);\n    sceGsSwapDBuff(&mgDBuff, 0);\n    sceDmaSync(DmaCH2, 0, 0);\n    mgCreateSinTable();",
+    "replace": "    mgCreateSinTable();"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "    mgBeginPacket(manager);\n    *(u_long128 *) &mgGiftagAD = 0;\n    mgGiftagAD.EOP = 1;\n    mgGiftagAD.NREG = 1;\n    mgGiftagAD.REGS0 = SCE_GIF_PACKED_AD;\n    sceVif1PkCnt(mgVif1Packet, 0);\n    sceVif1PkOpenDirectCode(mgVif1Packet, 0);\n    sceVif1PkOpenGifTag(mgVif1Packet, *(u_long128 *) &mgGiftagAD);\n    sceVif1PkAddGsAD(mgVif1Packet, SCE_GS_SCANMSK, 0);\n    sceVif1PkAddGsAD(mgVif1Packet, SCE_GS_TEXFLUSH, 0);\n    sceVif1PkCloseGifTag(mgVif1Packet);\n    sceVif1PkCloseDirectCode(mgVif1Packet);\n    mgSetPkTextureRepeat(1);",
+    "replace": "    mgBeginPacket(manager);\n    mgSetPkTextureRepeat(1);"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "        mgDBuff.clear0.rgbaq.bytes.blue, mgDBuff.clear0.rgbaq.bytes.alpha);\n    mgFlushRenderInfo();\n}",
+    "replace": "        mgDBuff.clear0.rgbaq.bytes.blue, mgDBuff.clear0.rgbaq.bytes.alpha);\n}"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "    mgEndPacket(NULL);\n\n",
+    "replace": ""
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "void mgSendPacket(mgCDrawManager *manager) {\n    DmaCH1 = sceDmaGetChan(MG_DMA_CHANNEL_VIF1);\n    DmaCH1->chcr.TTE = 1;\n    FlushCache(0);\n    sceDmaSend(DmaCH1, mgVif1Packet->pBase);\n    mgDataID = !mgDataID;",
+    "replace": "void mgSendPacket(mgCDrawManager *manager) {\n    mgDataID = !mgDataID;"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "    sceGsXyOffset offset;\n    sceGsScissor  scissor;\n    offset.OFX = (short) mgScreenOffx * 16;\n    offset.OFY = (short) mgScreenOffy * 16;\n    scissor.SCAX0 = 0;\n    scissor.SCAX1 = width - 1;\n    scissor.SCAY0 = 0;\n    scissor.SCAY1 = height - 1;\n    vif = mgVif1Packet;\n    sceVif1PkTerminate(vif);\n    packet = vif->pCurrent;\n    packet[0] = MG_DMA_CNT | 7;\n    packet[1] = 0;\n    packet[2] = 0;\n    packet[3] = MG_VIF_DIRECT | 7;\n    packet[4] = MG_GIFTAG_EOP | 6;\n    packet[5] = 1 << MG_GIFTAG_NREG_SHIFT;\n    packet[6] = SCE_GIF_PACKED_AD;\n    packet[7] = 0;\n    registers = (u_long *) &packet[8];\n    registers[0] = 0;\n    registers[1] = SCE_GS_TEXFLUSH;\n    registers[2] = *(u_long *) &frame;\n    registers[3] = SCE_GS_FRAME_1;\n    registers[4] = *(u_long *) &offset;\n    registers[5] = SCE_GS_XYOFFSET_1;\n    registers[6] = *(u_long *) &scissor;\n    registers[7] = SCE_GS_SCISSOR_1;\n    registers[8] = 0;\n    registers[9] = SCE_GS_SCANMSK;\n    registers[10] = 0;\n    registers[11] = SCE_GS_TEXFLUSH;\n    sceVif1PkReserve(vif, (u_int *) &registers[12] - packet);\n",
+    "replace": ""
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "    sceGsFrame    *default_frame;\n    sceVif1Packet *vif;\n    u_int         *packet;\n    u_long        *registers;\n    int            screen_width;",
+    "replace": "    sceGsFrame    *default_frame;\n    int            screen_width;"
+  },
+  {
+    "file": "ps2/src/editloop.cpp",
+    "find": "    mgFlushRenderInfo();\n    EditEvent.Draw(MainScene);",
+    "replace": "    EditEvent.Draw(MainScene);"
+  },
+  {
+    "file": "ps2/src/editexception.cpp",
+    "find": "    mgSetFogParam(50.0f, 400.0f, 100, 0, 0, 255.0f, 0.0f);\n    mgFlushRenderInfo();\n",
+    "replace": "    mgSetFogParam(50.0f, 400.0f, 100, 0, 0, 255.0f, 0.0f);\n"
+  },
+  {
+    "file": "ps2/src/editexception.cpp",
+    "find": "    mgSetFogParam(&old_fog_param);\n    mgFlushRenderInfo();\n}",
+    "replace": "    mgSetFogParam(&old_fog_param);\n}"
+  },
+  {
+    "file": "ps2/src/mg_sprite.cpp",
+    "find": "    uptr render_packet = CreatePacket(manager);\n\n    if (tag != NULL) {\n        tag[0] = 0x50000000;\n        tag[1] = buffer;\n        tag[2] = 0;\n        tag[3] = 0;\n        tag[4] = 0x50000000;\n        tag[5] = render_packet;\n        tag[6] = 0;\n        tag[7] = 0;\n        return 2;\n    }\n\n    return 0;",
+    "replace": "    CreatePacket(manager);\n    return 0;"
+  },
+  {
+    "file": "ps2/include/mg_visual.hpp",
+    "find": "    u_int              prmode;          /**< Value the visual writes to the GS PRMODE register. */\n",
+    "replace": ""
+  },
+  {
+    "file": "ps2/include/mg_visual.hpp",
+    "find": "    int                vu1_base;        /**< VU1 memory base address sent with the VIF BASE command. */\n",
+    "replace": ""
+  },
+  {
+    "file": "ps2/include/mg_visual.hpp",
+    "find": "    int                vu1_offset;      /**< VU1 double-buffer offset sent with the VIF OFFSET command. */\n",
+    "replace": ""
+  },
+  {
+    "file": "ps2/include/mg_visual.hpp",
+    "find": "     * Writes a copy of a draw environment adjusted by the render info's settings and returns its length in quadwords.\n     *\n     * @mangled SetDrawEnvGifTag__9mgCVisualFP1P13mgRENDER_INFOP10mgCDrawEnv\n     * @address 0x13EEC0\n     * @size 0x270\n     */\n    int SetDrawEnvGifTag(u_long128 *packet, mgRENDER_INFO *info, mgCDrawEnv *base);",
+    "replace": "     * Writes a copy of a draw environment adjusted by the render info's frame attributes.\n     */\n    void SetDrawEnvAttributes(mgCDrawEnv *env, mgRENDER_INFO *info, mgCDrawEnv *base);"
+  },
+  {
+    "file": "ps2/src/mg_visual.cpp",
+    "find": "int mgCVisual::SetDrawEnvGifTag(u_long128 *env_packet, mgRENDER_INFO *info, mgCDrawEnv *base) {\n    mgCDrawEnv *env = (mgCDrawEnv *) env_packet;\n    *env = *base;",
+    "replace": "void mgCVisual::SetDrawEnvAttributes(mgCDrawEnv *env, mgRENDER_INFO *info, mgCDrawEnv *base) {\n    *env = *base;"
+  },
+  {
+    "file": "ps2/src/mg_visual.cpp",
+    "find": "    env->SetZBuf(info->attr->z_write);\n    return 4;\n}",
+    "replace": "    env->SetZBuf(info->attr->z_write);\n}"
+  },
+  {
+    "file": "ps2/src/mg_visual.cpp",
+    "find": "    vu1_offset = 0;\n    vu1_base = 0;\n    vu1_base = 60;\n    vu1_offset = 180;\n",
+    "replace": ""
+  },
+  {
+    "file": "ps2/src/mg_visual.cpp",
+    "find": "    vu1_offset = 0;\n    vu1_base = 0;\n",
+    "replace": ""
+  },
+  {
+    "file": "ps2/src/dng_effect.cpp",
+    "find": "    sprite->vu1_offset = 0;\n    sprite->vu1_base = 0;\n",
+    "replace": ""
+  },
+  {
+    "file": "ps2/src/mg_dataset.cpp",
+    "find": "    vu1_offset = 0;\n    vu1_base = 0;\n",
+    "replace": ""
+  },
+  {
+    "file": "ps2/src/mg_sprite.cpp",
+    "find": "    this->vu1_offset = 0;\n    this->vu1_base = 0;\n",
+    "replace": ""
+  },
+  {
+    "file": "ps2/src/mg_sprite.cpp",
+    "find": "    vu1_offset = 0;\n    vu1_base = 0;\n",
+    "replace": ""
+  },
+  {
+    "file": "ps2/src/mg_sprite.cpp",
+    "find": "    mgCMemory *memory = (mgCMemory *) manager->data_memory;\n    uptr       buffer = (uptr) memory->stAllocTest(0x3C);\n    memory->Alloc(CreateRenderInfoPacket((u_int *) buffer, matrix, render_info));\n    CreatePacket(manager);",
+    "replace": "    CreateRenderInfoPacket(NULL, matrix, render_info);\n    CreatePacket(manager);"
+  },
+  {
+    "file": "ps2/src/visualmotion.cpp",
+    "find": "    vu1_base = 0x7C;\n    vu1_offset = 0x94;\n",
+    "replace": ""
+  },
+  {
+    "file": "ps2/src/visualmotion.cpp",
+    "find": "    count = 0;\n\n    do {\n        if (bone[count] < 0) {\n            break;\n        }\n\n        count++;\n    } while (count < 0x20);\n\n    vu1_base = count * 4 + 0x3C;\n    vu1_offset = 0xB4 - (count * 4) / 2;\n",
+    "replace": ""
+  },
+  {
+    "file": "ps2/src/visualmotion.cpp",
+    "find": "    int        count;\n    int        part_count;\n",
+    "replace": "    int        part_count;\n"
+  },
+  {
+    "file": "ps2/include/mg_visual.hpp",
+    "find": "/**\n *\n * Returns the half of the scratchpad that the next packet is written into while the other half\n * is sent.\n *\n * @mangled GetScrPad__Fv\n * @address 0x13EA20\n * @size 0x14\n */\nu_int *GetScrPad();\n\n/**\n *\n * Copies the packet written in the current scratchpad half out to its place in main memory by\n * DMA, after the previous copy finishes, and switches scratchpad halves.\n *\n * @mangled SendDMA__FPvi\n * @address 0x13EA40\n * @size 0xD0\n */\nvoid SendDMA(void *packet, int size);\n\n",
+    "replace": ""
+  },
+  {
+    "file": "ps2/include/mglib.hpp",
+    "find": "/**\n *\n * DMA channel 1 (VIF1), through which every packet is sent.\n *\n */\nextern sceDmaChan *DmaCH1;\n\n",
+    "replace": ""
+  },
+  {
+    "file": "ps2/include/mglib.hpp",
+    "find": "/**\n *\n * DMA channel 2 (GIF).\n *\n */\nextern sceDmaChan *DmaCH2;\n\n",
+    "replace": ""
+  },
+  {
+    "file": "ps2/include/mglib.hpp",
+    "find": "/**\n *\n * DMA channel 8 (from scratchpad).\n *\n */\nextern sceDmaChan *DmaCH8;\n\n",
+    "replace": ""
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "    FlushCache(0);\n    sceDmaSync(DmaCH2, 0, 0);\n    mgNowFrameRate",
+    "replace": "    mgNowFrameRate"
+  },
+  {
+    "file": "ps2/include/sce/libpkt.h",
+    "find": "/**\n * @file\n * Declares GIF and VIF packet construction types and functions.\n */\n\n#include \"common.h\"\n\n/* A cursor over a buffer the caller supplies, plus the tag currently left open so that closing it\n   can write the length nobody knew when it was opened. */\nstruct sceVif1Packet {\n    u_int *pCurrent;\n    u_int *pBase;\n    u_int *pOpenTag;\n    u_int *pOpenDma;\n    u_int *reserved[4];\n};\n\n/* The GIF channel's own packet, laid out the same way and driven by the same open/close pairs.\n   The reconstruction reaches only its base, which is the address the DMA channel is handed once\n   the packet is closed. */\nstruct sceGifPacket {\n    u_long128 *pCurrent;\n    u_long128 *pBase;\n    u_long128 *pOpenTag;\n    u_int      reserved;\n};\n\nextern \"C\" {\n\nvoid   sceVif1PkInit(sceVif1Packet *packet, u_int *base);\nvoid   sceVif1PkReset(sceVif1Packet *packet);\nu_int *sceVif1PkTerminate(sceVif1Packet *packet);\nu_int *sceVif1PkEnd(sceVif1Packet *packet, u_int next);\nvoid   sceVif1PkReserve(sceVif1Packet *packet, int count);\n\nvoid sceVif1PkCnt(sceVif1Packet *packet, int irq);\nvoid sceVif1PkOpenDirectCode(sceVif1Packet *packet, int irq);\nvoid sceVif1PkCloseDirectCode(sceVif1Packet *packet);\nvoid sceVif1PkOpenGifTag(sceVif1Packet *packet, u_long128 giftag);\nvoid sceVif1PkCloseGifTag(sceVif1Packet *packet);\nvoid sceVif1PkAddGsAD(sceVif1Packet *packet, int reg, u_long data);\nvoid sceVif1PkRefLoadImage(sceVif1Packet *packet, u_short dbp, u_char dpsm, u_short dbw,\n                           u_long128 *src, u_int qwc, u_int dsax, u_int dsay,\n                           u_int rrw, u_int rrh);\nvoid sceVif1PkCall(sceVif1Packet *packet, u_long128 *address, u_int count);\n\nvoid   sceGifPkInit(sceGifPacket *packet, u_long128 *base);\nvoid   sceGifPkReset(sceGifPacket *packet);\nu_int *sceGifPkTerminate(sceGifPacket *packet);\nu_int *sceGifPkEnd(sceGifPacket *packet, int pce, int irq, int pad);\nvoid   sceGifPkCnt(sceGifPacket *packet, int pce, int irq, int pad);\nu_int *sceGifPkReserve(sceGifPacket *packet, int count);\nvoid   sceGifPkRef(sceGifPacket *packet, u_long128 *address, int count, int pce, int irq, int pad);\nvoid   sceGifPkOpenGifTag(sceGifPacket *packet, u_long128 giftag);\nvoid   sceGifPkCloseGifTag(sceGifPacket *packet);\nvoid   sceGifPkAddGsAD(sceGifPacket *packet, int reg, u_long data);\nvoid   sceGifPkRefLoadImage(sceGifPacket *packet, u_short dbp, u_char dpsm, u_short dbw,\n                            u_long128 *src, u_int qwc, u_int dsax, u_int dsay,\n                            u_int rrw, u_int rrh);\n}\n",
+    "replace": "/**\n * @file\n * Declares the cursor the engine hands to each Draw call over the frame's packet buffer.\n */\n\n#include \"common.h\"\n\nstruct sceVif1Packet {\n    u_int *pCurrent;\n    u_int *pBase;\n};\n\nextern \"C\" {\n\nvoid   sceVif1PkInit(sceVif1Packet *packet, u_int *base);\nvoid   sceVif1PkReset(sceVif1Packet *packet);\nu_int *sceVif1PkTerminate(sceVif1Packet *packet);\nvoid   sceVif1PkReserve(sceVif1Packet *packet, int count);\n}\n"
+  },
+  {
+    "file": "ps2/include/sce/libgraph.h",
+    "find": "/**\n * Packet used by the SDK to transfer one image into GS memory.\n */\ntypedef struct {\n    u_long chain[6][2];\n} sceGsLoadImage;\n\n",
+    "replace": ""
+  },
+  {
+    "file": "ps2/include/sce/libgraph.h",
+    "find": "void sceGsExecStoreImage(sceGsStoreImage *si, u_long128 *dest);\nvoid sceGsSetDefLoadImage(sceGsLoadImage *li, short dbp, short dbw, short dpsm, short dsax,\n                          short dsay, short rrw, short rrh);\nvoid sceGsExecLoadImage(sceGsLoadImage *li, u_long128 *source);\n",
+    "replace": "void sceGsExecStoreImage(sceGsStoreImage *si, u_long128 *dest);\n"
+  },
+  {
+    "file": "ps2/src/mapjump.cpp",
+    "find": "    s16       *map_nos = (&save_data->map_no);\n    (&save_data->map_no)[2] = (s16) NowMainMapNo;",
+    "replace": "    save_data->prev_map_no = (s16) NowMainMapNo;"
+  },
+  {
+    "file": "ps2/src/mapjump.cpp",
+    "find": "    map_nos[0] = (s16) NowMainMapNo;\n    map_nos[3] = -1;\n    map_nos[1] = -1;",
+    "replace": "    save_data->map_no = (s16) NowMainMapNo;\n    save_data->prev_sub_map_no = -1;\n    save_data->sub_map_no = -1;"
+  },
+  {
+    "file": "ps2/src/mapjump.cpp",
+    "find": "        *(int *) (map_nos + 4) = area_no;",
+    "replace": "        save_data->area_no = area_no;"
+  },
+  {
+    "file": "ps2/src/mapjump.cpp",
+    "find": "    s16 *sub_map_nos = (&save_data->map_no);\n    sub_map_nos[3] = NowSubMapNo;",
+    "replace": "    save_data->prev_sub_map_no = NowSubMapNo;"
+  },
+  {
+    "file": "ps2/src/mapjump.cpp",
+    "find": "    sub_map_nos[1] = sub_map_no;",
+    "replace": "    save_data->sub_map_no = sub_map_no;"
+  },
+  {
+    "file": "ps2/src/mg_visual.cpp",
+    "find": "/**\n *\n * Whether the scratchpad DMA transfer is active.\n *\n */\nint start_dma;\n\n/**\n *\n * Scratchpad half selected for the next packet.\n *\n */\nint buff_id;\n\n",
+    "replace": ""
+  },
+  {
+    "file": "ps2/include/types.h",
+    "find": "typedef unsigned int size_t;\n",
+    "replace": "#ifdef __cplusplus\ntypedef unsigned int size_t;\n#endif\n"
+  },
+  {
+    "file": "ps2/include/types.h",
+    "find": "#define NULL 0",
+    "replace": "#ifdef __cplusplus\n#define NULL 0\n#endif"
+  },
+  {
+    "file": "ps2/include/sce/libcdvd.h",
+    "find": "#define SCECdCD  1\n#define SCECdDVD 2\n",
+    "replace": "#define SCECdCD  1\n#define SCECdDVD 2\n\n#define SCECdSecS2048 0\n\n#define SCECdComplete 0x02\n#define SCECdNotReady 0x06\n\n#define SCECdErNO   0x00\n#define SCECdErPRM  0x22\n#define SCECdErREAD 0x30\n"
+  },
+  {
+    "file": "ps2/include/sce/libcdvd.h",
+    "find": "extern \"C\" {\n",
+    "replace": "#ifdef __cplusplus\nextern \"C\" {\n#endif\n"
+  },
+  {
+    "file": "ps2/include/sce/libcdvd.h",
+    "find": "unsigned int *error);\n}",
+    "replace": "unsigned int *error);\n#ifdef __cplusplus\n}\n#endif"
+  },
+  {
+    "file": "ps2/include/sce/libcdvd.h",
+    "find": "int sceCdSearchFile(sceCdlFILE *file,",
+    "replace": "int sceCdSearchFile(struct sceCdlFILE *file,"
+  },
+  {
+    "file": "ps2/include/sce/libcdvd.h",
+    "find": "sceCdRMode *mode)",
+    "replace": "struct sceCdRMode *mode)",
+    "count": 2
+  },
+  {
+    "file": "ps2/include/sce/sifdev.h",
+    "find": "#define SCE_RDWR 0x0003\n",
+    "replace": "#define SCE_RDWR 0x0003\n#define SCE_APPEND 0x0100\n"
+  },
+  {
+    "file": "ps2/include/sce/sifdev.h",
+    "find": "#define SCE_FS_EXECUTING 0x1\n",
+    "replace": "#define SCE_FS_EXECUTING 0x1\n\n#define SCE_STM_FREG 0x2000\n#define SCE_STM_FDIR 0x1000\n"
+  },
+  {
+    "file": "ps2/include/sce/sifdev.h",
+    "find": "extern \"C\" {\n",
+    "replace": "#ifdef __cplusplus\nextern \"C\" {\n#endif\n"
+  },
+  {
+    "file": "ps2/include/sce/sifdev.h",
+    "find": "struct sce_stat *stat);\n}",
+    "replace": "struct sce_stat *stat);\n#ifdef __cplusplus\n}\n#endif"
+  },
+  {
+    "file": "ps2/include/sce/libmc.h",
+    "find": "#define sceMcFuncNoUnformat 17\n",
+    "replace": "#define sceMcFuncNoUnformat 17\n\n#define sceMcExecRun 0\n#define sceMcExecFinish 1\n#define sceMcExecIdle (-1)\n\n#define sceMcFileAttrReadable 0x0001\n#define sceMcFileAttrWriteable 0x0002\n#define sceMcFileAttrExecutable 0x0004\n#define sceMcFileAttrFile 0x0010\n#define sceMcFileAttrSubdir 0x0020\n#define sceMcFileAttrClosed 0x0080\n#define sceMcFile0400 0x0400\n#define sceMcFileAttrExists 0x8000\n"
+  },
+  {
+    "file": "ps2/include/sce/libmc.h",
+    "find": "sizeof(sceMcColor)",
+    "replace": "sizeof(struct sceMcColor)",
+    "count": 2
+  },
+  {
+    "file": "ps2/include/sce/libmc.h",
+    "find": "sizeof(sceMcIconSys)",
+    "replace": "sizeof(struct sceMcIconSys)",
+    "count": 2
+  },
+  {
+    "file": "ps2/include/sce/libmc.h",
+    "find": "sizeof(sceMcStDateTime)",
+    "replace": "sizeof(struct sceMcStDateTime)",
+    "count": 2
+  },
+  {
+    "file": "ps2/include/sce/libmc.h",
+    "find": "sizeof(sceMcTblGetDir)",
+    "replace": "sizeof(struct sceMcTblGetDir)",
+    "count": 2
+  },
+  {
+    "file": "ps2/include/sce/libmc.h",
+    "find": "    sceMcColor      bg_color[4];",
+    "replace": "    struct sceMcColor bg_color[4];"
+  },
+  {
+    "file": "ps2/include/sce/libmc.h",
+    "find": "    sceMcStDateTime create;",
+    "replace": "    struct sceMcStDateTime create;"
+  },
+  {
+    "file": "ps2/include/sce/libmc.h",
+    "find": "    sceMcStDateTime modify;",
+    "replace": "    struct sceMcStDateTime modify;"
+  },
+  {
+    "file": "ps2/include/sce/libmc.h",
+    "find": "int count, sceMcTblGetDir *table);",
+    "replace": "int count, struct sceMcTblGetDir *table);"
+  },
+  {
+    "file": "ps2/include/sce/eekernel.h",
+    "find": "#define WRITEBACK_DCACHE 0\n",
+    "replace": "#define WRITEBACK_DCACHE 0\n\n#define INTC_VBLANK_S 2\n#define INTC_VBLANK_E 3\n"
+  },
+  {
+    "file": "ps2/include/sce/eekernel.h",
+    "find": "int EIntr(...);\n",
+    "replace": "#ifdef __cplusplus\nint EIntr(...);\n#endif\n"
+  },
+  {
+    "file": "ps2/include/sce/libsdr.h",
+    "find": "#define SD_REV_MODE_CLEAR_WA 0x100\n",
+    "replace": "#define SD_REV_MODE_CLEAR_WA 0x100\n\n#define SD_REV_MODE_OFF 0\n#define SD_REV_MODE_ROOM 1\n#define SD_REV_MODE_STUDIO_A 2\n#define SD_REV_MODE_STUDIO_B 3\n#define SD_REV_MODE_STUDIO_C 4\n#define SD_REV_MODE_HALL 5\n#define SD_REV_MODE_SPACE 6\n#define SD_REV_MODE_ECHO 7\n#define SD_REV_MODE_DELAY 8\n#define SD_REV_MODE_PIPE 9\n#define SD_REV_MODE_MAX 10\n"
+  },
+  {
+    "file": "ps2/src/mg_texture.cpp",
+    "find": "int mgGetIMGHeaderNum(char *img) {\n    int *words = (int *) img;\n\n    if (words == NULL) {\n        return 0;\n    }\n\n    int version = GetIMGVersion(img);\n\n    if (version == 0) {\n        return 0;\n    }\n\n    if (version == 1 || version == 2) {\n        return words[1];\n    }\n\n    if (version == 3) {\n        return words[2];\n    }\n\n    return 0;\n}\n\nmgIMG_HEADER mgGetIMGHeader(char *img, int index) {\n    mgIMG_HEADER header;\n    int          version;\n    int          count;\n    int          stride;\n    int          i;\n    char        *entry;\n    char        *start;\n    memset(&header, 0, sizeof(mgIMG_HEADER));\n\n    if (img == NULL) {\n        return header;\n    }\n\n    entry = img;\n    version = GetIMGVersion(img);\n\n    if (version == 0) {\n        return header;\n    }\n\n    count = 0;\n    stride = 0;\n\n    if (version == 1 || version == 2) {\n        entry += 0x10;\n        count = *(int *) (img + 4);\n        stride = 0x30;\n    }\n\n    if (version == 3) {\n        start = entry;\n        entry += 0x10;\n        count = *(int *) (start + 8);\n        stride = 0x40;\n    }\n\n    for (i = 0; i < count; i++) {\n        if (index == i) {\n            switch (version) {\n                case 2:\n                    header.swizzled = 1;\n                case 1:\n                    memcpy(&header, entry, 0x20);\n                    header.offset = *(u_int *) (entry + 0x20);\n                    break;\n                case 3:\n                    header.name_copy = *(IMG_HEADER_NAME *) entry;\n                    header.unk_20 = *(u_int *) (entry + 0x20);\n                    header.offset = *(u_int *) (entry + 0x24);\n                    header.swizzled = *(u_int *) (entry + 0x28);\n                    header.block = *(u_int *) (entry + 0x2C);\n                    header.no_image = *(short *) (entry + 0x30);\n                    short *half = &header.unk_32;\n                    *half = *(short *) (entry + 0x32);\n                    header.size = *(int *) (entry + 0x34);\n                    header.clamp_bits = *(long long *) (entry + 0x38);\n                    break;\n            }\n        }\n\n        entry += stride;\n    }\n\n    return header;\n}\n\n",
+    "replace": "int mgGetIMGHeaderNum(char *img) {\n    if (img == NULL) {\n        return 0;\n    }\n\n    mgIMG_FILE_HEADER *file = (mgIMG_FILE_HEADER *) img;\n    int version = GetIMGVersion(img);\n\n    if (version == MG_IMG_VERSION_IMG || version == MG_IMG_VERSION_IM2) {\n        return (int) file->num;\n    }\n\n    if (version == MG_IMG_VERSION_IM3) {\n        return (int) file->num3;\n    }\n\n    return 0;\n}\n\nmgIMG_HEADER mgGetIMGHeader(char *img, int index) {\n    mgIMG_HEADER header;\n    memset(&header, 0, sizeof(mgIMG_HEADER));\n\n    if (img == NULL || index < 0 || index >= mgGetIMGHeaderNum(img)) {\n        return header;\n    }\n\n    mgIMG_FILE_HEADER *file = (mgIMG_FILE_HEADER *) img;\n    int version = GetIMGVersion(img);\n\n    if (version == MG_IMG_VERSION_IMG || version == MG_IMG_VERSION_IM2) {\n        mgIMG1_HEADER *entries = (mgIMG1_HEADER *) (file + 1);\n        memcpy(header.name, entries[index].name, sizeof(header.name));\n        header.offset = entries[index].offset;\n        header.swizzled = version == MG_IMG_VERSION_IM2;\n    }\n\n    if (version == MG_IMG_VERSION_IM3) {\n        header = ((mgIMG_HEADER *) (file + 1))[index];\n    }\n\n    return header;\n}\n\n"
   }
 ]

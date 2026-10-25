@@ -3,6 +3,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define PORT_EXECUTABLE_PATH "SCES_511.90;1"
+
+enum { PORT_EXECUTABLE_READ_CHUNK = 16384 };
+
 struct port_sha256 {
     uint32_t words[8];
     uint64_t size;

@@ -18,12 +18,10 @@
 
 enum { TEXTURE_LIMIT = 4096, PIPELINE_LIMIT = 1024, COMMAND_LIMIT = 65536, MODEL_LIMIT = 16384, BONE_LIMIT = 2048,
        VERTEX_BYTES = 64 * 1024 * 1024 };
-enum { KEY_MESH = 1 << 22, KEY_CULL_SHIFT = 23, KEY_WIRE = 1 << 25, KEY_SAMPLES_SHIFT = 26, KEY_MIRROR = 1 << 28,
-       RECORD_LIMIT = 32768 };
-enum { KEY_KEEP = (3 << 15) | KEY_MESH | (3 << 23) | (3 << KEY_SAMPLES_SHIFT) };
+enum { RECORD_LIMIT = 32768 };
 enum { SCALE_LIMIT = 4, SAMPLE_LIMIT = 8, WIDEN_LIMIT = 1024 };
 #define MODEL_BYTES ((Uint32)(MODEL_LIMIT * sizeof(MeshUniforms)))
-#define BONE_BYTES ((Uint32)(BONE_LIMIT * 384 * sizeof(float)))
+#define BONE_BYTES ((Uint32)(BONE_LIMIT * RENDER_BONE_SLOTS * sizeof(RenderBone)))
 #ifdef SDL_PLATFORM_IOS
 #define WINDOW_FLAGS (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY)
 #else
@@ -57,20 +55,42 @@ typedef struct {
     int drawn;
 } Texture;
 
+typedef union {
+    uint32_t value;
+    struct {
+        uint32_t source : 4;
+        uint32_t destination : 4;
+        uint32_t op : 3;
+        uint32_t mask : 4;
+        uint32_t topology : 2;
+        uint32_t depth_compare : 4;
+        uint32_t depth_write : 1;
+        uint32_t mesh : 1;
+        uint32_t cull : 2;
+        uint32_t wire : 1;
+        uint32_t samples : 2;
+        uint32_t mirror : 1;
+    };
+} PipelineKey;
+
 typedef struct {
-    uint32_t key;
+    PipelineKey key;
     SDL_GPUGraphicsPipeline *pipeline;
 } Pipeline;
 
 typedef struct {
     uint32_t flags;
-    uint32_t alpha;
+    uint32_t alpha_reference;
+    uint32_t alpha_method;
+    uint32_t blend_fix;
+    uint32_t texture_alpha;
     uint32_t fog_color;
-    uint32_t unused;
+    uint32_t unused0;
+    uint32_t unused1;
 } FragmentState;
 
 typedef struct {
-    uint32_t key;
+    PipelineKey key;
     FragmentState fragment;
     float blend_constant;
     int texture;
@@ -129,13 +149,18 @@ typedef struct {
 } Step;
 
 typedef struct {
+    RenderScreenMapping mapping;
+    float depth;
+} RenderFollow;
+
+typedef struct {
     const void *key;
     float place[3];
     float world[16];
     float camera[16];
     float light[16];
     float screen[16];
-    float mapping[4];
+    RenderScreenMapping mapping;
     float depth;
     int first;
     int count;
@@ -159,7 +184,7 @@ typedef struct {
     int *matches;
     int model_count;
     int model_capacity;
-    float (*bones)[384];
+    RenderBone (*bones)[RENDER_BONE_SLOTS];
     int bone_count;
     int bone_capacity;
     unsigned char *vertices;
@@ -175,9 +200,9 @@ typedef struct {
     int shape_count;
     int shape_capacity;
     int shadows_matched;
-    float (*points)[4];
+    ShadowPoint *points;
     uint32_t point_capacity;
-    float (*follows)[5];
+    RenderFollow *follows;
     int follow_count;
     int follow_capacity;
     float eye[3];
@@ -217,7 +242,7 @@ static uint32_t moving_capacity;
 static int replay_uploaded;
 static MeshUniforms *replay_models;
 static int replay_model_capacity;
-static float (*replay_bones)[384];
+static RenderBone (*replay_bones)[RENDER_BONE_SLOTS];
 static int replay_bone_capacity;
 
 static SDL_Window *window;
@@ -226,7 +251,7 @@ static SDL_GPUShader *vertex_shader;
 static SDL_GPUShader *mesh_shader;
 static MeshUniforms models[MODEL_LIMIT];
 static int model_count;
-static float bone_sets[BONE_LIMIT][384];
+static RenderBone bone_sets[BONE_LIMIT][RENDER_BONE_SLOTS];
 static int bone_count;
 static SDL_GPUShader *fragment_shader;
 static SDL_GPUSampler *samplers[8];
@@ -287,8 +312,8 @@ static struct {
 static int mesh_retired_count;
 static int mesh_retired_capacity;
 static unsigned char *vertex_data;
-static float (*point_data)[4];
-static const float (*shadow_points)[4];
+static ShadowPoint *point_data;
+static const ShadowPoint *shadow_points;
 static int drawing_shadow = -1;
 static int drawing_follow = -1;
 static uint32_t vertex_used;
@@ -529,70 +554,71 @@ static uint32_t blend_factor(int c, int complement) {
         {SDL_GPU_BLENDFACTOR_DST_ALPHA, SDL_GPU_BLENDFACTOR_ONE_MINUS_DST_ALPHA},
         {SDL_GPU_BLENDFACTOR_CONSTANT_COLOR, SDL_GPU_BLENDFACTOR_ONE_MINUS_CONSTANT_COLOR},
     };
-    return factors[c > 2 ? 2 : c][complement];
+    return factors[c > RENDER_BLEND_FIX ? RENDER_BLEND_FIX : c][complement];
 }
 
 static void blend_equation(const RenderState *state, uint32_t *source, uint32_t *destination, uint32_t *op,
                            uint32_t *flags) {
-    int a = state->alpha & 3, b = (state->alpha >> 2) & 3, c = (state->alpha >> 4) & 3, d = (state->alpha >> 6) & 3;
+    enum { S = RENDER_BLEND_SOURCE, D = RENDER_BLEND_DESTINATION, Z = RENDER_BLEND_ZERO };
+    int a = state->blending.a, b = state->blending.b, c = state->blending.c, d = state->blending.d;
     uint32_t f = blend_factor(c, 0), g = blend_factor(c, 1);
     uint32_t one = SDL_GPU_BLENDFACTOR_ONE, zero = SDL_GPU_BLENDFACTOR_ZERO;
     uint32_t add = SDL_GPU_BLENDOP_ADD, sub = SDL_GPU_BLENDOP_SUBTRACT, reverse = SDL_GPU_BLENDOP_REVERSE_SUBTRACT;
-    if (a > 2) a = 2;
-    if (b > 2) b = 2;
-    if (d > 2) d = 2;
+    if (a > Z) a = Z;
+    if (b > Z) b = Z;
+    if (d > Z) d = Z;
     *op = add;
-    if (!state->blend || (a == b && d == 0)) {
+    if (!state->blend || (a == b && d == S)) {
         *source = one, *destination = zero;
         return;
     }
     if (a == b) {
-        *source = zero, *destination = d == 1 ? one : zero;
+        *source = zero, *destination = d == D ? one : zero;
         return;
     }
-    int scalable = c != 1;
-    if (a == 0 && b == 1) {
-        if (d == 1) *source = f, *destination = g;
-        else if (d == 2) *source = f, *destination = f, *op = sub;
+    int scalable = c != RENDER_BLEND_DESTINATION;
+    if (a == S && b == D) {
+        if (d == D) *source = f, *destination = g;
+        else if (d == Z) *source = f, *destination = f, *op = sub;
         else {
             *source = one, *destination = f, *op = sub;
             if (scalable) *flags |= SCALE_SOURCE;
         }
-    } else if (a == 1 && b == 0) {
-        if (d == 0) *source = g, *destination = f;
-        else if (d == 2) *source = f, *destination = f, *op = reverse;
+    } else if (a == D && b == S) {
+        if (d == S) *source = g, *destination = f;
+        else if (d == Z) *source = f, *destination = f, *op = reverse;
         else *source = f, *destination = one, *op = reverse;
-    } else if (a == 0 && b == 2) {
-        if (d == 1) *source = f, *destination = one;
-        else if (d == 2) *source = f, *destination = zero;
+    } else if (a == S && b == Z) {
+        if (d == D) *source = f, *destination = one;
+        else if (d == Z) *source = f, *destination = zero;
         else {
             *source = one, *destination = zero;
             if (scalable) *flags |= SCALE_SOURCE;
         }
-    } else if (a == 1 && b == 2) {
-        if (d == 0) *source = one, *destination = f;
-        else if (d == 2) *source = zero, *destination = f;
+    } else if (a == D && b == Z) {
+        if (d == S) *source = one, *destination = f;
+        else if (d == Z) *source = zero, *destination = f;
         else if (scalable) *source = SDL_GPU_BLENDFACTOR_DST_COLOR, *destination = one, *flags |= FACTOR_COLOR;
         else *source = zero, *destination = one;
-    } else if (a == 2 && b == 0) {
-        if (d == 1) *source = f, *destination = one, *op = reverse;
-        else if (d == 0) *source = g, *destination = zero;
+    } else if (a == Z && b == S) {
+        if (d == D) *source = f, *destination = one, *op = reverse;
+        else if (d == S) *source = g, *destination = zero;
         else *source = zero, *destination = zero;
     } else {
-        if (d == 0) *source = one, *destination = f, *op = sub;
-        else if (d == 1) *source = zero, *destination = g;
+        if (d == S) *source = one, *destination = f, *op = sub;
+        else if (d == D) *source = zero, *destination = g;
         else *source = zero, *destination = zero;
     }
 }
 
-static SDL_GPUGraphicsPipeline *pipeline_for(uint32_t key) {
+static SDL_GPUGraphicsPipeline *pipeline_for(PipelineKey key) {
     for (int i = 0; i < pipeline_count; ++i)
-        if (pipelines[i].key == key) return pipelines[i].pipeline;
+        if (pipelines[i].key.value == key.value) return pipelines[i].pipeline;
     if (pipeline_count == PIPELINE_LIMIT) {
         fputs("render: out of pipelines\n", stderr);
         exit(1);
     }
-    int mesh = (key & KEY_MESH) != 0;
+    int mesh = key.mesh;
     SDL_GPUVertexBufferDescription buffer = {0, mesh ? sizeof(MeshVertex) : sizeof(RenderVertex),
                                              SDL_GPU_VERTEXINPUTRATE_VERTEX, 0};
     SDL_GPUVertexAttribute flat[5] = {
@@ -615,18 +641,18 @@ static SDL_GPUGraphicsPipeline *pipeline_for(uint32_t key) {
     SDL_GPUColorTargetDescription *target = &targets[0];
     target->format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
     target->blend_state.enable_blend = true;
-    target->blend_state.src_color_blendfactor = (SDL_GPUBlendFactor)(key & 15);
-    target->blend_state.dst_color_blendfactor = (SDL_GPUBlendFactor)((key >> 4) & 15);
-    target->blend_state.color_blend_op = (SDL_GPUBlendOp)((key >> 8) & 7);
+    target->blend_state.src_color_blendfactor = (SDL_GPUBlendFactor)key.source;
+    target->blend_state.dst_color_blendfactor = (SDL_GPUBlendFactor)key.destination;
+    target->blend_state.color_blend_op = (SDL_GPUBlendOp)key.op;
     target->blend_state.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
     target->blend_state.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ZERO;
     target->blend_state.alpha_blend_op = SDL_GPU_BLENDOP_ADD;
     target->blend_state.enable_color_write_mask = true;
-    target->blend_state.color_write_mask = (SDL_GPUColorComponentFlags)((key >> 11) & 15);
-    SDL_GPUSampleCount samples = (SDL_GPUSampleCount)((key >> KEY_SAMPLES_SHIFT) & 3);
+    target->blend_state.color_write_mask = (SDL_GPUColorComponentFlags)key.mask;
+    SDL_GPUSampleCount samples = (SDL_GPUSampleCount)key.samples;
     targets[1].format = SDL_GPU_TEXTUREFORMAT_R32_FLOAT;
     targets[1].blend_state.enable_color_write_mask = true;
-    targets[1].blend_state.color_write_mask = (key >> 21) & 1 ? SDL_GPU_COLORCOMPONENT_R : 0;
+    targets[1].blend_state.color_write_mask = key.depth_write ? SDL_GPU_COLORCOMPONENT_R : 0;
     SDL_GPUGraphicsPipelineCreateInfo info = {0};
     info.vertex_shader = mesh ? mesh_shader : vertex_shader;
     info.fragment_shader = fragment_shader;
@@ -636,17 +662,17 @@ static SDL_GPUGraphicsPipeline *pipeline_for(uint32_t key) {
     info.vertex_input_state.num_vertex_attributes = mesh ? 6 : 5;
     static const SDL_GPUPrimitiveType topologies[3] = {
         SDL_GPU_PRIMITIVETYPE_POINTLIST, SDL_GPU_PRIMITIVETYPE_LINELIST, SDL_GPU_PRIMITIVETYPE_TRIANGLELIST};
-    info.primitive_type = topologies[(key >> 15) & 3];
-    info.rasterizer_state.fill_mode = (key & KEY_WIRE) ? SDL_GPU_FILLMODE_LINE : SDL_GPU_FILLMODE_FILL;
+    info.primitive_type = topologies[key.topology];
+    info.rasterizer_state.fill_mode = key.wire ? SDL_GPU_FILLMODE_LINE : SDL_GPU_FILLMODE_FILL;
     static const SDL_GPUCullMode culls[3] = {SDL_GPU_CULLMODE_NONE, SDL_GPU_CULLMODE_FRONT, SDL_GPU_CULLMODE_BACK};
-    info.rasterizer_state.cull_mode = culls[((key >> KEY_CULL_SHIFT) & 3) % 3];
+    info.rasterizer_state.cull_mode = culls[key.cull % 3];
     info.rasterizer_state.front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE;
     info.depth_stencil_state.enable_depth_test = true;
-    info.depth_stencil_state.compare_op = (SDL_GPUCompareOp)((key >> 17) & 15);
-    info.depth_stencil_state.enable_depth_write = (key >> 21) & 1;
+    info.depth_stencil_state.compare_op = (SDL_GPUCompareOp)key.depth_compare;
+    info.depth_stencil_state.enable_depth_write = key.depth_write;
     info.multisample_state.sample_count = samples;
     info.target_info.color_target_descriptions = targets;
-    info.target_info.num_color_targets = (key & KEY_MIRROR) ? 2 : 1;
+    info.target_info.num_color_targets = key.mirror ? 2 : 1;
     info.target_info.depth_stencil_format = depth_format;
     info.target_info.has_depth_stencil_target = true;
     SDL_GPUGraphicsPipeline *pipeline = SDL_CreateGPUGraphicsPipeline(device, &info);
@@ -694,7 +720,7 @@ static void release_depths(void) {
 
 static int writes_depth(void) {
     for (int i = 0; i < pending_count; ++i)
-        if ((pending[i].key >> 21) & 1) return 1;
+        if (pending[i].key.depth_write) return 1;
     return 0;
 }
 
@@ -838,7 +864,9 @@ static void encode(SDL_GPUCommandBuffer *buffer, SDL_GPURenderPass *pass, const 
             SDL_PushGPUVertexUniformData(buffer, 0, scale, sizeof scale);
             vertex_uniforms = -1;
         }
-        SDL_GPUGraphicsPipeline *pipeline = pipeline_for(command->key | (mirror ? KEY_MIRROR : 0));
+        PipelineKey key = command->key;
+        key.mirror = mirror != 0;
+        SDL_GPUGraphicsPipeline *pipeline = pipeline_for(key);
         if (pipeline != last_pipeline) {
             SDL_BindGPUGraphicsPipeline(pass, pipeline);
             last_pipeline = pipeline;
@@ -859,7 +887,7 @@ static void encode(SDL_GPUCommandBuffer *buffer, SDL_GPURenderPass *pass, const 
         }
         if (!last || memcmp(&command->fragment, &last->fragment, sizeof command->fragment))
             SDL_PushGPUFragmentUniformData(buffer, 0, &command->fragment, sizeof command->fragment);
-        uint32_t stride = (command->key & KEY_MESH) ? sizeof(MeshVertex) : sizeof(RenderVertex);
+        uint32_t stride = command->key.mesh ? sizeof(MeshVertex) : sizeof(RenderVertex);
         SDL_DrawGPUPrimitives(pass, (Uint32)command->count, 1, command->offset / stride,
                               command->model >= 0 ? (Uint32)command->model : 0);
         last = command;
@@ -895,7 +923,7 @@ static void record_model(Recording *frame, Command *kept, const Command *command
     frame->keys[model] = 0;
     if (command->resident)
         frame->keys[model] = (((uint64_t)command->offset << 24 | (uint64_t)command->count) ^
-                              ((uint64_t)command->key << 24 | (uint64_t)target) * 0x9e3779b97f4a7c15ull) | 1;
+                              ((uint64_t)command->key.value << 24 | (uint64_t)target) * 0x9e3779b97f4a7c15ull) | 1;
     frame->model_bones[model] = 0;
     if (command->bones > 0 &&
         grow((void **)&frame->bones, &frame->bone_capacity, frame->bone_count + 1, sizeof *frame->bones)) {
@@ -904,7 +932,7 @@ static void record_model(Recording *frame, Command *kept, const Command *command
     }
     kept->model = model;
     kept->bones = frame->model_bones[model];
-    frame->models[model].flags[3] = (uint32_t)frame->model_bones[model];
+    frame->models[model].flags.bone_set = (uint32_t)frame->model_bones[model];
     frame->model_count++;
 }
 
@@ -913,7 +941,7 @@ static int keep_points(Recording *frame, const Command *kept, const Command *com
     if (needed > frame->point_capacity) {
         uint32_t wanted = frame->point_capacity ? frame->point_capacity : 1 << 14;
         while (wanted < needed) wanted *= 2;
-        float(*grown)[4] = realloc(frame->points, wanted * sizeof *grown);
+        ShadowPoint *grown = realloc(frame->points, wanted * sizeof *grown);
         if (!grown) return 0;
         frame->points = grown;
         frame->point_capacity = wanted;
@@ -924,7 +952,7 @@ static int keep_points(Recording *frame, const Command *kept, const Command *com
 
 static uint64_t draw_signature(const Command *command, const SDL_GPUTexture *target) {
     uint64_t signature = 0xcbf29ce484222325ull;
-    uint64_t parts[6] = {command->key, (uint64_t)(uint32_t)command->texture, (uint64_t)(uint32_t)command->count,
+    uint64_t parts[6] = {command->key.value, (uint64_t)(uint32_t)command->texture, (uint64_t)(uint32_t)command->count,
                          (uint64_t)(uintptr_t)target, (uint64_t)(uintptr_t)command->destination,
                          (uint64_t)(uint32_t)command->sampler};
     for (int i = 0; i < 6; ++i) signature = (signature ^ parts[i]) * 0x100000001b3ull;
@@ -958,7 +986,7 @@ static void record_pass(const Texture *target, int depth, SDL_GPULoadOp color_lo
         kept->pair = -1;
         kept->copy = command->offset;
         if (!command->resident) {
-            uint32_t stride = (command->key & KEY_MESH) ? sizeof(MeshVertex) : sizeof(RenderVertex);
+            uint32_t stride = command->key.mesh ? sizeof(MeshVertex) : sizeof(RenderVertex);
             uint32_t start = (frame->vertex_used + stride - 1) / stride * stride;
             uint32_t bytes = (uint32_t)command->count * stride;
             if (start + bytes > VERTEX_BYTES) {
@@ -1433,8 +1461,8 @@ void render_download_depth(int target, int x, int y, int width, int height, uint
             state.texture = source;
             state.decal = 1;
             state.depth_read = 1;
-            state.scissor[2] = w - 1;
-            state.scissor[3] = h - 1;
+            state.scissor.right = w - 1;
+            state.scissor.bottom = h - 1;
             render_bind(tile);
             render_source = RENDER_SOURCE_DEPTH;
             render_draw(&state, RENDER_TRIANGLES, quad, 6);
@@ -1459,16 +1487,20 @@ static void draw_to_bound(void) {
 
 int render_bound(void) { return bound; }
 
-static SDL_GPUCompareOp depth_compare(uint64_t test) {
-    if (!((test >> 16) & 1)) return SDL_GPU_COMPAREOP_ALWAYS;
-    static const SDL_GPUCompareOp ops[4] = {SDL_GPU_COMPAREOP_NEVER, SDL_GPU_COMPAREOP_ALWAYS,
-                                            SDL_GPU_COMPAREOP_GREATER_OR_EQUAL, SDL_GPU_COMPAREOP_GREATER};
-    return ops[(test >> 17) & 3];
+static SDL_GPUCompareOp depth_compare(const RenderTests *tests) {
+    if (!tests->depth_test) return SDL_GPU_COMPAREOP_ALWAYS;
+    static const SDL_GPUCompareOp ops[] = {
+        [RENDER_DEPTH_NEVER] = SDL_GPU_COMPAREOP_NEVER,
+        [RENDER_DEPTH_ALWAYS] = SDL_GPU_COMPAREOP_ALWAYS,
+        [RENDER_DEPTH_GEQUAL] = SDL_GPU_COMPAREOP_GREATER_OR_EQUAL,
+        [RENDER_DEPTH_GREATER] = SDL_GPU_COMPAREOP_GREATER,
+    };
+    return ops[tests->depth_method];
 }
 
 static void draw_to_bound(void);
 
-static int prepare(Command *command, const RenderState *state, uint32_t key_extra) {
+static int prepare(Command *command, const RenderState *state, PipelineKey key) {
     draw_to_bound();
     if (state->texture && state->texture == bound) {
         fputs("render: a draw samples its own target\n", stderr);
@@ -1476,8 +1508,8 @@ static int prepare(Command *command, const RenderState *state, uint32_t key_extr
     }
     uint32_t source, destination, op, flags = 0;
     SDL_GPUTexture *alpha_copy = textures[blank].color;
-    if ((state->test >> 14) & 1) {
-        int pass_set = (state->test >> 15) & 1;
+    if (state->tests.destination_test) {
+        int pass_set = state->tests.destination_mode;
         if (!pending_count && !textures[bound].drawn) {
             if (!pass_set) return 0;
         } else {
@@ -1492,23 +1524,30 @@ static int prepare(Command *command, const RenderState *state, uint32_t key_extr
     if ((state->color_mask & 0x00ff0000) != 0x00ff0000) mask |= SDL_GPU_COLORCOMPONENT_B;
     if ((state->color_mask & 0xff000000) != 0xff000000) mask |= SDL_GPU_COLORCOMPONENT_A;
     memset(command, 0, sizeof *command);
-    command->key = source | destination << 4 | op << 8 | mask << 11 | (uint32_t)depth_compare(state->test) << 17 |
-                   (uint32_t)(state->depth_write != 0) << 21 | key_extra |
-                   (uint32_t)sample_count(textures[bound].samples) << KEY_SAMPLES_SHIFT;
+    key.source = source;
+    key.destination = destination;
+    key.op = op;
+    key.mask = mask;
+    key.depth_compare = depth_compare(&state->tests);
+    key.depth_write = state->depth_write != 0;
+    key.samples = sample_count(textures[bound].samples);
+    command->key = key;
     int textured = state->texture && !(render_toggles.no_textures && !state->depth_read);
     if (textured) flags |= TEXTURED;
     if (state->texa) flags |= TEXA;
-    if ((state->texa_register >> 15) & 1) flags |= AEM;
+    if (state->expansion.aem) flags |= AEM;
     if (state->fog && !render_toggles.no_fog) flags |= FOG;
-    if (state->test & 1) flags |= ALPHA_TEST;
-    if (((state->alpha >> 4) & 3) == 2) flags |= FACTOR_FIX;
+    if (state->tests.alpha_test) flags |= ALPHA_TEST;
+    if (state->blending.c == RENDER_BLEND_FIX) flags |= FACTOR_FIX;
     if (state->decal) flags |= DECAL;
     if (state->vertex_alpha) flags |= VERTEX_ALPHA;
     if (state->depth_read) flags |= DEPTH_READ;
-    uint32_t fix = (uint32_t)((state->alpha >> 32) & 255);
+    uint32_t fix = state->blending.fix;
     command->fragment.flags = flags;
-    command->fragment.alpha = (uint32_t)((state->test >> 4) & 255) | (uint32_t)((state->test >> 1) & 7) << 8 |
-                              fix << 16 | (uint32_t)(state->texa_register & 255) << 24;
+    command->fragment.alpha_reference = state->tests.alpha_reference;
+    command->fragment.alpha_method = state->tests.alpha_method;
+    command->fragment.blend_fix = fix;
+    command->fragment.texture_alpha = state->expansion.ta0;
     command->fragment.fog_color = state->fog_color;
     command->blend_constant = fix >= 128 ? 1.0f : (float)fix / 128.0f;
     command->texture = textured ? state->texture : blank;
@@ -1517,21 +1556,23 @@ static int prepare(Command *command, const RenderState *state, uint32_t key_extr
     command->destination = alpha_copy;
     if (!state->depth_read) {
         if (render_toggles.overdraw) {
-            command->key = (command->key & ~0x7fffu) | SDL_GPU_BLENDFACTOR_ONE | SDL_GPU_BLENDFACTOR_ONE << 4 |
-                           SDL_GPU_BLENDOP_ADD << 8 | 7 << 11;
+            command->key.source = SDL_GPU_BLENDFACTOR_ONE;
+            command->key.destination = SDL_GPU_BLENDFACTOR_ONE;
+            command->key.op = SDL_GPU_BLENDOP_ADD;
+            command->key.mask = SDL_GPU_COLORCOMPONENT_R | SDL_GPU_COLORCOMPONENT_G | SDL_GPU_COLORCOMPONENT_B;
             command->fragment.flags |= OVERDRAW;
         }
-        if (render_toggles.wireframe && ((key_extra >> 15) & 3) == RENDER_TRIANGLES) command->key |= KEY_WIRE;
+        if (render_toggles.wireframe && key.topology == RENDER_TRIANGLES) command->key.wire = 1;
     }
     command->sampler = (state->linear ? 1 : 0) | (state->repeat_u ? 2 : 0) | (state->repeat_v ? 4 : 0);
     command->model = -1;
     command->shadow = -1;
     command->follow = -1;
     Texture *target = &textures[bound];
-    int x0 = state->scissor[0] < 0 ? 0 : state->scissor[0];
-    int y0 = state->scissor[1] < 0 ? 0 : state->scissor[1];
-    int x1 = state->scissor[2] >= target->width ? target->width - 1 : state->scissor[2];
-    int y1 = state->scissor[3] >= target->height ? target->height - 1 : state->scissor[3];
+    int x0 = state->scissor.left < 0 ? 0 : state->scissor.left;
+    int y0 = state->scissor.top < 0 ? 0 : state->scissor.top;
+    int x1 = state->scissor.right >= target->width ? target->width - 1 : state->scissor.right;
+    int y1 = state->scissor.bottom >= target->height ? target->height - 1 : state->scissor.bottom;
     command->scissor.x = x0 * target->scale;
     command->scissor.y = y0 * target->scale;
     command->scissor.w = x1 >= x0 ? (x1 - x0 + 1) * target->scale : 0;
@@ -1557,10 +1598,22 @@ static void append(const Command *command) {
     command_serial++;
 }
 
+static PipelineKey opaque_key(PipelineKey shape) {
+    return (PipelineKey){.source = SDL_GPU_BLENDFACTOR_ONE,
+                         .destination = SDL_GPU_BLENDFACTOR_ZERO,
+                         .op = SDL_GPU_BLENDOP_ADD,
+                         .mask = SDL_GPU_COLORCOMPONENT_R | SDL_GPU_COLORCOMPONENT_G | SDL_GPU_COLORCOMPONENT_B |
+                                 SDL_GPU_COLORCOMPONENT_A,
+                         .topology = shape.topology,
+                         .depth_compare = SDL_GPU_COMPAREOP_ALWAYS,
+                         .mesh = shape.mesh,
+                         .cull = shape.cull,
+                         .samples = shape.samples};
+}
+
 static void highlight(const Command *command) {
     Command solid = *command;
-    solid.key = (command->key & KEY_KEEP) | SDL_GPU_BLENDFACTOR_ONE | SDL_GPU_BLENDFACTOR_ZERO << 4 |
-                SDL_GPU_BLENDOP_ADD << 8 | 15 << 11 | (uint32_t)SDL_GPU_COMPAREOP_ALWAYS << 17;
+    solid.key = opaque_key(command->key);
     solid.fragment.flags = SOLID;
     solid.texture = blank;
     solid.color = textures[blank].color;
@@ -1624,13 +1677,11 @@ static void restore(void) {
     RenderState state;
     memset(&state, 0, sizeof state);
     state.texture = restore_slot;
-    state.scissor[2] = width - 1;
-    state.scissor[3] = height - 1;
+    state.scissor.right = width - 1;
+    state.scissor.bottom = height - 1;
     Command command;
-    if (!prepare(&command, &state, (uint32_t)RENDER_TRIANGLES << 15)) return;
-    command.key = SDL_GPU_BLENDFACTOR_ONE | SDL_GPU_BLENDFACTOR_ZERO << 4 | SDL_GPU_BLENDOP_ADD << 8 | 15 << 11 |
-                  (uint32_t)SDL_GPU_COMPAREOP_ALWAYS << 17 | (uint32_t)RENDER_TRIANGLES << 15 |
-                  (uint32_t)sample_count(target->samples) << KEY_SAMPLES_SHIFT;
+    if (!prepare(&command, &state, (PipelineKey){.topology = RENDER_TRIANGLES})) return;
+    command.key = opaque_key((PipelineKey){.topology = RENDER_TRIANGLES, .samples = sample_count(target->samples)});
     command.fragment.flags = TEXTURED | DECAL;
     if (store_vertices(&command, quad, sizeof quad, 6, sizeof(RenderVertex))) append(&command);
 }
@@ -1640,7 +1691,7 @@ static void submit(const RenderState *state, int topology, const RenderVertex *v
     draw_to_bound();
     if (!pending_count && textures[bound].stale) restore();
     Command command;
-    if (!prepare(&command, state, (uint32_t)topology << 15) ||
+    if (!prepare(&command, state, (PipelineKey){.topology = (uint32_t)topology}) ||
         !store_vertices(&command, vertices, (uint32_t)(count * (int)sizeof(RenderVertex)), count, sizeof(RenderVertex))) {
         if (capturing) record(source, state, topology, 0, count, vertices, -1, 0, NULL);
         return;
@@ -1652,7 +1703,7 @@ static void submit(const RenderState *state, int topology, const RenderVertex *v
     Command *last = pending_count ? &pending[pending_count - 1] : NULL;
     int merged = last && last->model < 0 && last->offset + (uint32_t)last->count * sizeof(RenderVertex) == command.offset &&
                  last->shadow == command.shadow && last->follow == command.follow &&
-                 last->key == command.key && last->texture == command.texture && last->color == command.color &&
+                 last->key.value == command.key.value && last->texture == command.texture && last->color == command.color &&
                  last->destination == command.destination &&
                  last->sampler == command.sampler &&
                  last->blend_constant == command.blend_constant &&
@@ -1702,15 +1753,16 @@ void render_draw(const RenderState *state, int topology, const RenderVertex *ver
     else submit(state, topology, vertices, count, index, render_source);
 }
 
-static void shadow_vertex(RenderVertex *vertex, const float *p, const float *mapping, float depth) {
+static void shadow_vertex(RenderVertex *vertex, const float *p, const RenderScreenMapping *mapping, float depth) {
     float q = p[3] != 0.0f ? 1.0f / p[3] : 0.0f;
-    vertex->x = (p[0] * q * mapping[0] + mapping[1] + 1.0f) / mapping[0];
-    vertex->y = (p[1] * q * mapping[2] + mapping[3] - 1.0f) / mapping[2];
+    vertex->x = (p[0] * q * mapping->scale_x + mapping->offset_x + 1.0f) / mapping->scale_x;
+    vertex->y = (p[1] * q * mapping->scale_y + mapping->offset_y - 1.0f) / mapping->scale_y;
     float scaled = (float)(long long)(p[2] * q) * depth;
     vertex->z = scaled < 0.0f ? 0.0f : scaled > 1.0f ? 1.0f : scaled;
 }
 
-void render_shadow_place(RenderVertex *vertex, const float *clip, const float *screen, const float *mapping, float depth) {
+void render_shadow_place(RenderVertex *vertex, const float *clip, const float *screen, const RenderScreenMapping *mapping,
+                         float depth) {
     float p[4];
     for (int k = 0; k < 4; k++)
         p[k] = clip[0] * screen[k] + clip[1] * screen[4 + k] + clip[2] * screen[8 + k] + clip[3] * screen[12 + k];
@@ -1718,7 +1770,7 @@ void render_shadow_place(RenderVertex *vertex, const float *clip, const float *s
 }
 
 int render_shadow_setup(const void *key, const float *world, const float *camera, const float *light, const float *screen,
-                        const float *mapping, float depth, const float (*shape)[4], int count, int prisms) {
+                        const RenderScreenMapping *mapping, float depth, const float (*shape)[4], int count, int prisms) {
     if (!smoothing) return -1;
     if (!point_data) point_data = malloc(VERTEX_BYTES / sizeof(RenderVertex) * sizeof *point_data);
     Recording *frame = &recordings[recording_slot];
@@ -1739,21 +1791,22 @@ int render_shadow_setup(const void *key, const float *world, const float *camera
     memcpy(record->camera, camera, sizeof record->camera);
     memcpy(record->light, light, sizeof record->light);
     memcpy(record->screen, screen, sizeof record->screen);
-    memcpy(record->mapping, mapping, sizeof record->mapping);
+    record->mapping = *mapping;
     record->depth = depth;
     record->match = -1;
     return frame->shadow_count++;
 }
 
-void render_sprite(const RenderState *state, const RenderVertex *vertices, int count, const float *mapping, float depth) {
+void render_sprite(const RenderState *state, const RenderVertex *vertices, int count, const RenderScreenMapping *mapping,
+                   float depth) {
     Recording *frame = &recordings[recording_slot];
     int follow = -1;
     if (smoothing) {
-        float wanted[5] = {mapping[0], mapping[1], mapping[2], mapping[3], depth};
+        RenderFollow wanted = {*mapping, depth};
         int last = frame->follow_count - 1;
-        if (last >= 0 && !memcmp(frame->follows[last], wanted, sizeof wanted)) follow = last;
+        if (last >= 0 && !memcmp(&frame->follows[last], &wanted, sizeof wanted)) follow = last;
         else if (grow((void **)&frame->follows, &frame->follow_capacity, frame->follow_count + 1, sizeof *frame->follows)) {
-            memcpy(frame->follows[frame->follow_count], wanted, sizeof wanted);
+            frame->follows[frame->follow_count] = wanted;
             follow = frame->follow_count++;
         }
     }
@@ -1762,7 +1815,7 @@ void render_sprite(const RenderState *state, const RenderVertex *vertices, int c
     drawing_follow = -1;
 }
 
-void render_shadow(const RenderState *state, const RenderVertex *vertices, const float (*points)[4], int count, int setup) {
+void render_shadow(const RenderState *state, const RenderVertex *vertices, const ShadowPoint *points, int count, int setup) {
     drawing_shadow = setup;
     shadow_points = points;
     render_draw(state, RENDER_TRIANGLES, vertices, count);
@@ -1770,21 +1823,21 @@ void render_shadow(const RenderState *state, const RenderVertex *vertices, const
     shadow_points = NULL;
 }
 
-static int extends_last(const Command *command, const MeshUniforms *uniforms, const float *bones) {
+static int extends_last(const Command *command, const MeshUniforms *uniforms, const RenderBone *bones) {
     const Command *last = pending_count ? &pending[pending_count - 1] : NULL;
     if (!last || last->model < 0 || !command->resident || !last->resident) return 0;
     if (last->offset + (uint32_t)last->count * sizeof(MeshVertex) != command->offset) return 0;
-    if (last->key != command->key || last->texture != command->texture || last->color != command->color ||
+    if (last->key.value != command->key.value || last->texture != command->texture || last->color != command->color ||
         last->destination != command->destination || last->sampler != command->sampler ||
         last->blend_constant != command->blend_constant || memcmp(&last->fragment, &command->fragment, sizeof last->fragment) ||
         memcmp(&last->scissor, &command->scissor, sizeof last->scissor))
         return 0;
-    if (memcmp(uniforms, &models[last->model], offsetof(MeshUniforms, flags) + 3 * sizeof(uint32_t))) return 0;
+    if (memcmp(uniforms, &models[last->model], offsetof(MeshUniforms, flags) + offsetof(RenderMeshFlags, bone_set))) return 0;
     if (!bones != !last->bones) return 0;
     return !bones || !memcmp(bones, bone_sets[last->bones], sizeof bone_sets[0]);
 }
 
-void render_mesh(const RenderState *state, int cull, const MeshUniforms *uniforms, const float *bones,
+void render_mesh(const RenderState *state, int cull, const MeshUniforms *uniforms, const RenderBone *bones,
                  const MeshVertex *vertices, int count, int resident) {
     if (!bound || count <= 0 || render_toggles.no_models) return;
     port_stats.mesh_calls++;
@@ -1801,8 +1854,7 @@ void render_mesh(const RenderState *state, int cull, const MeshUniforms *uniform
     draw_to_bound();
     if (!pending_count && textures[bound].stale) restore();
     Command command;
-    uint32_t key = KEY_MESH | (uint32_t)RENDER_TRIANGLES << 15 | (uint32_t)cull << KEY_CULL_SHIFT;
-    int prepared = prepare(&command, state, key);
+    int prepared = prepare(&command, state, (PipelineKey){.topology = RENDER_TRIANGLES, .mesh = 1, .cull = (uint32_t)cull});
     if (prepared && resident >= 0) {
         command.offset = (uint32_t)resident * sizeof(MeshVertex);
         command.count = count;
@@ -1825,7 +1877,7 @@ void render_mesh(const RenderState *state, int cull, const MeshUniforms *uniform
         command.bones = bone_count;
         memcpy(bone_sets[bone_count++], bones, sizeof bone_sets[0]);
     }
-    models[model_count++].flags[3] = (uint32_t)command.bones;
+    models[model_count++].flags.bone_set = (uint32_t)command.bones;
     append(&command);
     if (capturing) record(RENDER_SOURCE_MESH, state, RENDER_TRIANGLES, cull, count, NULL, command_serial - 1, 0, uniforms);
     if (index == render_highlight) highlight(&command);
@@ -2167,8 +2219,9 @@ static float distance(const Recording *frame, int model, const Recording *before
     for (int i = 0; i < 12; ++i) jumped = fmaxf(jumped, fabsf(now[i] - was[i]) * CUT_DISTANCE / BONE_FLIP);
     int bones = frame->model_bones[model], old_bones = before->model_bones[found];
     if ((bones > 0) != (old_bones > 0)) return SNAP_FRACTION;
-    for (int i = 3; bones > 0 && i < 384; i += 4)
-        jumped = fmaxf(jumped, fabsf(frame->bones[bones][i] - before->bones[old_bones][i]));
+    for (int bone = 0; bones > 0 && bone < RENDER_BONE_SLOTS; ++bone)
+        for (int row = 0; row < 3; ++row)
+            jumped = fmaxf(jumped, fabsf(frame->bones[bones][bone].rows[row][3] - before->bones[old_bones][bone].rows[row][3]));
     return jumped / CUT_DISTANCE * SNAP_FRACTION;
 }
 
@@ -2367,12 +2420,12 @@ static void match_shadows(void) {
     for (int i = 0; i < frame->shadow_count; ++i) frame->shadows_matched += frame->shadows[i].match >= 0;
 }
 
-static void bone_matrix(float *out, const float *rows) {
+static void bone_matrix(float *out, const RenderBone *bone) {
     for (int c = 0; c < 3; ++c) {
-        for (int k = 0; k < 3; ++k) out[c * 4 + k] = rows[k * 4 + c];
+        for (int k = 0; k < 3; ++k) out[c * 4 + k] = bone->rows[k][c];
         out[c * 4 + 3] = 0.0f;
     }
-    for (int k = 0; k < 3; ++k) out[12 + k] = rows[k * 4 + 3];
+    for (int k = 0; k < 3; ++k) out[12 + k] = bone->rows[k][3];
     out[15] = 1.0f;
 }
 
@@ -2394,9 +2447,9 @@ static void attach_shadows(void) {
             if (bones <= 0 || fabsf(placed[12] - record->world[12]) > ATTACH_REACH ||
                 fabsf(placed[14] - record->world[14]) > ATTACH_REACH)
                 continue;
-            for (int bone = 0; bone < 32; ++bone) {
+            for (int bone = 0; bone < RENDER_BONE_SLOTS; ++bone) {
                 float local[16], world[16];
-                bone_matrix(local, &frame->bones[bones][bone * 12]);
+                bone_matrix(local, &frame->bones[bones][bone]);
                 multiply(world, placed, local);
                 float gap = matrix_gap(world, record->world);
                 if (gap >= best) continue;
@@ -2458,21 +2511,22 @@ static int unit(float *vector) {
     return 1;
 }
 
-static void blend_bone(float *out, const float *was, const float *now, float alpha) {
+static void blend_bone(RenderBone *out, const RenderBone *was, const RenderBone *now, float alpha) {
     float turned = 0.0f, column[3][3], size[3];
-    for (int i = 0; i < 12; ++i) out[i] = was[i] + (now[i] - was[i]) * alpha;
+    for (int k = 0; k < 3; ++k)
+        for (int c = 0; c < 4; ++c) out->rows[k][c] = was->rows[k][c] + (now->rows[k][c] - was->rows[k][c]) * alpha;
     for (int c = 0; c < 3; ++c) {
         float before[3], after[3];
         for (int k = 0; k < 3; ++k) {
-            before[k] = was[k * 4 + c];
-            after[k] = now[k * 4 + c];
-            column[c][k] = out[k * 4 + c];
+            before[k] = was->rows[k][c];
+            after[k] = now->rows[k][c];
+            column[c][k] = out->rows[k][c];
             turned = fmaxf(turned, fabsf(after[k] - before[k]));
         }
         size[c] = length_of(before) + (length_of(after) - length_of(before)) * alpha;
     }
     if (turned > BONE_FLIP) {
-        memcpy(out, now, 12 * sizeof *out);
+        *out = *now;
         return;
     }
     if (!unit(column[0])) return;
@@ -2485,7 +2539,7 @@ static void blend_bone(float *out, const float *was, const float *now, float alp
     float side = cross[0] * column[2][0] + cross[1] * column[2][1] + cross[2] * column[2][2] < 0.0f ? -1.0f : 1.0f;
     for (int k = 0; k < 3; ++k) column[2][k] = cross[k] * side;
     for (int c = 0; c < 3; ++c)
-        for (int k = 0; k < 3; ++k) out[k * 4 + c] = column[c][k] * size[c];
+        for (int k = 0; k < 3; ++k) out->rows[k][c] = column[c][k] * size[c];
 }
 
 static void multiply(float *out, const float *a, const float *b) {
@@ -2551,20 +2605,20 @@ static void blend_draws(unsigned char *mapped, const Recording *frame, const Rec
 }
 
 static void blend_frame(float *out, const float *was, const float *now, float alpha) {
-    float a[12], b[12], blended[12];
+    RenderBone a, b, blended;
     for (int k = 0; k < 3; ++k) {
         for (int c = 0; c < 3; ++c) {
-            a[k * 4 + c] = was[c * 4 + k];
-            b[k * 4 + c] = now[c * 4 + k];
+            a.rows[k][c] = was[c * 4 + k];
+            b.rows[k][c] = now[c * 4 + k];
         }
-        a[k * 4 + 3] = was[12 + k];
-        b[k * 4 + 3] = now[12 + k];
+        a.rows[k][3] = was[12 + k];
+        b.rows[k][3] = now[12 + k];
     }
-    blend_bone(blended, a, b, alpha);
+    blend_bone(&blended, &a, &b, alpha);
     for (int i = 0; i < 16; ++i) out[i] = was[i] + (now[i] - was[i]) * alpha;
     for (int k = 0; k < 3; ++k) {
-        for (int c = 0; c < 3; ++c) out[c * 4 + k] = blended[k * 4 + c];
-        out[12 + k] = blended[k * 4 + 3];
+        for (int c = 0; c < 3; ++c) out[c * 4 + k] = blended.rows[k][c];
+        out[12 + k] = blended.rows[k][3];
     }
 }
 
@@ -2580,7 +2634,7 @@ static int place_shadow(float (*placed)[16], const Recording *frame, const Recor
     memcpy(screen, now->screen, sizeof screen);
     if (was && now->model >= 0 && frame->matches[now->model] >= 0) {
         float local[16], body[16];
-        bone_matrix(local, &replay_bones[frame->model_bones[now->model]][now->bone * 12]);
+        bone_matrix(local, &replay_bones[frame->model_bones[now->model]][now->bone]);
         multiply(body, replay_models[now->model].model_world, local);
         multiply(world, body, now->offset);
     } else if (was) {
@@ -2629,34 +2683,32 @@ static void blend_shadows(unsigned char *mapped, const Recording *frame, const R
             const float(*old_shape)[4] = was && was->count == now->count ? before->shapes + was->first : NULL;
             const float(*shape)[4] = frame->shapes + now->first;
             RenderVertex *out = (RenderVertex *)(mapped + command->offset);
-            const float(*points)[4] = frame->points + command->copy / sizeof(RenderVertex);
+            const ShadowPoint *points = frame->points + command->copy / sizeof(RenderVertex);
             if (pass == 2) {
                 for (int k = 0; k + 6 <= command->count; k += 6) {
                     const RenderVertex *a = &out[k], *b = &out[k + 1], *c = &out[k + 2];
-                    int flags = (int)points[k][3];
-                    int prism = now->prism_first + flags / SHADOW_PRISM;
+                    int prism = now->prism_first + points[k].prism;
                     int back = (c->x - a->x) * (b->y - a->y) - (c->y - a->y) * (b->x - a->x) < 0.0f;
                     int skipped = prism >= render_toggles.prism_from && prism < render_toggles.prism_to;
-                    if (back == ((flags & 2) != 0) && !hidden[prism] && !skipped) continue;
+                    if (back == points[k].back && !hidden[prism] && !skipped) continue;
                     for (int j = 1; j < 6; ++j) out[k + j] = out[k];
                 }
                 continue;
             }
             for (int k = 0; k < command->count; ++k) {
-                int flags = (int)points[k][3];
-                int index = (flags % SHADOW_PRISM) >> 2, prism = now->prism_first + flags / SHADOW_PRISM;
-                float position[3] = {points[k][0], points[k][1], points[k][2]};
+                int index = points[k].index, prism = now->prism_first + points[k].prism;
+                float position[3] = {points[k].position[0], points[k].position[1], points[k].position[2]};
                 if (old_shape && index < now->count)
                     for (int j = 0; j < 3; ++j) position[j] = old_shape[index][j] + (shape[index][j] - old_shape[index][j]) * alpha;
                 float p[4];
                 if (pass == 0) {
-                    shadow_corner(p, placements[command->shadow][2 + (flags & 1)], position);
+                    shadow_corner(p, placements[command->shadow][2 + points[k].cast_side], position);
                     float w = fabsf(p[3]);
                     if (p[0] > w || p[0] < -w || p[1] > w || p[1] < -w || p[2] > w || p[2] < -w) hidden[prism] = 1;
                     continue;
                 }
-                shadow_corner(p, placements[command->shadow][flags & 1], position);
-                shadow_vertex(&out[k], p, now->mapping, now->depth);
+                shadow_corner(p, placements[command->shadow][points[k].cast_side], position);
+                shadow_vertex(&out[k], p, &now->mapping, now->depth);
             }
         }
 }
@@ -2665,17 +2717,17 @@ static void follow_camera(unsigned char *mapped, const Recording *frame, const f
     for (int i = 0; i < frame->command_count; ++i) {
         const Command *command = &frame->commands[i];
         if (command->follow < 0 || command->pair >= 0) continue;
-        const float *mapping = frame->follows[command->follow];
-        float depth = mapping[4];
+        const RenderScreenMapping *mapping = &frame->follows[command->follow].mapping;
+        float depth = frame->follows[command->follow].depth;
         RenderVertex *out = (RenderVertex *)(mapped + command->offset);
         for (int k = 0; k < command->count; ++k) {
-            float v[4] = {(out[k].x * mapping[0] - mapping[1] - 1.0f) / mapping[0],
-                          (out[k].y * mapping[2] - mapping[3] + 1.0f) / mapping[2], out[k].z / depth, 1.0f};
+            float v[4] = {(out[k].x * mapping->scale_x - mapping->offset_x - 1.0f) / mapping->scale_x,
+                          (out[k].y * mapping->scale_y - mapping->offset_y + 1.0f) / mapping->scale_y, out[k].z / depth, 1.0f};
             float p[4];
             for (int r = 0; r < 4; ++r) p[r] = shift[r] * v[0] + shift[4 + r] * v[1] + shift[8 + r] * v[2] + shift[12 + r];
             if (p[3] == 0.0f) continue;
-            out[k].x = (p[0] / p[3] * mapping[0] + mapping[1] + 1.0f) / mapping[0];
-            out[k].y = (p[1] / p[3] * mapping[2] + mapping[3] - 1.0f) / mapping[2];
+            out[k].x = (p[0] / p[3] * mapping->scale_x + mapping->offset_x + 1.0f) / mapping->scale_x;
+            out[k].y = (p[1] / p[3] * mapping->scale_y + mapping->offset_y - 1.0f) / mapping->scale_y;
             float z = p[2] / p[3] * depth;
             out[k].z = z < 0.0f ? 0.0f : z > 1.0f ? 1.0f : z;
         }
@@ -2821,9 +2873,9 @@ static void blend_models(const Recording *frame, const Recording *before, float 
         }
         int bones = frame->model_bones[i], old_bones = before->model_bones[found];
         if (bones <= 0 || old_bones <= 0) continue;
-        for (int k = 0; k < 384; k += 12)
-            if (memcmp(&before->bones[old_bones][k], &frame->bones[bones][k], 12 * sizeof(float)))
-                blend_bone(&replay_bones[bones][k], &before->bones[old_bones][k], &frame->bones[bones][k], alpha);
+        for (int bone = 0; bone < RENDER_BONE_SLOTS; ++bone)
+            if (memcmp(&before->bones[old_bones][bone], &frame->bones[bones][bone], sizeof(RenderBone)))
+                blend_bone(&replay_bones[bones][bone], &before->bones[old_bones][bone], &frame->bones[bones][bone], alpha);
     }
 }
 

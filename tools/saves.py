@@ -25,6 +25,16 @@ MAGIC = b"Sony PS2 Memory Card Format "
 EXISTS = 0x8000
 DIRECTORY = 0x0020
 CHAIN_END = 0xFFFFFFFF
+ALLOCATED = 0x80000000
+CLUSTER_MASK = 0x7FFFFFFF
+SUPERBLOCK = struct.Struct("<28s12sHHHHIIIIII8x")
+SUPERBLOCK_FIELDS = ("magic", "version", "page_size", "pages_per_cluster", "pages_per_block", "unused",
+                     "clusters", "alloc_offset", "alloc_end", "root_cluster", "backup_block1", "backup_block2")
+INDIRECT_CLUSTERS = struct.Struct("<32I")
+FAT_ENTRY = struct.Struct("<I")
+CARD_TIME = struct.Struct("<xBBBBBH")
+ENTRY = struct.Struct("<HHI8sII8sI28x32s416x")
+ENTRY_FIELDS = ("mode", "unused", "length", "created", "cluster", "parent_entry", "modified", "attributes", "name")
 JAPAN = datetime.timezone(datetime.timedelta(hours=9))
 
 
@@ -36,20 +46,19 @@ def open_card(path):
     data = path.read_bytes()
     if not data.startswith(MAGIC):
         sys.exit(f"{path} is not a PS2 memory card image")
-    page_size, pages_per_cluster = struct.unpack_from("<HH", data, 0x28)
-    clusters, alloc_offset, _alloc_end, root_cluster = struct.unpack_from("<IIII", data, 0x30)
-    pages = clusters * pages_per_cluster
+    superblock = dict(zip(SUPERBLOCK_FIELDS, SUPERBLOCK.unpack_from(data)))
+    pages = superblock["clusters"] * superblock["pages_per_cluster"]
     if len(data) % pages:
         sys.exit(f"{path} has a size that is not a whole number of pages")
     return {
         "data": data,
-        "page_size": page_size,
+        "page_size": superblock["page_size"],
         "raw_page_size": len(data) // pages,
-        "pages_per_cluster": pages_per_cluster,
-        "cluster_size": page_size * pages_per_cluster,
-        "alloc_offset": alloc_offset,
-        "root_cluster": root_cluster,
-        "indirect": struct.unpack_from("<32I", data, 0x50),
+        "pages_per_cluster": superblock["pages_per_cluster"],
+        "cluster_size": superblock["page_size"] * superblock["pages_per_cluster"],
+        "alloc_offset": superblock["alloc_offset"],
+        "root_cluster": superblock["root_cluster"],
+        "indirect": INDIRECT_CLUSTERS.unpack_from(data, SUPERBLOCK.size),
     }
 
 
@@ -60,11 +69,11 @@ def read_cluster(card, number):
 
 
 def word(block, index):
-    return struct.unpack_from("<I", block, index * 4)[0]
+    return FAT_ENTRY.unpack_from(block, index * FAT_ENTRY.size)[0]
 
 
 def fat_entry(card, relative):
-    per_cluster = card["cluster_size"] // 4
+    per_cluster = card["cluster_size"] // FAT_ENTRY.size
     fat_index, offset = divmod(relative, per_cluster)
     indirect_index, indirect_offset = divmod(fat_index, per_cluster)
     fat_cluster = word(read_cluster(card, card["indirect"][indirect_index]), indirect_offset)
@@ -75,9 +84,9 @@ def chain(card, relative, count):
     clusters = [relative]
     while len(clusters) < count:
         following = fat_entry(card, clusters[-1])
-        if following == CHAIN_END or not following & 0x80000000:
+        if following == CHAIN_END or not following & ALLOCATED:
             break
-        clusters.append(following & 0x7FFFFFFF)
+        clusters.append(following & CLUSTER_MASK)
     return clusters
 
 
@@ -90,7 +99,7 @@ def read_chain(card, relative, size):
 
 
 def card_time(raw):
-    seconds, minutes, hours, day, month, year = struct.unpack_from("<xBBBBBH", raw)
+    seconds, minutes, hours, day, month, year = CARD_TIME.unpack(raw)
     try:
         return datetime.datetime(year, month, day, hours, minutes, seconds, tzinfo=JAPAN).timestamp()
     except ValueError:
@@ -98,26 +107,25 @@ def card_time(raw):
 
 
 def entry(raw):
-    mode, length = struct.unpack_from("<HxxI", raw)
-    cluster = struct.unpack_from("<I", raw, 0x10)[0]
+    fields = dict(zip(ENTRY_FIELDS, ENTRY.unpack_from(raw)))
     return {
-        "mode": mode,
-        "length": length,
-        "cluster": cluster,
-        "modified": card_time(raw[0x18:0x20]),
-        "name": raw[0x40:0x60].split(b"\0", 1)[0].decode("ascii", "replace"),
+        "mode": fields["mode"],
+        "length": fields["length"],
+        "cluster": fields["cluster"],
+        "modified": card_time(fields["modified"]),
+        "name": fields["name"].split(b"\0", 1)[0].decode("ascii", "replace"),
     }
 
 
 def list_directory(card, cluster, count):
-    raw = read_chain(card, cluster, count * 512)
-    entries = [entry(raw[index:index + 512]) for index in range(0, len(raw), 512)]
+    raw = read_chain(card, cluster, count * ENTRY.size)
+    entries = [entry(raw[index:index + ENTRY.size]) for index in range(0, len(raw), ENTRY.size)]
     return [item for item in entries if item["mode"] & EXISTS and item["name"] not in (".", "..")]
 
 
 def card_saves(card):
     saves = []
-    root = entry(read_chain(card, card["root_cluster"], 512))
+    root = entry(read_chain(card, card["root_cluster"], ENTRY.size))
     for folder in list_directory(card, card["root_cluster"], root["length"]):
         if not folder["mode"] & DIRECTORY:
             continue

@@ -6,6 +6,7 @@
 #include "port_kernel.h"
 #include "port_mod.h"
 #include "port_present.h"
+#include "port_arena.h"
 #include "port_stats.h"
 #include "port_symbols.h"
 #include "render.h"
@@ -20,7 +21,6 @@
 #include <sys/stat.h>
 #include <unordered_map>
 #include <unordered_set>
-#include <sys/mman.h>
 #include <unistd.h>
 #include <vector>
 #ifdef __APPLE__
@@ -29,9 +29,6 @@
 #include <mach-o/loader.h>
 #include <mach-o/nlist.h>
 #include <mach-o/stab.h>
-typedef char ResidentPage;
-#else
-typedef unsigned char ResidentPage;
 #endif
 
 extern "C" {
@@ -39,7 +36,9 @@ extern "C" {
 extern long __stack_chk_guard;
 }
 
-enum { PAGE = 4096, RUN_LIMIT = 1024, STATE_VERSION = 6 };
+enum { PAGE = 4096, RUN_LIMIT = 1024, STATE_VERSION = 7 };
+static const char STATE_MAGIC[8] = {'D', 'C', '2', 'S', 'T', 'A', 'T', 'E'};
+constexpr size_t LAYOUT_TEXT_SIZE = sizeof PortStateHeader::layout * 2 + 1;
 enum { THUMB_BYTES = STATE_THUMB_WIDTH * STATE_THUMB_HEIGHT * 4 };
 
 typedef struct {
@@ -70,16 +69,13 @@ typedef struct {
     std::unordered_set<uint64_t> returns;
     uint64_t old_slide;
     uint64_t new_slide;
-    uint64_t shift;
-    uint64_t old_base;
     int same;
-    std::vector<uint64_t> arena;
+    std::vector<PortArenaSpan> arena;
     uint64_t arena_low;
     uint64_t arena_size;
     uint64_t moved;
     uint64_t unresolved;
     std::vector<std::string> changed;
-    std::vector<std::string> shifted;
 } Move;
 
 static const char *const kept_symbols[][2] = {
@@ -107,9 +103,19 @@ static float host_ms;
 static int force_load;
 static char note[256];
 static PortSymbols old_build;
-static char old_layout[33];
+static char old_layout[LAYOUT_TEXT_SIZE];
 static char builds_folder[1024];
 
+
+#ifdef __APPLE__
+static uint64_t image_base(void) {
+    return (uint64_t)(uintptr_t)_dyld_get_image_header(0);
+}
+#else
+static uint64_t image_base(void) {
+    return 0;
+}
+#endif
 
 static uint64_t now_ns(void) {
     struct timespec now;
@@ -118,11 +124,11 @@ static uint64_t now_ns(void) {
 }
 
 static void layout_text(const unsigned char *layout, char *text) {
-    for (int i = 0; i < 16; ++i) snprintf(text + i * 2, 3, "%02x", layout[i]);
+    for (size_t i = 0; i < sizeof PortStateHeader::layout; ++i) snprintf(text + i * 2, 3, "%02x", layout[i]);
 }
 
 static void build_path(const unsigned char *layout, char *path, size_t size) {
-    char text[33];
+    char text[LAYOUT_TEXT_SIZE];
     layout_text(layout, text);
     const char *executable = port_symbols_executable();
     const char *slash = strrchr(executable, '/');
@@ -307,41 +313,7 @@ const char *port_state_ready(void) {
     return layout_state > 0 ? NULL : layout_error;
 }
 
-static std::vector<Run> window_runs(void) {
-    std::vector<Run> found;
-    uintptr_t low = PORT_WINDOW + 0x10000000, high = PORT_WINDOW + 0x20000000;
-    size_t page = (size_t)sysconf(_SC_PAGESIZE);
-    std::vector<ResidentPage> resident((high - low) / page);
-    if (mincore((void *)low, high - low, resident.data())) return found;
-    for (size_t i = 0; i < resident.size(); ++i) {
-        if (!(resident[i] & 1)) continue;
-        uintptr_t start = low + i * page;
-        if (!found.empty() && found.back().start + found.back().size == start) found.back().size += page;
-        else found.push_back({start, page});
-    }
-    return found;
-}
-
-static std::vector<Run> memory_regions(void) {
-    std::vector<Run> regions(runs, runs + run_count);
-    std::vector<Run> window = window_runs();
-    regions.insert(regions.end(), window.begin(), window.end());
-    regions.push_back({(uintptr_t)(PORT_WINDOW + 0x70000000), 16384});
-    return regions;
-}
-
-static int inside_window(uint64_t start, uint64_t size) {
-    uint64_t low = PORT_WINDOW + 0x10000000, high = PORT_WINDOW + 0x20000000;
-    if (start >= low && size <= high - low && start - low <= high - low - size) return 1;
-    return start == PORT_WINDOW + 0x70000000 && size == 16384;
-}
-
 static void restore_bytes(uint64_t start, const unsigned char *data, size_t size) {
-    if (inside_window(start, size)) {
-        if (data) memcpy((void *)(uintptr_t)start, data, size);
-        else memset((void *)(uintptr_t)start, 0, size);
-        return;
-    }
     for (int i = 0; i < run_count; ++i) {
         uint64_t low = start > runs[i].start ? start : runs[i].start;
         uint64_t high = start + size < runs[i].start + runs[i].size ? start + size : runs[i].start + runs[i].size;
@@ -368,7 +340,7 @@ static int zero_page(const unsigned char *data, size_t size) {
 }
 
 static void save_state(PortState *state) {
-    std::vector<Run> regions = memory_regions();
+    std::vector<Run> regions(runs, runs + run_count);
     std::vector<unsigned char> maps;
     size_t sound = audio_save(NULL) + visual_save(NULL);
     size_t size = sizeof(PortStateHeader) + THUMB_BYTES + sound;
@@ -389,20 +361,20 @@ static void save_state(PortState *state) {
     }
     PortStateHeader header;
     memset(&header, 0, sizeof header);
-    memcpy(header.magic, "DC2STATE", 8);
+    memcpy(header.magic, STATE_MAGIC, sizeof header.magic);
     header.version = STATE_VERSION;
     header.regions = (uint32_t)regions.size();
-    memcpy(header.layout, layout_id, 16);
+    memcpy(header.layout, layout_id, sizeof header.layout);
     header.loop = GetNowLoopNo();
     header.map = GetNowInitArg() ? GetNowInitArg()->map_no : -1;
-    header.field = port_graphics.fields;
+    header.field = port_fields;
     header.taken = (int64_t)time(NULL);
     header.arena_used = port_stats.arena_used;
     header.arena_peak = port_stats.arena_peak;
     header.arena_blocks = port_stats.arena_blocks;
     header.sound = sound;
     header.size = size;
-    header.base = PORT_WINDOW;
+    header.base = image_base();
     header.guard = (uint64_t)__stack_chk_guard;
     port_kernel_stacks(&header.stack_low, &header.stack_high);
     header.return_count = port_kernel_returns(header.return_slots, STATE_RETURN_LIMIT);
@@ -443,8 +415,7 @@ static int kept(const unsigned char *layout) {
 }
 
 static int image_segment(const PortSection &section) {
-    return strcmp(section.segment, "__PS2") && strcmp(section.segment, "__PS2SPR") &&
-           strcmp(section.segment, "__PAGEZERO") && strcmp(section.segment, "__LINKEDIT");
+    return strcmp(section.segment, "__PAGEZERO") && strcmp(section.segment, "__LINKEDIT");
 }
 
 static uint64_t text_base(const PortSymbols *symbols) {
@@ -458,7 +429,7 @@ static int string_section(const PortSection *section) {
 }
 
 static const char *open_old_build(const unsigned char *layout) {
-    char text[33];
+    char text[LAYOUT_TEXT_SIZE];
     layout_text(layout, text);
     if (!strcmp(text, old_layout)) return NULL;
     old_layout[0] = 0;
@@ -472,9 +443,7 @@ static const char *open_old_build(const unsigned char *layout) {
 
 static void prepare_move(Move *move, const PortStateHeader *header, const PortSymbols *from, const PortSymbols *to) {
     move->old_slide = header->base - text_base(from);
-    move->new_slide = PORT_WINDOW - text_base(to);
-    move->shift = PORT_WINDOW - header->base;
-    move->old_base = header->base;
+    move->new_slide = image_base() - text_base(to);
     move->same = from == to;
     move->stack_low = header->stack_low;
     move->stack_high = header->stack_high;
@@ -513,17 +482,9 @@ static int live_return(const Move *move, uint64_t where) {
     return move->returns.count(where) != 0;
 }
 
-static int in_scratchpad(const Move *move, uint64_t value) {
-    return value - (move->old_base + 0x70000000) < 16384;
-}
-
-static int in_window(const Move *move, uint64_t value) {
-    return value - (move->old_base + 0x10000000) < 0x30000000 || in_scratchpad(move, value);
-}
-
 static int in_arena_block(const Move *move, uint64_t value) {
-    for (size_t i = 0; i + 1 < move->arena.size(); i += 2)
-        if (value >= move->arena[i] && value <= move->arena[i + 1]) return 1;
+    for (const PortArenaSpan &span : move->arena)
+        if (value >= span.start && value <= span.live_end) return 1;
     return 0;
 }
 
@@ -569,16 +530,14 @@ static void move_words(Move *move, unsigned char *bytes, uint64_t start, size_t 
     for (size_t at = (size_t)((4 - start % 4) % 4); at + 8 <= size; at += 4) {
         uint64_t value;
         memcpy(&value, bytes + at, 8);
-        uint64_t moved = value + move->shift;
-        if (!in_scratchpad(move, value)) {
-            uint64_t image = value - move->old_slide;
-            if (image < move->low || image >= move->high || !pointer_like(move, start + at, value, engine)) continue;
-            if (!move_address(move, start + at, image, &moved)) {
-                move->unresolved++;
-                continue;
-            }
-            moved += move->new_slide;
+        uint64_t image = value - move->old_slide;
+        if (image < move->low || image >= move->high || !pointer_like(move, start + at, value, engine)) continue;
+        uint64_t moved;
+        if (!move_address(move, start + at, image, &moved)) {
+            move->unresolved++;
+            continue;
         }
+        moved += move->new_slide;
         if (moved != value) memcpy(bytes + at, &moved, 8);
         move->moved++;
         at += 4;
@@ -610,10 +569,6 @@ static void decode_regions(const unsigned char *data, std::vector<Piece> *pieces
 }
 
 static void place_piece(Move *move, const Piece &piece, int write) {
-    if (in_window(move, piece.start)) {
-        if (write) restore_bytes(piece.start + move->shift, piece.bytes.data(), piece.bytes.size());
-        return;
-    }
     uint64_t start = piece.start - move->old_slide;
     uint64_t end = start + piece.bytes.size();
     const std::vector<PortSymbol> &list = move->from->symbols;
@@ -632,9 +587,6 @@ static void place_piece(Move *move, const Piece &piece, int write) {
         if (found == move->keys.end()) continue;
         uint64_t room = found->second->size < symbol.size ? found->second->size : symbol.size;
         if (found->second->size != symbol.size) note_name(&move->changed, symbol.name);
-        const PortSection *section = port_section_at(move->from, symbol.address);
-        if (found->second->address != symbol.address && section && !strcmp(section->segment, "__PS2RAM"))
-            note_name(&move->shifted, symbol.name);
         if (last > symbol.address + room) last = symbol.address + room;
         if (!write || first >= last) continue;
         restore_bytes(found->second->address + move->new_slide + (first - symbol.address),
@@ -670,7 +622,7 @@ static void find_arena(Move *move, const std::vector<Piece> &pieces, uint64_t bl
         uint64_t at = symbol.address + move->old_slide;
         for (const Piece &piece : pieces) {
             if (at < piece.start || at + symbol.size > piece.start + piece.bytes.size()) continue;
-            move->arena.resize((size_t)(blocks * 4 + 4));
+            move->arena.resize((size_t)(blocks * 2 + 2));
             move->arena.resize(port_arena_spans(piece.bytes.data() + (at - piece.start), symbol.size, at,
                                                 move->arena.data(), move->arena.size()));
             move->arena_low = at;
@@ -680,7 +632,7 @@ static void find_arena(Move *move, const std::vector<Piece> &pieces, uint64_t bl
 }
 
 static int move_pieces(const PortStateHeader *header, std::vector<Piece> *pieces, Move *move) {
-    int same = !memcmp(header->layout, layout_id, 16);
+    int same = !memcmp(header->layout, layout_id, sizeof header->layout);
     const char *failed = same ? NULL : open_old_build(header->layout);
     const char *error = NULL;
     const PortSymbols *current = port_symbols_self(&error);
@@ -692,12 +644,8 @@ static int move_pieces(const PortStateHeader *header, std::vector<Piece> *pieces
     find_arena(move, *pieces, header->arena_blocks);
     for (Piece &piece : *pieces) move_words(move, piece.bytes.data(), piece.start, piece.bytes.size(), 1);
     for (const Piece &piece : *pieces) place_piece(move, piece, 0);
-    if ((move->changed.empty() && move->shifted.empty()) || force_load) return 1;
-    size_t length = 0;
-    if (!move->shifted.empty())
-        length = add_names(length, "this build moved engine memory, which the engine also reaches through 32-bit PS2 "
-                                   "addresses:", move->shifted, 2);
-    if (!move->changed.empty()) length = add_names(length, "this build sizes these differently:", move->changed, 6);
+    if (move->changed.empty() || force_load) return 1;
+    size_t length = add_names(0, "this build sizes these differently:", move->changed, 6);
     if (length < sizeof problem) snprintf(problem + length, sizeof problem - length, "force=1 loads anyway");
     return 0;
 }
@@ -705,8 +653,8 @@ static int move_pieces(const PortStateHeader *header, std::vector<Piece> *pieces
 static const char *check_state(const unsigned char *data, size_t size) {
     if (size < sizeof(PortStateHeader) + THUMB_BYTES) return "the savestate is truncated";
     const PortStateHeader *header = (const PortStateHeader *)data;
-    if (memcmp(header->magic, "DC2STATE", 8) || header->version != STATE_VERSION) return "not a savestate of this version";
-    if (memcmp(header->layout, layout_id, 16) && !kept(header->layout))
+    if (memcmp(header->magic, STATE_MAGIC, sizeof header->magic) || header->version != STATE_VERSION) return "not a savestate of this version";
+    if (memcmp(header->layout, layout_id, sizeof header->layout) && !kept(header->layout))
         return "the savestate is from another build, and that build was not kept beside this one";
     if (header->size != size) return "the savestate is truncated";
     const unsigned char *at = data + sizeof(PortStateHeader) + THUMB_BYTES;
@@ -743,12 +691,11 @@ static void load_state(const PortState *state) {
     decode_regions(state->data, &pieces, &tail);
     std::vector<unsigned char> sound(tail, (const unsigned char *)state->data + state->size);
     swap_guard(&pieces, header->guard);
-    int rebuilt = memcmp(header->layout, layout_id, 16) != 0;
-    int moved = rebuilt || header->base != PORT_WINDOW;
+    int rebuilt = memcmp(header->layout, layout_id, sizeof header->layout) != 0;
+    int moved = rebuilt || header->base != image_base();
     Move move;
     if (moved && !move_pieces(header, &pieces, &move)) return;
     if (!port_movie_end()) port_movie_close();
-    for (const Run &region : window_runs()) memset((void *)region.start, 0, region.size);
     for (const Piece &piece : pieces) {
         if (moved) place_piece(&move, piece, 1);
         else restore_bytes(piece.start, piece.bytes.data(), piece.bytes.size());
@@ -765,7 +712,7 @@ static void load_state(const PortState *state) {
         snprintf(note, sizeof note, "from %s%s: %llu pointers moved, %llu left as they were%s",
                  rebuilt ? "build " : "a launch at another address", rebuilt ? old_layout : "",
                  (unsigned long long)move.moved, (unsigned long long)move.unresolved,
-                 move.changed.empty() && move.shifted.empty() ? "" : ", forced");
+                 move.changed.empty() ? "" : ", forced");
 }
 
 static void capture_thumbnail(void) {
@@ -817,7 +764,7 @@ void port_state_builds(const char *folder) { snprintf(builds_folder, sizeof buil
 
 void port_state_drop_builds(void) {
     if (!builds_folder[0]) return;
-    char current[33];
+    char current[LAYOUT_TEXT_SIZE];
     layout_text((const unsigned char *)layout_id, current);
     const char *executable = port_symbols_executable();
     const char *slash = strrchr(executable, '/');
@@ -878,7 +825,7 @@ const char *port_state_write(const PortState *state, const char *path) {
         return failure;
     }
     const PortStateHeader *header = port_state_header(state);
-    return header && !memcmp(header->layout, layout_id, 16) ? keep_build() : NULL;
+    return header && !memcmp(header->layout, layout_id, sizeof header->layout) ? keep_build() : NULL;
 }
 
 const char *port_state_read(PortState *state, const char *path) {

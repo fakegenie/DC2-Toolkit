@@ -59,8 +59,7 @@ FLAGS = [
 ]
 LINK_FLAGS = ["-pthread", *(["-lobjc"] if DARWIN else [])]
 MAC_IMAGE_BASE = 0x3E9100000000
-SEGMENTS = {"__TEXT": 0, "__DATA_CONST": 0xC00000, "__DATA": 0x1000000, "__PS2RAM": 0x4000000, "__PS2PORT": 0xC000000,
-            "__PS2": 0x10000000, "__PS2SPR": 0x70000000}
+SEGMENTS = {"__TEXT": 0, "__DATA_CONST": 0xC00000, "__DATA": 0x1000000, "__PS2RAM": 0x4000000, "__PS2PORT": 0xC000000}
 IOS = {
     "simulator": {"sdk": "iphonesimulator", "target": "arm64-apple-ios17.0-simulator", "platform": "iPhoneSimulator"},
     "device": {"sdk": "iphoneos", "target": "arm64-apple-ios17.0", "platform": "iPhoneOS"},
@@ -110,8 +109,27 @@ ALIASES = {
     "_Z8PrimQuadIfEvP11mgCDrawPrim6mgRectIT_ES2_IiE": "_Z11PrimQuad_f_P11mgCDrawPrim9mgRect_f_9mgRect_i_",
     "_Z8PrimQuadIiEvP11mgCDrawPrim6mgRectIT_ES2_IiE": "_Z11PrimQuad_i_P11mgCDrawPrim9mgRect_i_S1_",
 }
-ENGINE_PORT_FILES = ["memory", "split_data"]
-RESTORED_PORT_FILES = ["kernel", "graphics", "cdvd", "spu2", "iop", "devices", "mg_shadow", "mg_drawprim", "frame", "draw",
+UNUSED_UNITS = ["movie.cpp"]
+UNUSED_DEFINITIONS = {
+    "ps2/src/mg_visual.cpp": ["giftag", "texflush_dma", "set_data_func", "mat_pw", "set_tex0_dma", "set_tex0_giftag",
+                              "set_texa_dma", "set_texa_giftag", "mat_vif", "mat_vif_dif", "mat_vif_d", "mat_vif_d_tex",
+                              "mgSetPkTEX0(u_int*,u_long,u_long)", "mgSetPkTEX0(u_int*,u_long,u_long,u_long)",
+                              "mgSetPkTexFlush_TagCnt(u_int*)", "SetPointLight(u_int*,float(*)[4],float(*)[4])",
+                              "mgCVisualMDT::SetMaterialRef(u_long128*,mgMaterial*,int)",
+                              "mgCVisualMDT::SetPModeRef(u_long128*,int)",
+                              *(f"SetData{kind}(int,int,int**,u_long128*,u_long128*,u_long128*,u_long128*,u_long128*)"
+                                for kind in range(8))],
+    "ps2/src/visualmotion.cpp": ["set_data_func",
+                                 *(f"SetData{kind}(int,int,int**,u_long128*,u_long128*,u_long128*,u_long128*,u_long128*,"
+                                   "mgVertexWeight*)" for kind in range(8))],
+    "ps2/src/mglib.cpp": ["now_prog_id", "mgSendVuProg(u_int*,int)", "mgFlushRenderInfo()", "mgEndPacket(mgCDrawManager*)",
+                          "DmaCH1", "DmaCH2", "DmaCH8"],
+    "ps2/src/mg_texture.cpp": ["mgLoadImage(u_int*,int,int,int,u_long128*,int,int,int,int,int)", "SetTexFlush_TagCnt(u_int*)",
+                               "mgCTextureManager::ReloadTexture(int,u_int*)",
+                               "mgCTextureManager::ReloadCLUT(mgCTexture*,u_int*)"],
+    "ps2/src/mg_shadow.cpp": ["SetShadowData(u_int*,float(*)[4])"],
+}
+RESTORED_PORT_FILES = ["memory", "split_data", "kernel", "graphics", "cdvd", "spu2", "iop", "devices", "mg_shadow", "mg_drawprim", "frame", "draw",
                        "mg_visual", "mg_sprite", "water", "runtime"]
 OPERATORS = {
     **dict.fromkeys(["_Znwm", "_Znam", "_ZnwmRKSt9nothrow_t", "_ZnamRKSt9nothrow_t"], "port_new"),
@@ -179,8 +197,11 @@ def copy_engine():
         text = patched(relative, path.read_text(encoding="utf-8"), patches)
         if relative in replacements:
             text = overrides.strip(text, replacements[relative], defined=("PORT", "PAL"), long_is_64=True)
+        if relative in UNUSED_DEFINITIONS:
+            text = overrides.strip(text, UNUSED_DEFINITIONS[relative], defined=("PORT", "PAL"), long_is_64=True,
+                                   private_variables=True, private_functions=True)
         write_if_changed(COPY / relative, text)
-    return sorted((COPY / "ps2" / "src").glob("*.cpp"))
+    return sorted(path for path in (COPY / "ps2" / "src").glob("*.cpp") if path.name not in UNUSED_UNITS)
 
 
 def up_to_date(source, target, depfile):
@@ -221,8 +242,6 @@ def compile_one(source, name):
 
 
 def data_segment(name):
-    if name.startswith("port_") and name.removeprefix("port_") in ENGINE_PORT_FILES:
-        return "__PS2RAM"
     if name.startswith("port_"):
         return "__PS2PORT" if name.removeprefix("port_") in RESTORED_PORT_FILES else None
     return None if name.startswith(("mod_", "imgui_")) else "__PS2RAM"
@@ -304,7 +323,6 @@ def link(objects, extra, binary):
         base = 0x100000000 if TARGET else MAC_IMAGE_BASE
         for segment, offset in SEGMENTS.items():
             platform += [f"-Wl,-segaddr,{segment},{base + offset:#x}"]
-            platform += [f"-Wl,-segprot,{segment},rw,rw"] if segment.startswith("__PS2") else []
     else:
         platform = ["-no-pie", "-Wl,--no-demangle", *(f"-Wl,--defsym={alias}={target}" for alias, target in ALIASES.items())]
     fresh = binary.with_name(binary.name + ".linking")
