@@ -7,6 +7,7 @@
     python3 -I tools/debug.py step frames=10
     python3 -I tools/debug.py screenshot out.png         or windowshot out.png for the debug window
     python3 -I tools/debug.py screenshot out.png full=1  the picture at the internal resolution (--scale)
+    python3 -I tools/debug.py shown out.png              the last picture the game handed to its window
     python3 -I tools/debug.py stats frames=50 --summary
     python3 -I tools/debug.py launch [--debug]           start the debug build muted, behind other windows, and wait
     python3 -I tools/debug.py launch --sound --front     start it with sound, or in front with focus
@@ -27,7 +28,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PORT = int(os.environ.get("DC2TK_DEBUG_PORT", "7777"))
-IMAGES = {"screenshot", "windowshot", "texture", "grab", "between"}
+IMAGES = {"screenshot", "windowshot", "texture", "grab", "between", "shown"}
 
 
 def request(command, arguments, timeout=120):

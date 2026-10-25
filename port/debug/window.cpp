@@ -66,14 +66,37 @@ static uint32_t counter_value(const PortStats *stats, size_t offset) {
     return *(const uint32_t *)((const char *)stats + offset);
 }
 
+static bool text_wanted;
+
+static void SDLCALL apply_visible(void *unused) {
+    (void)unused;
+    if (!visible) {
+        SDL_HideWindow(window);
+        return;
+    }
+    SDL_ShowWindow(window);
+    if (render_background()) render_send_back(window);
+}
+
+static void SDLCALL apply_text_input(void *unused) {
+    (void)unused;
+    if (text_wanted) SDL_StartTextInput(window);
+    else SDL_StopTextInput(window);
+}
+
+static void want_text_input(ImGuiContext *context, ImGuiViewport *viewport, ImGuiPlatformImeData *data) {
+    (void)context;
+    (void)viewport;
+    bool wanted = data->WantVisible || data->WantTextInput;
+    if (wanted == text_wanted) return;
+    text_wanted = wanted;
+    SDL_RunOnMainThread(apply_text_input, NULL, false);
+}
+
 void debug_window_toggle(void) {
     if (!window) return;
     visible = !visible;
-    if (visible) {
-        SDL_ShowWindow(window);
-        if (render_background()) render_send_back(window);
-    }
-    else SDL_HideWindow(window);
+    SDL_RunOnMainThread(apply_visible, NULL, false);
 }
 
 void debug_window_start(void) {
@@ -97,7 +120,7 @@ void debug_window_start(void) {
     ImGui::CreateContext();
     ImGuiIO &io = ImGui::GetIO();
     io.IniFilename = "build/port/debug-window.ini";
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NoMouseCursorChange;
     float scale = SDL_GetWindowDisplayScale(window);
     ImGui::StyleColorsDark();
     ImGui::GetStyle().ScaleAllSizes(scale > 0 ? scale : 1.0f);
@@ -109,6 +132,7 @@ void debug_window_start(void) {
     info.ColorTargetFormat = canvas_format;
     info.MSAASamples = SDL_GPU_SAMPLECOUNT_1;
     ImGui_ImplSDLGPU3_Init(&info);
+    ImGui::GetPlatformIO().Platform_SetImeDataFn = want_text_input;
     const char *wanted = port_setting("debug.window");
     if (wanted && !strcmp(wanted, "false")) {
         visible = 0;
@@ -129,7 +153,7 @@ int debug_window_event(const void *event) {
     SDL_WindowID id = SDL_GetWindowID(window);
     if (e->type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && e->window.windowID == id) {
         visible = 0;
-        SDL_HideWindow(window);
+        SDL_RunOnMainThread(apply_visible, NULL, false);
         return 1;
     }
     if (e->type >= SDL_EVENT_WINDOW_FIRST && e->type <= SDL_EVENT_WINDOW_LAST) return e->window.windowID == id;
@@ -493,16 +517,12 @@ void debug_window_draw(void) {
     ImGui::End();
     ImGui::Render();
     ImDrawData *data = ImGui::GetDrawData();
+    Uint32 width = (Uint32)(data->DisplaySize.x * data->FramebufferScale.x);
+    Uint32 height = (Uint32)(data->DisplaySize.y * data->FramebufferScale.y);
+    if (!width || !height) return;
     SDL_GPUDevice *device = render_device();
     SDL_GPUCommandBuffer *buffer = SDL_AcquireGPUCommandBuffer(device);
     if (!buffer) return;
-    SDL_GPUTexture *swapchain = NULL;
-    Uint32 width = 0, height = 0;
-    if (!SDL_AcquireGPUSwapchainTexture(buffer, window, &swapchain, &width, &height) || !swapchain ||
-        data->DisplaySize.x <= 0 || data->DisplaySize.y <= 0) {
-        SDL_SubmitGPUCommandBuffer(buffer);
-        return;
-    }
     if (!canvas || canvas_width != width || canvas_height != height) {
         if (canvas) SDL_ReleaseGPUTexture(device, canvas);
         SDL_GPUTextureCreateInfo info = {};
@@ -526,14 +546,7 @@ void debug_window_draw(void) {
     SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(buffer, &target, 1, NULL);
     ImGui_ImplSDLGPU3_RenderDrawData(data, buffer, pass);
     SDL_EndGPURenderPass(pass);
-    SDL_GPUBlitInfo blit = {};
-    blit.source.texture = canvas;
-    blit.source.w = width;
-    blit.source.h = height;
-    blit.destination.texture = swapchain;
-    blit.destination.w = width;
-    blit.destination.h = height;
-    SDL_BlitGPUTexture(buffer, &blit);
     SDL_SubmitGPUCommandBuffer(buffer);
+    render_show_debug(window, canvas, canvas_format, (int)width, (int)height);
     if (shot_wanted) send_shot(device);
 }

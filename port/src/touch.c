@@ -59,7 +59,6 @@ static int finger_count;
 static float tap_x[FINGER_LIMIT];
 static float tap_y[FINGER_LIMIT];
 static int tap_count;
-static int watching;
 static uint16_t pressed;
 static uint16_t pressed_before;
 static int stick_held[2];
@@ -287,13 +286,11 @@ static void steer(const Finger *finger, struct port_input_state *state) {
     }
 }
 
-static bool SDLCALL catch_tap(void *data, SDL_Event *event) {
-    (void)data;
+void port_touch_event(const SDL_Event *event) {
     if (event->type == SDL_EVENT_FINGER_DOWN && tap_count < FINGER_LIMIT) {
         tap_x[tap_count] = event->tfinger.x;
         tap_y[tap_count++] = event->tfinger.y;
     }
-    return true;
 }
 
 static void update_fade(void) {
@@ -309,7 +306,6 @@ void port_touch_read(struct port_input_state *state) {
     memset(knob_x, 0, sizeof knob_x);
     memset(knob_y, 0, sizeof knob_y);
     SDL_Window *window = render_window();
-    if (!watching && window) watching = SDL_AddEventWatch(catch_tap, NULL);
     finish_action();
     if (!window) return;
     layout(window);
@@ -356,8 +352,7 @@ void port_touch_read(struct port_input_state *state) {
 }
 
 const LauncherPicture *port_touch_atlas(void) {
-    SDL_Window *window = render_window();
-    float wanted = window ? SDL_GetWindowPixelDensity(window) : 1;
+    float wanted = density;
     if (font_density != wanted) {
         free(font.atlas.pixels);
         font.atlas.pixels = NULL;

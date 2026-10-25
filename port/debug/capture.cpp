@@ -334,6 +334,17 @@ static int command_grab(const DebugArgs *args, DebugReply *reply) {
     return 0;
 }
 
+static int command_shown(const DebugArgs *args, DebugReply *reply) {
+    (void)args;
+    int width = 0, height = 0;
+    uint32_t *pixels = render_download_screen(&width, &height);
+    if (!pixels) return debug_fail(reply, "nothing shown yet");
+    reply->body = debug_png(pixels, width, height, &reply->body_length);
+    reply->content_type = "image/png";
+    free(pixels);
+    return 0;
+}
+
 static int command_between(const DebugArgs *args, DebugReply *reply) {
     if (!render_smoothing()) return debug_fail(reply, "smoothing is off: start with --smooth HZ or the dc2tk.smooth mod");
     if (!render_replay((float)debug_arg_number(args, "alpha", 0.5))) return debug_fail(reply, "no recorded frame yet");
@@ -419,6 +430,7 @@ extern const DebugCommand debug_capture_commands[] = {
     {"msaa", command_msaa, 0, "multisampling value=1|2|4|8, lowered to what the GPU supports; applied at the next frame"},
     {"depth", command_depth, 0, "reads the depth buffer like the game's photo and pick-z; x=N y=N size=N (8)"},
     {"grab", command_grab, 0, "the shown picture as PNG at the full internal resolution"},
+    {"shown", command_shown, 0, "the last picture handed to the window, as PNG at the full internal resolution"},
     {"presents", command_presents, 0,
      "save the next count=N (60) pictures put on screen, in-between frames included, to build/port/presents; full=1 keeps the internal resolution"},
     {"between", command_between, 0,

@@ -199,7 +199,11 @@ extern int render_highlight;
 
 int render_init(void);
 void render_shutdown(void);
-int render_poll(void);
+void render_finish(void);
+void render_show_screens(void);
+void render_redraw(void);
+uint32_t *render_download_screen(int *width, int *height);
+uint32_t render_wake_event(void);
 void render_quality(int *scale, int *samples);
 int render_replay(float alpha);
 int render_refresh_rate(void);
@@ -266,6 +270,7 @@ void render_set_background(int enabled);
 int render_background(void);
 void render_send_back(struct SDL_Window *target);
 struct SDL_GPUTexture *render_gpu_texture(int texture);
+void render_show_debug(struct SDL_Window *target, struct SDL_GPUTexture *canvas, int format, int width, int height);
 
 #ifdef __cplusplus
 }

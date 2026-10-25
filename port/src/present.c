@@ -3,10 +3,13 @@
 #include "port_graphics.h"
 #include "render.h"
 #include "port_mod.h"
+#include "touch.h"
 #include <SDL3/SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+enum { EVENT_LIMIT = 512, TEXT_LIMIT = 64, WAIT_LIMIT_MS = 2000 };
 
 static int started;
 static int movie_texture;
@@ -16,6 +19,18 @@ static unsigned movie_height;
 static int movie_age;
 static int movie_new;
 static char requested_path[1024];
+static struct {
+    SDL_Event event;
+    char text[TEXT_LIMIT];
+} queued[EVENT_LIMIT];
+static int queued_first;
+static int queued_count;
+static SDL_Mutex *lock;
+static SDL_Condition *changed;
+static int park_wanted;
+static int parked;
+static int stop_wanted;
+static int stopped;
 
 int port_present_init(int enabled) {
     (void)enabled;
@@ -23,34 +38,162 @@ int port_present_init(int enabled) {
         fprintf(stderr, "display: %s\n", SDL_GetError());
         return 0;
     }
+    lock = SDL_CreateMutex();
+    changed = SDL_CreateCondition();
     started = 1;
     return 1;
 }
 
+static int forwarded(const SDL_Event *event) {
+    return !(event->type >= SDL_EVENT_DROP_FILE && event->type <= SDL_EVENT_DROP_POSITION) &&
+           event->type != SDL_EVENT_CLIPBOARD_UPDATE && event->type != SDL_EVENT_TEXT_EDITING_CANDIDATES;
+}
+
+static void enqueue(const SDL_Event *event) {
+    if (!forwarded(event)) return;
+    const char *text = event->type == SDL_EVENT_TEXT_INPUT     ? event->text.text
+                       : event->type == SDL_EVENT_TEXT_EDITING ? event->edit.text
+                                                               : NULL;
+    SDL_LockMutex(lock);
+    if (queued_count < EVENT_LIMIT) {
+        int slot = (queued_first + queued_count++) % EVENT_LIMIT;
+        queued[slot].event = *event;
+        SDL_strlcpy(queued[slot].text, text ? text : "", TEXT_LIMIT);
+    }
+    SDL_UnlockMutex(lock);
+}
+
+static int dequeue(SDL_Event *event, char *text) {
+    SDL_LockMutex(lock);
+    int found = queued_count > 0;
+    if (found) {
+        *event = queued[queued_first].event;
+        SDL_strlcpy(text, queued[queued_first].text, TEXT_LIMIT);
+        queued_first = (queued_first + 1) % EVENT_LIMIT;
+        queued_count--;
+    }
+    SDL_UnlockMutex(lock);
+    if (found && event->type == SDL_EVENT_TEXT_INPUT) event->text.text = text;
+    if (found && event->type == SDL_EVENT_TEXT_EDITING) event->edit.text = text;
+    return found;
+}
+
+static void wait_until_set(const int *flag) {
+    Uint64 deadline = SDL_GetTicks() + WAIT_LIMIT_MS;
+    while (!*flag && SDL_GetTicks() < deadline) SDL_WaitConditionTimeout(changed, lock, (Sint32)(deadline - SDL_GetTicks()));
+}
+
+static void park_game(void) {
+    SDL_LockMutex(lock);
+    park_wanted = 1;
+    wait_until_set(&parked);
+    SDL_UnlockMutex(lock);
+}
+
+static void release_game(void) {
+    SDL_LockMutex(lock);
+    park_wanted = 0;
+    SDL_BroadcastCondition(changed);
+    SDL_UnlockMutex(lock);
+}
+
+static void park_if_wanted(void) {
+    SDL_LockMutex(lock);
+    if (park_wanted) render_finish();
+    while (park_wanted) {
+        parked = 1;
+        SDL_BroadcastCondition(changed);
+        SDL_WaitCondition(changed, lock);
+    }
+    parked = 0;
+    SDL_UnlockMutex(lock);
+}
+
+static void stop_if_wanted(void) {
+    SDL_LockMutex(lock);
+    while (stop_wanted) {
+        stopped = 1;
+        SDL_BroadcastCondition(changed);
+        SDL_WaitCondition(changed, lock);
+    }
+    SDL_UnlockMutex(lock);
+}
+
+static void stop_main(void) {
+    SDL_LockMutex(lock);
+    stop_wanted = 1;
+    SDL_UnlockMutex(lock);
+    SDL_Event wake = {0};
+    wake.type = render_wake_event();
+    SDL_PushEvent(&wake);
+    SDL_LockMutex(lock);
+    wait_until_set(&stopped);
+    SDL_UnlockMutex(lock);
+}
+
+static void quit(void) {
+    park_game();
+    exit(0);
+}
+
 static void wait_for_foreground(void) {
+    park_game();
     SDL_Event event;
-    while (SDL_WaitEvent(&event) && event.type != SDL_EVENT_DID_ENTER_FOREGROUND) {}
+    while (SDL_WaitEvent(&event) && event.type != SDL_EVENT_DID_ENTER_FOREGROUND)
+        if (event.type == SDL_EVENT_QUIT) quit();
+    release_game();
+    render_redraw();
+}
+
+static void handle(const SDL_Event *event) {
+    if (event->type == render_wake_event()) return;
+    if (event->type == SDL_EVENT_QUIT) quit();
+    if (event->type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event->window.windowID == SDL_GetWindowID(render_window()))
+        quit();
+    if (event->type == SDL_EVENT_DID_ENTER_BACKGROUND) {
+        wait_for_foreground();
+        return;
+    }
+    if (event->type == SDL_EVENT_KEY_DOWN && !event->key.repeat &&
+        (event->key.key == SDLK_F11 || (event->key.key == SDLK_RETURN && (event->key.mod & SDL_KMOD_ALT)))) {
+        render_toggle_fullscreen();
+        return;
+    }
+    if (event->type == SDL_EVENT_WINDOW_RESIZED || event->type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
+        event->type == SDL_EVENT_WINDOW_EXPOSED)
+        render_redraw();
+    enqueue(event);
+}
+
+void port_present_run(void) {
+    for (;;) {
+        SDL_Event event;
+        if (SDL_WaitEvent(&event)) handle(&event);
+        while (SDL_PollEvent(&event)) handle(&event);
+        stop_if_wanted();
+        render_show_screens();
+    }
 }
 
 void port_present_frame(void) {
     if (!started) return;
     SDL_Event event;
-    while (SDL_PollEvent(&event)) {
+    char text[TEXT_LIMIT];
+    while (dequeue(&event, text)) {
         if (port_mods_event(&event)) continue;
-        if (event.type == SDL_EVENT_QUIT) exit(0);
-        if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
-            (event.key.key == SDLK_F11 || (event.key.key == SDLK_RETURN && (event.key.mod & SDL_KMOD_ALT))))
-            render_toggle_fullscreen();
-        if (event.type == SDL_EVENT_DID_ENTER_BACKGROUND) wait_for_foreground();
-        if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(render_window()))
-            exit(0);
+        port_touch_event(&event);
     }
+    park_if_wanted();
     port_input_poll();
     port_mods_field();
 }
 
 void port_present_close(void) {
     if (!started) return;
+    if (!SDL_IsMainThread()) {
+        stop_main();
+        return;
+    }
     port_input_close();
     render_shutdown();
     started = 0;

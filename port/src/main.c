@@ -18,8 +18,8 @@
 #include <mach/mach_time.h>
 #include <mach/thread_policy.h>
 #endif
-#if TARGET_OS_IPHONE
 #include <SDL3/SDL.h>
+#if TARGET_OS_IPHONE
 #include <SDL3/SDL_main.h>
 #include <unistd.h>
 #include "ios_files.h"
@@ -54,6 +54,26 @@ static void keep_time(void) {
 static void keep_time(void) {}
 #endif
 
+enum { GAME_STACK = 8 * 1024 * 1024 };
+
+static int run_game(void *unused) {
+    (void)unused;
+    keep_time();
+    exit(port_kernel_run(port_game_main));
+}
+
+static int start_game(void) {
+    SDL_PropertiesID properties = SDL_CreateProperties();
+    SDL_SetPointerProperty(properties, SDL_PROP_THREAD_CREATE_ENTRY_FUNCTION_POINTER, (void *)run_game);
+    SDL_SetStringProperty(properties, SDL_PROP_THREAD_CREATE_NAME_STRING, "game");
+    SDL_SetNumberProperty(properties, SDL_PROP_THREAD_CREATE_STACKSIZE_NUMBER, GAME_STACK);
+    SDL_Thread *game = SDL_CreateThreadWithProperties(properties);
+    SDL_DestroyProperties(properties);
+    if (!game) return 0;
+    SDL_DetachThread(game);
+    return 1;
+}
+
 static int scale_of(const char *text) {
     return !strcmp(text, "auto") ? RENDER_SCALE_AUTO : atoi(text);
 }
@@ -69,7 +89,6 @@ static int setting_number(const char *name, int fallback) {
 int main(int argc, char **argv) {
     port_arguments = argv;
     setvbuf(stdout, NULL, _IOLBF, 0);
-    keep_time();
     int first = 1;
     int scale = 0, samples = 0, mute = 0, background = 0, fullscreen = -1, vsync = -1, smooth = -1;
     const char *aspect = NULL;
@@ -140,5 +159,8 @@ int main(int argc, char **argv) {
     if (!audio_init(!mute)) return 1;
     atexit(audio_shutdown);
     port_mods_start();
-    return port_kernel_run(port_game_main);
+    render_finish();
+    if (!start_game()) return 1;
+    port_present_run();
+    return 0;
 }

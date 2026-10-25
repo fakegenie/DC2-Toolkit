@@ -251,6 +251,31 @@ static int replay_model_capacity;
 static RenderBone (*replay_bones)[RENDER_BONE_SLOTS];
 static int replay_bone_capacity;
 
+enum { TOUCH_SHAPE_LIMIT = 256, TOUCH_MARGIN = 2 };
+
+enum { SCREEN_GAME, SCREEN_DEBUG, SCREEN_LIMIT, SCREEN_POOL = 3 };
+
+typedef struct {
+    SDL_Window *window;
+    SDL_GPUTexture *pool[SCREEN_POOL];
+    Uint32 pool_width[SCREEN_POOL];
+    Uint32 pool_height[SCREEN_POOL];
+    SDL_GPUTextureFormat pool_format[SCREEN_POOL];
+    int published;
+    int reading;
+    uint64_t serial;
+    uint64_t shown;
+    int scale;
+    int width;
+    int height;
+    int pixel_width;
+    int pixel_height;
+    TouchShape shapes[TOUCH_SHAPE_LIMIT];
+    int shape_count;
+} Screen;
+
+static Screen screens[SCREEN_LIMIT] = {{.published = -1, .reading = -1}, {.published = -1, .reading = -1}};
+
 static SDL_Window *window;
 static SDL_GPUDevice *device;
 static SDL_GPUShader *vertex_shader;
@@ -274,6 +299,8 @@ static int model_flushed;
 static int bone_flushed;
 static int model_cycle;
 static SDL_GPUCommandBuffer *commands;
+static SDL_Mutex *screen_lock;
+static Uint32 wake_event;
 static SDL_GPUTextureFormat depth_format;
 static struct {
     SDL_GPUTexture *texture;
@@ -557,11 +584,14 @@ int render_init(void) {
     device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_MSL | SDL_GPU_SHADERFORMAT_SPIRV, 0, NULL);
     if (!device) render_error("device");
     timed_lock = SDL_CreateMutex();
+    screen_lock = SDL_CreateMutex();
+    wake_event = SDL_RegisterEvents(1);
     timed_ready = SDL_CreateCondition();
     timer = SDL_CreateThread(time_fences, "gpu timer", NULL);
     window = SDL_CreateWindow("Dark Chronicle", window_width, window_height,
                               WINDOW_FLAGS | (fullscreen ? SDL_WINDOW_FULLSCREEN : 0));
     if (!window || !SDL_ClaimWindowForGPUDevice(device, window)) render_error("window");
+    screens[SCREEN_GAME].window = window;
     port_window_icon(window);
     int pixel_width = 0, pixel_height = 0;
     if (fill_screen && SDL_GetWindowSizeInPixels(window, &pixel_width, &pixel_height) && pixel_width > 0 && pixel_height > 0)
@@ -614,26 +644,18 @@ int render_init(void) {
     blank = render_texture(1, 1);
     uint32_t white = 0xffffffff;
     render_upload(blank, 0, 0, 1, 1, &white);
+    render_finish();
     return 1;
 }
 
 void render_shutdown(void) {
     if (!device) return;
-    if (commands) submit_timed(commands);
-    commands = NULL;
     SDL_WaitForGPUIdle(device);
     stop_timer();
     SDL_ReleaseWindowFromGPUDevice(device, window);
     SDL_DestroyWindow(window);
     SDL_DestroyGPUDevice(device);
     device = NULL;
-}
-
-int render_poll(void) {
-    SDL_Event event;
-    while (SDL_PollEvent(&event))
-        if (event.type == SDL_EVENT_QUIT) return 0;
-    return 1;
 }
 
 static uint32_t blend_factor(int c, int complement) {
@@ -2120,15 +2142,25 @@ void render_set_quality(int scale, int samples) {
     if (samples > 0) wanted_samples = clamp_samples(samples);
 }
 
+static void SDLCALL apply_window_size(void *unused) {
+    (void)unused;
+    if (window && !fullscreen) SDL_SetWindowSize(window, window_width, window_height);
+}
+
+static void SDLCALL apply_fullscreen(void *unused) {
+    (void)unused;
+    if (window) SDL_SetWindowFullscreen(window, fullscreen != 0);
+}
+
 void render_set_window(int width, int height, int full) {
     if (width > 0 && height > 0) {
         window_width = width;
         window_height = height;
-        if (window && !fullscreen) SDL_SetWindowSize(window, width, height);
+        SDL_RunOnMainThread(apply_window_size, NULL, false);
     }
     if (full >= 0) {
         fullscreen = full;
-        if (window) SDL_SetWindowFullscreen(window, fullscreen != 0);
+        SDL_RunOnMainThread(apply_fullscreen, NULL, false);
     }
 }
 
@@ -2149,9 +2181,14 @@ void render_toggle_fullscreen(void) {
     render_set_window(0, 0, !fullscreen);
 }
 
+static void SDLCALL apply_vsync(void *unused) {
+    (void)unused;
+    if (window) apply_present_mode();
+}
+
 void render_set_vsync(int enabled) {
     vsync = enabled;
-    if (window) apply_present_mode();
+    SDL_RunOnMainThread(apply_vsync, NULL, false);
 }
 
 void render_set_filter(int use_nearest) {
@@ -2196,7 +2233,6 @@ static void apply_quality(void) {
     restore_slot = 0;
 }
 
-enum { TOUCH_SHAPE_LIMIT = 256, TOUCH_MARGIN = 2 };
 
 typedef struct {
     float position[2];
@@ -2214,6 +2250,7 @@ static SDL_GPUTransferBuffer *touch_transfer;
 static SDL_GPUTexture *touch_atlas;
 static const unsigned char *touch_atlas_pixels;
 static TouchShape touch_shapes[TOUCH_SHAPE_LIMIT];
+
 
 static int prepare_touch(SDL_GPUTextureFormat format) {
     if (touch_pipeline && touch_format == format) return 1;
@@ -2265,7 +2302,7 @@ static int prepare_touch(SDL_GPUTextureFormat format) {
 static void upload_touch_atlas(SDL_GPUCopyPass *copy) {
     const LauncherPicture *picture = port_touch_atlas();
     if (!picture || !picture->pixels || picture->pixels == touch_atlas_pixels) return;
-    if (touch_atlas) release_later(touch_atlas);
+    if (touch_atlas) SDL_ReleaseGPUTexture(device, touch_atlas);
     touch_atlas = create_texture(picture->width, picture->height, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
                                  SDL_GPU_TEXTUREUSAGE_SAMPLER, 1);
     Uint32 size = (Uint32)(picture->width * picture->height * 4);
@@ -2297,9 +2334,9 @@ static void touch_quad(TouchVertex *out, const TouchShape *shape) {
     }
 }
 
-static void draw_touch(SDL_GPUCommandBuffer *buffer, SDL_GPUTexture *swapchain, Uint32 width, Uint32 height) {
-    int count = port_touch_shapes(touch_shapes, TOUCH_SHAPE_LIMIT, (int)width, (int)height);
-    if (!count || !prepare_touch(SDL_GetGPUSwapchainTextureFormat(device, window))) return;
+static void draw_touch(SDL_GPUCommandBuffer *buffer, SDL_GPUTexture *swapchain, SDL_GPUTextureFormat format, Uint32 width,
+                       Uint32 height, int count) {
+    if (!count || !prepare_touch(format)) return;
     TouchVertex *mapped = SDL_MapGPUTransferBuffer(device, touch_transfer, true);
     for (int index = 0; index < count; ++index) touch_quad(&mapped[index * 6], &touch_shapes[index]);
     SDL_UnmapGPUTransferBuffer(device, touch_transfer);
@@ -2307,7 +2344,9 @@ static void draw_touch(SDL_GPUCommandBuffer *buffer, SDL_GPUTexture *swapchain, 
     SDL_GPUTransferBufferLocation from = {touch_transfer, 0};
     SDL_GPUBufferRegion to = {touch_buffer, 0, (Uint32)(count * 6 * sizeof(TouchVertex))};
     SDL_UploadToGPUBuffer(copy, &from, &to, true);
+    SDL_LockMutex(screen_lock);
     upload_touch_atlas(copy);
+    SDL_UnlockMutex(screen_lock);
     SDL_EndGPUCopyPass(copy);
     SDL_GPUColorTargetInfo target = {0};
     target.texture = swapchain;
@@ -2325,9 +2364,8 @@ static void draw_touch(SDL_GPUCommandBuffer *buffer, SDL_GPUTexture *swapchain, 
     SDL_EndGPURenderPass(pass);
 }
 
-static void show_texture(SDL_GPUCommandBuffer *buffer, SDL_GPUTexture *swapchain, Uint32 window_width,
-                         Uint32 window_height, SDL_GPUTexture *color, int scale, int width, int height) {
-    if (!swapchain || !color) return;
+static void fit_texture(SDL_GPUCommandBuffer *buffer, SDL_GPUTexture *swapchain, Uint32 window_width,
+                        Uint32 window_height, SDL_GPUTexture *color, int scale, int width, int height) {
     float aspect = (float)width * PIXEL_ASPECT / (float)height;
     float shown_height = (float)window_width / aspect < (float)window_height ? (float)window_width / aspect
                                                                              : (float)window_height;
@@ -2344,21 +2382,148 @@ static void show_texture(SDL_GPUCommandBuffer *buffer, SDL_GPUTexture *swapchain
     blit.filter = nearest ? SDL_GPU_FILTER_NEAREST : SDL_GPU_FILTER_LINEAR;
     SDL_BlitGPUTexture(buffer, &blit);
     if (auto_scale) wanted_scale = clamp_scale(((int)blit.destination.h + height - 1) / height);
-    draw_touch(buffer, swapchain, window_width, window_height);
+}
+
+static void fill_texture(SDL_GPUCommandBuffer *buffer, SDL_GPUTexture *swapchain, Uint32 window_width,
+                         Uint32 window_height, SDL_GPUTexture *color, int width, int height) {
+    SDL_GPUBlitInfo blit = {0};
+    blit.source.texture = color;
+    blit.source.w = (Uint32)width;
+    blit.source.h = (Uint32)height;
+    blit.destination.texture = swapchain;
+    blit.destination.w = window_width;
+    blit.destination.h = window_height;
+    SDL_BlitGPUTexture(buffer, &blit);
+}
+
+static void show_screen(int which) {
+    Screen *screen = &screens[which];
+    SDL_LockMutex(screen_lock);
+    int index = screen->published;
+    SDL_Window *target = screen->window;
+    if (index < 0 || !target || screen->shown == screen->serial) {
+        SDL_UnlockMutex(screen_lock);
+        return;
+    }
+    screen->reading = index;
+    screen->shown = screen->serial;
+    SDL_GPUTexture *color = screen->pool[index];
+    int scale = screen->scale, width = screen->width, height = screen->height, count = screen->shape_count;
+    memcpy(touch_shapes, screen->shapes, (size_t)count * sizeof *touch_shapes);
+    SDL_UnlockMutex(screen_lock);
+    SDL_GPUCommandBuffer *buffer = SDL_AcquireGPUCommandBuffer(device);
+    SDL_GPUTexture *swapchain = NULL;
+    Uint32 window_width = 0, window_height = 0;
+    if (buffer && !SDL_WaitAndAcquireGPUSwapchainTexture(buffer, target, &swapchain, &window_width, &window_height)) {
+        SDL_CancelGPUCommandBuffer(buffer);
+        buffer = NULL;
+    }
+    if (buffer && swapchain && which == SCREEN_GAME) {
+        fit_texture(buffer, swapchain, window_width, window_height, color, scale, width, height);
+        draw_touch(buffer, swapchain, SDL_GetGPUSwapchainTextureFormat(device, target), window_width, window_height, count);
+    }
+    if (buffer && swapchain && which == SCREEN_DEBUG)
+        fill_texture(buffer, swapchain, window_width, window_height, color, width, height);
+    if (buffer) SDL_SubmitGPUCommandBuffer(buffer);
+    SDL_LockMutex(screen_lock);
+    screen->reading = -1;
+    if (swapchain) {
+        screen->pixel_width = (int)window_width;
+        screen->pixel_height = (int)window_height;
+    }
+    SDL_UnlockMutex(screen_lock);
+}
+
+void render_show_screens(void) {
+    for (int which = 0; which < SCREEN_LIMIT; ++which) show_screen(which);
+}
+
+void render_redraw(void) {
+    SDL_LockMutex(screen_lock);
+    for (int which = 0; which < SCREEN_LIMIT; ++which) screens[which].shown = 0;
+    SDL_UnlockMutex(screen_lock);
+}
+
+uint32_t render_wake_event(void) { return wake_event; }
+
+static int free_screen(const Screen *screen) {
+    SDL_LockMutex(screen_lock);
+    int index = 0;
+    while (index == screen->published || index == screen->reading) index++;
+    SDL_UnlockMutex(screen_lock);
+    return index;
+}
+
+static void publish(SDL_GPUCommandBuffer *buffer, int which, SDL_GPUTexture *color, SDL_GPUTextureFormat format,
+                    int scale, int width, int height) {
+    Screen *screen = &screens[which];
+    int index = free_screen(screen);
+    Uint32 pixel_width = (Uint32)(width * scale), pixel_height = (Uint32)(height * scale);
+    if (!screen->pool[index] || screen->pool_width[index] != pixel_width || screen->pool_height[index] != pixel_height ||
+        screen->pool_format[index] != format) {
+        if (screen->pool[index]) SDL_ReleaseGPUTexture(device, screen->pool[index]);
+        screen->pool[index] = create_texture((int)pixel_width, (int)pixel_height, format, SDL_GPU_TEXTUREUSAGE_SAMPLER, 1);
+        screen->pool_width[index] = pixel_width;
+        screen->pool_height[index] = pixel_height;
+        screen->pool_format[index] = format;
+    }
+    SDL_GPUTextureLocation from = {color, 0, 0, 0, 0, 0};
+    SDL_GPUTextureLocation to = {screen->pool[index], 0, 0, 0, 0, 0};
+    SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(buffer);
+    SDL_CopyGPUTextureToTexture(copy, &from, &to, pixel_width, pixel_height, 1, false);
+    SDL_EndGPUCopyPass(copy);
+    if (which == SCREEN_GAME) submit_timed(buffer);
+    else SDL_SubmitGPUCommandBuffer(buffer);
+    SDL_LockMutex(screen_lock);
+    screen->published = index;
+    screen->serial++;
+    screen->scale = scale;
+    screen->width = width;
+    screen->height = height;
+    screen->shape_count = which == SCREEN_GAME && screen->pixel_width
+                              ? port_touch_shapes(screen->shapes, TOUCH_SHAPE_LIMIT, screen->pixel_width, screen->pixel_height)
+                              : 0;
+    SDL_UnlockMutex(screen_lock);
+    SDL_Event wake = {0};
+    wake.type = wake_event;
+    SDL_PushEvent(&wake);
 }
 
 static void present_texture(SDL_GPUCommandBuffer *buffer, SDL_GPUTexture *color, int scale, int width, int height) {
-    SDL_GPUTexture *swapchain = NULL;
-    Uint32 window_width = 0, window_height = 0;
-    if (render_toggles.unpaced) {
-        static uint64_t shown_at;
-        uint64_t now = SDL_GetTicksNS();
-        if (now - shown_at < SDL_NS_PER_SECOND / (uint64_t)render_refresh_rate()) return;
-        shown_at = now;
+    static uint64_t shown_at;
+    uint64_t now = SDL_GetTicksNS();
+    if (!color || (render_toggles.unpaced && now - shown_at < SDL_NS_PER_SECOND / (uint64_t)render_refresh_rate())) {
+        submit_timed(buffer);
+        return;
     }
-    if (!SDL_WaitAndAcquireGPUSwapchainTexture(buffer, window, &swapchain, &window_width, &window_height))
-        render_error("swapchain");
-    show_texture(buffer, swapchain, window_width, window_height, color, scale, width, height);
+    shown_at = now;
+    publish(buffer, SCREEN_GAME, color, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, scale, width, height);
+}
+
+void render_show_debug(SDL_Window *target, SDL_GPUTexture *canvas, int format, int width, int height) {
+    SDL_LockMutex(screen_lock);
+    screens[SCREEN_DEBUG].window = target;
+    SDL_UnlockMutex(screen_lock);
+    SDL_GPUCommandBuffer *buffer = SDL_AcquireGPUCommandBuffer(device);
+    if (buffer) publish(buffer, SCREEN_DEBUG, canvas, (SDL_GPUTextureFormat)format, 1, width, height);
+}
+
+uint32_t *render_download_screen(int *width, int *height) {
+    Screen *screen = &screens[SCREEN_GAME];
+    SDL_LockMutex(screen_lock);
+    int index = screen->published;
+    SDL_UnlockMutex(screen_lock);
+    if (index < 0) return NULL;
+    *width = (int)screen->pool_width[index];
+    *height = (int)screen->pool_height[index];
+    uint32_t *pixels = malloc((size_t)*width * (size_t)*height * sizeof *pixels);
+    if (pixels) download(screen->pool[index], 0, 0, *width, *height, pixels);
+    return pixels;
+}
+
+void render_finish(void) {
+    if (commands) submit_timed(commands);
+    commands = NULL;
 }
 
 static void start_recording(Recording *frame) {
@@ -3081,18 +3246,9 @@ int render_replay(float alpha) {
     blend_models(frame, before, alpha);
     SDL_GPUCommandBuffer *buffer = SDL_AcquireGPUCommandBuffer(device);
     if (!buffer) return 0;
-    SDL_GPUTexture *swapchain = NULL;
-    Uint32 window_width = 0, window_height = 0;
     int paced = !render_toggles.unpaced;
-    if (paced && (!SDL_AcquireGPUSwapchainTexture(buffer, window, &swapchain, &window_width, &window_height) ||
-                  !swapchain)) {
-        SDL_CancelGPUCommandBuffer(buffer);
-        return 0;
-    }
     if (!upload_replay_vertices(buffer, frame, before, alpha) || !upload_replay_models(buffer, frame)) {
-        show_texture(buffer, swapchain, window_width, window_height, frame->shown, frame->shown_scale,
-                     frame->shown_width, frame->shown_height);
-        submit_timed(buffer);
+        present_texture(buffer, frame->shown, frame->shown_scale, frame->shown_width, frame->shown_height);
         return 0;
     }
     for (int i = 0; i < frame->step_count; ++i) {
@@ -3109,10 +3265,8 @@ int render_replay(float alpha) {
         SDL_CopyGPUTextureToTexture(copy, &step->from, &step->to, step->copy_width, step->copy_height, 1, false);
         SDL_EndGPUCopyPass(copy);
     }
-    if (paced)
-        show_texture(buffer, swapchain, window_width, window_height, frame->shown, frame->shown_scale,
-                     frame->shown_width, frame->shown_height);
-    submit_timed(buffer);
+    if (paced) present_texture(buffer, frame->shown, frame->shown_scale, frame->shown_width, frame->shown_height);
+    else submit_timed(buffer);
     smooth_shown();
     port_stats.replays++;
     port_debug_replayed(frame->shown_target, alpha);
@@ -3155,7 +3309,6 @@ static int show_kept(void) {
     if (!before->valid || !slot) return 0;
     SDL_GPUCommandBuffer *buffer = command_buffer();
     present_texture(buffer, textures[slot].color, textures[slot].scale, before->shown_width, before->shown_height);
-    submit_timed(buffer);
     commands = NULL;
     smooth_shown();
     port_debug_replayed(slot, 0.0f);
@@ -3170,9 +3323,12 @@ void render_present(int target, int width, int height) {
     int replayed = smoothing && target;
     if (replayed) finish_recording(target, width, height);
     SDL_GPUCommandBuffer *buffer = command_buffer();
-    if (!replayed) present_texture(buffer, target ? textures[target].color : NULL, target ? textures[target].scale : 1, width, height);
-    if (replayed) keep_frame(target);
-    submit_timed(buffer);
+    if (replayed) {
+        keep_frame(target);
+        submit_timed(buffer);
+    } else {
+        present_texture(buffer, target ? textures[target].color : NULL, target ? textures[target].scale : 1, width, height);
+    }
     commands = NULL;
     restart_buffers();
     apply_quality();
@@ -3187,6 +3343,5 @@ void render_present(int target, int width, int height) {
     if (render_replay(0.0f)) return;
     buffer = command_buffer();
     present_texture(buffer, textures[target].color, textures[target].scale, width, height);
-    submit_timed(buffer);
     commands = NULL;
 }
