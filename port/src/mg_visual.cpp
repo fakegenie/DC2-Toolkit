@@ -124,6 +124,7 @@ static void draw_group(const VisualDraw &draw, const mgFACE_GROUP *group) {
     gs_screen_mapping(uniforms.screen, &uniforms.depth[0]);
     RenderState textured = draw.state;
     gs_texture_state(&textured, material->texture, &uniforms.depth[1], &uniforms.depth[2]);
+    gs_sample_limits(&textured, uniforms.depth[1], uniforms.depth[2], uniforms.limits);
     for (const mgCFace *face = group->face; face != NULL; face = face->next) {
         auto found = face_meshes.find(face);
         if (found == face_meshes.end()) continue;

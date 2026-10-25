@@ -35,6 +35,7 @@ struct CachedTexture {
     u_int used;
     char name[32];
     int hd;
+    int drawn;
 };
 
 struct TargetCopy {
@@ -397,6 +398,18 @@ void gs_copy_image(u_int source_base, int source_x, int source_y, u_int destinat
     width = smaller(width, smaller(render_width(source) - source_x, render_width(destination) - destination_x));
     height = smaller(height, smaller(render_height(source) - source_y, render_height(destination) - destination_y));
     render_copy(source, source_x, source_y, destination, destination_x, destination_y, width, height);
+    for (int i = 0; i < CACHE_LIMIT; ++i)
+        if (cache[i].render == destination) cache[i].drawn = 1;
+}
+
+extern "C" void port_texture_loaded(const void *image) {
+    for (int i = 0; i < CACHE_LIMIT; ++i) {
+        CachedTexture *entry = &cache[i];
+        if (!entry->render || !entry->drawn || entry->image != image) continue;
+        entry->drawn = 0;
+        entry->checksum = 0;
+        entry->checked = 0;
+    }
 }
 
 extern "C" void port_depth_download(int x, int y, int width, int height, unsigned *pixels) {
@@ -512,6 +525,16 @@ void gs_texture_state(RenderState *state, const mgCTexture *texture, float *scal
     state->texa = field(texture->tex0_bits, 20, 6) == SCE_GS_PSMCT24;
     *scale_u = (float)(1 << field(texture->tex0_bits, 26, 4)) / (float)render_width(state->texture);
     *scale_v = (float)(1 << field(texture->tex0_bits, 30, 4)) / (float)render_height(state->texture);
+}
+
+void gs_sample_limits(const RenderState *state, float scale_u, float scale_v, float limits[4]) {
+    RenderSlot slot;
+    limits[0] = limits[1] = limits[2] = limits[3] = 0.0f;
+    if (!render_slot(state->texture, &slot) || !slot.target || state->repeat_u || state->repeat_v) return;
+    limits[0] = 0.5f / (float)slot.width;
+    limits[1] = 0.5f / (float)slot.height;
+    limits[2] = scale_u - limits[0];
+    limits[3] = scale_v - limits[1];
 }
 
 static float depth_scale();

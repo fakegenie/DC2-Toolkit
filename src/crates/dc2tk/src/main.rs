@@ -7,6 +7,7 @@ mod engine_natives;
 mod engine_tables;
 mod files;
 mod map_cmd;
+mod memcard;
 mod modding;
 mod native;
 mod options;
@@ -203,6 +204,11 @@ enum Command {
         /// Show the PS2 boot screens instead of skipping them.
         #[arg(long)]
         full_boot: bool,
+    },
+    /// Read a PCSX2 memory card image and copy its saves into the native port's memory cards.
+    Memcard {
+        #[command(subcommand)]
+        command: memcard::MemcardCommand,
     },
     /// Work on definition sets.
     Defs {
@@ -431,6 +437,7 @@ fn run(command: &Command) -> Result<ExitCode> {
             println!("started {} with {}", image.display(), found.display());
             Ok(ExitCode::SUCCESS)
         }
+        Command::Memcard { command } => memcard::run(command),
         Command::Defs { command } => defs::run(command),
         Command::Flags { source, used, flag, counters, counter, common } => {
             run_flags(source, *used, *counters || counter.is_some(), flag.or(*counter), common)

@@ -14,6 +14,7 @@ layout(location = 0) out vec4 frag_color;
 layout(location = 1) out vec2 frag_uv;
 layout(location = 2) out float frag_fog;
 layout(location = 3) flat out vec4 frag_limits;
+layout(location = 4) flat out vec4 frag_fog_curve;
 
 void main() {
     gl_Position = vec4(position.x * scale.x - 1.0, 1.0 - position.y * scale.y, position.z, 1.0);
@@ -21,4 +22,5 @@ void main() {
     frag_uv = uv;
     frag_fog = fog;
     frag_limits = limits;
+    frag_fog_curve = vec4(0.0);
 }

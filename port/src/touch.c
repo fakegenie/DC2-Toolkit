@@ -17,6 +17,8 @@ enum { IDLE_AFTER = 4000, IDLE_FADE = 800 };
 #define FONT_POINTS 12.0f
 #define DIAGONAL 0.38f
 #define DEAD_ZONE 0.1f
+#define FULL_TILT 0.6f
+#define GAME_DEAD_ZONE (50.0f / 128.0f)
 #define IDLE_ALPHA 0.35f
 
 typedef struct {
@@ -167,6 +169,12 @@ static Finger follow(SDL_FingerID id, float x, float y) {
     return landed(id, x, y);
 }
 
+static int stick_axis(float part, float tilt) {
+    if (part == 0) return 0;
+    float reach = GAME_DEAD_ZONE + (1 - GAME_DEAD_ZONE) * fabsf(part) * tilt;
+    return (int)copysignf(reach * 32767, part);
+}
+
 static void steer(const Finger *finger, struct port_input_state *state) {
     const Control *control = &controls[finger->held];
     int side = control->kind == CONTROL_RIGHT_STICK;
@@ -181,7 +189,9 @@ static void steer(const Finger *finger, struct port_input_state *state) {
     knob_x[side] = dx;
     knob_y[side] = dy;
     if (length < control->width * DEAD_ZONE) return;
-    int axis_x = (int)(dx / control->width * 32767), axis_y = (int)(dy / control->width * 32767);
+    float tilt = SDL_min(1, (length / control->width - DEAD_ZONE) / (FULL_TILT - DEAD_ZONE));
+    float side_length = SDL_max(fabsf(dx), fabsf(dy));
+    int axis_x = stick_axis(dx / side_length, tilt), axis_y = stick_axis(dy / side_length, tilt);
     if (side) {
         state->right_x = axis_x;
         state->right_y = axis_y;

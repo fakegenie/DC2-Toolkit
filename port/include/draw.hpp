@@ -48,6 +48,7 @@ int gs_texture_for(const mgCTexture *texture);
 void gs_next_frame();
 void gs_base_state(RenderState *state);
 void gs_texture_state(RenderState *state, const mgCTexture *texture, float *scale_u, float *scale_v);
+void gs_sample_limits(const RenderState *state, float scale_u, float scale_v, float limits[4]);
 void gs_screen_mapping(float screen[4], float *depth);
 
 int visual_packet_draw(const void *common, const void *packet);

@@ -40,6 +40,7 @@ typedef struct {
     float fog[4];
     float screen[4];
     float depth[4];
+    float limits[4];
     uint32_t flags[4];
 } MeshUniforms;
 

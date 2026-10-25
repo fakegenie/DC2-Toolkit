@@ -101,6 +101,11 @@
   },
   {
     "file": "ps2/src/mg_texture.cpp",
+    "find": "if (packet != NULL) {\n                    packet += mgLoadImage(packet, tex0.TBP0",
+    "replace": "if (packet != NULL) {\n                    port_texture_loaded(*image);\n                    packet += mgLoadImage(packet, tex0.TBP0"
+  },
+  {
+    "file": "ps2/src/mg_texture.cpp",
     "find": "bytes = count * 0x10;",
     "replace": "bytes = count * sizeof(mgCTextureBlock);"
   },
@@ -1005,7 +1010,7 @@
   {
     "file": "ps2/include/mglib.hpp",
     "find": "extern int mgScreenWidth;",
-    "replace": "extern int mgScreenWidth;\nextern \"C\" int port_screen_width(void);\nextern \"C\" int port_wide_width(void);\nextern \"C\" int port_texture_shift(unsigned int base);\nextern \"C\" void port_hud(int spread);\nextern \"C\" void port_outline_span(const void *key, float *min_xy, float *max_xy);"
+    "replace": "extern int mgScreenWidth;\nextern \"C\" int port_screen_width(void);\nextern \"C\" int port_wide_width(void);\nextern \"C\" int port_texture_shift(unsigned int base);\nextern \"C\" void port_texture_loaded(const void *image);\nextern \"C\" void port_hud(int spread);\nextern \"C\" void port_outline_span(const void *key, float *min_xy, float *max_xy);"
   },
   {
     "file": "ps2/src/editloop.cpp",

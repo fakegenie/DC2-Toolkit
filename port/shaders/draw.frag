@@ -4,6 +4,7 @@ layout(location = 0) in vec4 frag_color;
 layout(location = 1) in vec2 frag_uv;
 layout(location = 2) in float frag_fog;
 layout(location = 3) flat in vec4 frag_limits;
+layout(location = 4) flat in vec4 frag_fog_curve;
 
 layout(set = 2, binding = 0) uniform sampler2D source;
 layout(set = 2, binding = 1) uniform sampler2D destination;
@@ -50,6 +51,12 @@ bool alpha_passes(float value) {
     return level != reference;
 }
 
+float fog_amount() {
+    if (frag_fog_curve == vec4(0.0)) return frag_fog;
+    float fogged = frag_fog_curve.x + frag_fog_curve.w * gl_FragCoord.w;
+    return floor(max(max(min(fogged, frag_fog_curve.y), frag_fog_curve.z), 0.0)) / 255.0;
+}
+
 void main() {
     stored_depth = vec4(gl_FragCoord.z);
     if ((flags & DEPTH_READ) != 0u) {
@@ -80,7 +87,7 @@ void main() {
     }
     if ((flags & FOG) != 0u) {
         vec3 fog = vec3(fog_color & 255u, (fog_color >> 8) & 255u, (fog_color >> 16) & 255u) / 255.0;
-        color.rgb = mix(fog, color.rgb, frag_fog);
+        color.rgb = mix(fog, color.rgb, fog_amount());
     }
     if ((flags & ALPHA_TEST) != 0u && !alpha_passes(color.a)) discard;
     if ((flags & OVERDRAW) != 0u) {

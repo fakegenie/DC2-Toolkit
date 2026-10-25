@@ -23,6 +23,7 @@ struct Model {
     vec4 fog;
     vec4 screen;
     vec4 depth;
+    vec4 limits;
     uvec4 flags;
 };
 
@@ -49,12 +50,14 @@ layout(std430, set = 0, binding = 1) readonly buffer Bones {
 #define fog models[gl_InstanceIndex].fog
 #define screen models[gl_InstanceIndex].screen
 #define depth models[gl_InstanceIndex].depth
+#define limits models[gl_InstanceIndex].limits
 #define flags models[gl_InstanceIndex].flags
 
 layout(location = 0) out vec4 frag_color;
 layout(location = 1) out vec2 frag_uv;
 layout(location = 2) out float frag_fog;
 layout(location = 3) flat out vec4 frag_limits;
+layout(location = 4) flat out vec4 frag_fog_curve;
 
 const uint REAL = 0x008u;
 const uint POINT_LIGHTS = 0x010u;
@@ -168,7 +171,7 @@ void main() {
                        clip.z * depth.x, clip.w);
     frag_color = floor(clamp(lit, 0.0, 255.0)) / 255.0;
     frag_uv = st * depth.yz;
-    float fogged = clip.w > 0.0 ? fog.x + fog.w / clip.w : fog.x;
-    frag_fog = floor(max(max(min(fogged, fog.y), fog.z), 0.0)) / 255.0;
-    frag_limits = vec4(0.0);
+    frag_fog = 0.0;
+    frag_limits = limits;
+    frag_fog_curve = fog;
 }
