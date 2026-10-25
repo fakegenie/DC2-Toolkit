@@ -401,6 +401,17 @@ void gs_copy_image(u_int source_base, int source_x, int source_y, u_int destinat
     render_copy(source, source_x, source_y, destination, destination_x, destination_y, width, height);
     for (int i = 0; i < CACHE_LIMIT; ++i)
         if (cache[i].render == destination) cache[i].drawn = 1;
+    const mgCTexture *texture = resident_texture(source_base, 0);
+    if (source_base != destination_base || !texture) return;
+    for (int i = 0; i < CACHE_LIMIT; ++i) {
+        CachedTexture *palette = &cache[i];
+        if (!palette->render || palette->render == destination || palette->image != texture->image[0]) continue;
+        mgCTexture variant = *texture;
+        variant.clut = (decltype(variant.clut))palette->clut;
+        gs_texture_for(&variant);
+        render_copy(palette->render, source_x, source_y, palette->render, destination_x, destination_y, width, height);
+        palette->drawn = 1;
+    }
 }
 
 extern "C" void port_texture_loaded(const void *image) {
