@@ -160,6 +160,21 @@ void port_release(void *pointer) {
     unlock_allocations();
 }
 
+size_t port_arena_spans(const unsigned char *saved, size_t size, uint64_t saved_at, uint64_t *spans, size_t limit) {
+    size_t count = 0;
+    uint64_t at = saved_at;
+    if (size > ARENA_SIZE) size = ARENA_SIZE;
+    while (at - saved_at + sizeof(struct Allocation) <= size && count + 2 <= limit) {
+        struct Allocation block;
+        memcpy(&block, saved + (at - saved_at), sizeof block);
+        spans[count++] = at;
+        spans[count++] = block.available ? at : at + sizeof block + block.size;
+        if (!block.next) break;
+        at = (uint64_t)(uintptr_t)block.next;
+    }
+    return count;
+}
+
 void *port_new(size_t size) {
     return port_allocate(size, 16);
 }

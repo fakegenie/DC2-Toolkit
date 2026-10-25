@@ -16,6 +16,7 @@ struct sceMcTblGetDir {
 };
 
 int port_memory_card_init(const char *root);
+const char *port_memory_card_root(void);
 int sceMcInit(void);
 int sceMcEnd(void);
 int sceMcSync(int mode, int *command, int *result);

@@ -85,10 +85,14 @@ static const char *default_root(void) {
     return path;
 }
 
+const char *port_memory_card_root(void) {
+    const char *root = getenv("DC2_SAVE_ROOT");
+    return root && root[0] ? root : default_root();
+}
+
 int sceMcInit(void) {
     if (initialized) return cards[0] >= 0 ? 0 : -101;
-    const char *root = getenv("DC2_SAVE_ROOT");
-    return port_memory_card_init(root && root[0] ? root : default_root());
+    return port_memory_card_init(port_memory_card_root());
 }
 
 static int request(int command) {

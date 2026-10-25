@@ -73,6 +73,7 @@ static Option options[] = {
      {"false", "display", "60", "120"}, 0, 0, 0, 1},
     {"CONTROLS", "On-screen controls", "input.touch", 3, {"Off", "Smart", "On"}, {"false", "smart", "true"}, 1, 0, 0, 0},
     {NULL, "Haptics", "input.haptics", 2, {"Off", "On"}, {"false", "true"}, 1, 0, 1, 0},
+    {NULL, "Save state buttons", "input.states", 2, {"Off", "On"}, {"false", "true"}, 1, 0, 1, 0},
     {"GAME", "Sound", "sound.mute", 2, {"Off", "On"}, {"true", "false"}, 1, 0, 1, 0},
     {NULL, "In-Game Debug Menu", "debug.menus", 2, {"Off", "On"}, {"false", "true"}, 0, 0, 1, 0},
 };

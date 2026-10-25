@@ -1,18 +1,23 @@
 #include "touch.h"
 #include "input.h"
+#include "memory_card.h"
+#include "port_state.h"
 #include "render.h"
 #include <SDL3/SDL.h>
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #ifdef __APPLE__
 #include <TargetConditionals.h>
 #endif
 
 enum { FINGER_LIMIT = 10, CONTROL_LIMIT = 16, SIDE_LEFT = 0, SIDE_RIGHT = 1 };
-enum { CONTROL_BUTTON, CONTROL_SHOULDER, CONTROL_PILL, CONTROL_DPAD, CONTROL_LEFT_STICK, CONTROL_RIGHT_STICK };
+enum { CONTROL_BUTTON, CONTROL_SHOULDER, CONTROL_PILL, CONTROL_DPAD, CONTROL_LEFT_STICK, CONTROL_RIGHT_STICK,
+       CONTROL_SAVE, CONTROL_LOAD };
 enum { HELD_BUTTONS = -1 };
-enum { IDLE_AFTER = 4000, IDLE_FADE = 800 };
+enum { IDLE_AFTER = 4000, IDLE_FADE = 800, REVEAL_TIME = 3000, NOTICE_TIME = 2000, FADE_TIME = 400 };
 
 #define FONT_POINTS 12.0f
 #define DIAGONAL 0.38f
@@ -72,6 +77,13 @@ static int out_count;
 static int out_limit;
 static float density = 1;
 static float fade = 1;
+static int states = 1;
+static PortState quick;
+static int quick_kind;
+static int quick_stored = -1;
+static Uint64 revealed_at;
+static Uint64 notice_at;
+static char notice[96];
 
 
 #if TARGET_OS_IPHONE
@@ -84,6 +96,8 @@ static void buzz(void) {}
 void port_touch_set_mode(int chosen) { mode = chosen; }
 
 void port_touch_set_haptics(int on) { haptics = on; }
+
+void port_touch_set_states(int on) { states = on; }
 
 
 static int shown(void) { return mode == TOUCH_ON || (mode == TOUCH_SMART && !SDL_HasGamepad()); }
@@ -119,7 +133,80 @@ static void layout(SDL_Window *window) {
     add(CONTROL_BUTTON, face_x - spread, face_y, radius, 0, PORT_INPUT_SQUARE, NULL, TOUCH_BOX_LINE, 0.95f, 0.6f, 0.85f);
     add(CONTROL_PILL, middle - 48 * s, bottom - 16 * s, 76 * s, 26 * s, PORT_INPUT_SELECT, "SELECT", 0, 1, 1, 1);
     add(CONTROL_PILL, middle + 48 * s, bottom - 16 * s, 76 * s, 26 * s, PORT_INPUT_START, "START", 0, 1, 1, 1);
+    if (!states) return;
+    add(CONTROL_SAVE, middle - 58 * s, top + 18 * s, 104 * s, 30 * s, 0, "SAVE STATE", 0, 1, 1, 1);
+    add(CONTROL_LOAD, middle + 58 * s, top + 18 * s, 104 * s, 30 * s, 0, "LOAD STATE", 0, 1, 1, 1);
 }
+
+static int action(const Control *control) { return control->kind == CONTROL_SAVE || control->kind == CONTROL_LOAD; }
+
+static int action_at(float x, float y) {
+    float slack = 8 * scale;
+    for (int index = 0; index < control_count; index++) {
+        const Control *control = &controls[index];
+        if (action(control) && fabsf(x - control->x) < control->width / 2 + slack &&
+            fabsf(y - control->y) < control->height / 2 + slack)
+            return control->kind;
+    }
+    return 0;
+}
+
+static void tell(const char *words) {
+    snprintf(notice, sizeof notice, "%s", words);
+    notice_at = SDL_GetTicks();
+}
+
+static void quick_path(char *path, size_t size) { snprintf(path, size, "%s/quick.dc2state", port_memory_card_root()); }
+
+static int stored(void) {
+    char path[1100];
+    quick_path(path, sizeof path);
+    if (quick_stored < 0) quick_stored = access(path, F_OK) == 0;
+    return quick.data || quick_stored;
+}
+
+static void run_action(int kind) {
+    if (quick_kind) return;
+    char path[1100];
+    quick_path(path, sizeof path);
+    if (kind == CONTROL_LOAD && !stored()) {
+        tell("No state saved yet");
+        return;
+    }
+    if (kind == CONTROL_LOAD && !quick.data && port_state_read(&quick, path)) {
+        tell("The saved state can't be loaded");
+        return;
+    }
+    int wanted = kind == CONTROL_SAVE ? STATE_SAVE : STATE_LOAD;
+    if (!port_state_request(wanted, &quick)) {
+        tell(port_state_problem());
+        return;
+    }
+    quick_kind = wanted;
+    buzz();
+}
+
+static const char *finish_message(void) {
+    const char *problem = port_state_problem();
+    if (problem && strstr(problem, "movie")) return "Can't save during a movie";
+    if (problem && strstr(problem, "force=1")) return "This state is from an older version";
+    if (problem) return quick_kind == STATE_SAVE ? "The state couldn't be saved" : "The state couldn't be loaded";
+    if (quick_kind == STATE_LOAD) return "State loaded";
+    char path[1100];
+    quick_path(path, sizeof path);
+    if (port_state_write(&quick, path)) return "The state couldn't be written to the saves folder";
+    port_state_drop_builds();
+    quick_stored = 1;
+    return "State saved";
+}
+
+static void finish_action(void) {
+    if (!quick_kind || port_state_pending()) return;
+    tell(finish_message());
+    quick_kind = 0;
+}
+
+static int revealed(void) { return SDL_GetTicks() - revealed_at < REVEAL_TIME; }
 
 static uint16_t dpad_at(const Control *control, float x, float y) {
     float dx = x - control->x, dy = y - control->y, distance = hypotf(dx, dy);
@@ -149,7 +236,7 @@ static uint16_t buttons_at(float x, float y) {
 
 static Finger landed(SDL_FingerID id, float x, float y) {
     Finger finger = {id, HELD_BUTTONS, x, y, x, y};
-    if (buttons_at(x, y)) return finger;
+    if (buttons_at(x, y) || action_at(x, y)) return finger;
     int side = x < safe.x + safe.w / 2.0f ? SIDE_LEFT : SIDE_RIGHT;
     float reach = controls[stick_control[side]].width;
     finger.held = stick_control[side];
@@ -224,14 +311,21 @@ void port_touch_read(struct port_input_state *state) {
     memset(knob_y, 0, sizeof knob_y);
     SDL_Window *window = render_window();
     if (!watching && window) watching = SDL_AddEventWatch(catch_tap, NULL);
-    if (!shown() || !window) {
+    finish_action();
+    if (!window) return;
+    layout(window);
+    int width = 0, height = 0, devices = 0;
+    SDL_GetWindowSize(window, &width, &height);
+    if (!shown()) {
+        for (int index = 0; index < tap_count; index++) {
+            int kind = action_at(tap_x[index] * width, tap_y[index] * height);
+            if (kind && revealed()) run_action(kind);
+            if (states) revealed_at = SDL_GetTicks();
+        }
         tap_count = 0;
         finger_count = 0;
         return;
     }
-    layout(window);
-    int width = 0, height = 0, devices = 0;
-    SDL_GetWindowSize(window, &width, &height);
     Finger seen[FINGER_LIMIT];
     int seen_count = 0;
     SDL_TouchID *touches = SDL_GetTouchDevices(&devices);
@@ -250,7 +344,11 @@ void port_touch_read(struct port_input_state *state) {
         if (finger->held == HELD_BUTTONS) pressed |= buttons_at(finger->x, finger->y);
         else steer(finger, state);
     }
-    for (int index = 0; index < tap_count; index++) pressed |= buttons_at(tap_x[index] * width, tap_y[index] * height);
+    for (int index = 0; index < tap_count; index++) {
+        pressed |= buttons_at(tap_x[index] * width, tap_y[index] * height);
+        int kind = action_at(tap_x[index] * width, tap_y[index] * height);
+        if (kind) run_action(kind);
+    }
     update_fade();
     tap_count = 0;
     if (haptics && (pressed & ~pressed_before)) buzz();
@@ -354,10 +452,41 @@ static void draw_stick(const Control *control) {
     draw_cap(x + knob_x[side], y + knob_y[side], knob, held ? 0.95f : 0.55f);
 }
 
+static float remaining(Uint64 since, int length) {
+    Uint64 passed = SDL_GetTicks() - since;
+    if (!since || passed >= (Uint64)length) return 0;
+    return SDL_min(1.0f, (float)(length - passed) / FADE_TIME);
+}
+
+static void draw_action(const Control *control) {
+    int busy = (control->kind == CONTROL_SAVE && quick_kind == STATE_SAVE) ||
+               (control->kind == CONTROL_LOAD && quick_kind == STATE_LOAD);
+    int empty = control->kind == CONTROL_LOAD && !stored();
+    plate(TOUCH_BOX, control->x, control->y, control->width / 2, control->height / 2, control->height / 2, busy, control);
+    label(control->label, control->x, control->y, empty ? 0.45f : busy ? 1 : 0.85f);
+}
+
+static void draw_notice(void) {
+    float strength = remaining(notice_at, NOTICE_TIME);
+    if (strength <= 0) return;
+    float keep = fade;
+    fade = strength;
+    float width = 0;
+    for (const char *at = notice; *at; at++)
+        if (*at >= LAUNCHER_FIRST && *at - LAUNCHER_FIRST < LAUNCHER_GLYPHS) width += font.glyphs[*at - LAUNCHER_FIRST].advance;
+    width = width / (font_density ? font_density : 1) + 28 * scale;
+    float x = safe.x + safe.w / 2.0f, y = safe.y + 62 * scale;
+    put(TOUCH_BOX, x, y, width / 2, 15 * scale, 0, 15 * scale, 0, 0.06f, 0.06f, 0.08f, 0.8f);
+    label(notice, x, y, 1);
+    fade = keep;
+}
+
 int port_touch_shapes(TouchShape *shapes, int limit, int pixel_width, int pixel_height) {
     SDL_Window *window = render_window();
     (void)pixel_height;
-    if (!shown() || !window) return 0;
+    if (!window) return 0;
+    float reveal = shown() ? 1 : remaining(revealed_at, REVEAL_TIME);
+    if (reveal <= 0 && remaining(notice_at, NOTICE_TIME) <= 0) return 0;
     int width = 0, height = 0;
     SDL_GetWindowSize(window, &width, &height);
     density = width > 0 ? (float)pixel_width / width : 1;
@@ -366,9 +495,16 @@ int port_touch_shapes(TouchShape *shapes, int limit, int pixel_width, int pixel_
     out = shapes;
     out_count = 0;
     out_limit = limit;
-    for (int index = 0; index < control_count; index++) {
+    float idle = fade;
+    fade = shown() ? idle : reveal;
+    for (int index = 0; index < control_count && reveal > 0; index++) {
         const Control *control = &controls[index];
         int down = (pressed & control->button) != 0;
+        if (action(control)) {
+            draw_action(control);
+            continue;
+        }
+        if (!shown()) continue;
         if (control->kind == CONTROL_BUTTON) {
             plate(TOUCH_DISC, control->x, control->y, control->width, control->width, 0, down, control);
             draw_symbol(control, down);
@@ -381,5 +517,7 @@ int port_touch_shapes(TouchShape *shapes, int limit, int pixel_width, int pixel_
         if (control->kind == CONTROL_DPAD) draw_dpad(control);
         if (control->kind == CONTROL_LEFT_STICK || control->kind == CONTROL_RIGHT_STICK) draw_stick(control);
     }
+    fade = idle;
+    draw_notice();
     return out_count;
 }

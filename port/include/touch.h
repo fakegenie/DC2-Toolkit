@@ -32,6 +32,7 @@ typedef struct {
 
 void port_touch_set_mode(int mode);
 void port_touch_set_haptics(int on);
+void port_touch_set_states(int on);
 void port_touch_read(struct port_input_state *state);
 int port_touch_shapes(TouchShape *shapes, int limit, int pixel_width, int pixel_height);
 const LauncherPicture *port_touch_atlas(void);

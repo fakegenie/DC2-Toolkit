@@ -49,6 +49,8 @@ const char *port_state_note(void);
 void port_state_force(int force);
 float port_state_ms(void);
 const char *port_state_keep(void);
+void port_state_builds(const char *folder);
+void port_state_drop_builds(void);
 STATE_RESUMABLE void port_state_frame(void);
 void port_state_host(void);
 const PortStateHeader *port_state_header(const PortState *state);

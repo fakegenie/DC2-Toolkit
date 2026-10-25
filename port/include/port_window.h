@@ -24,6 +24,7 @@ extern "C" {
 
 void *port_allocate(size_t size, size_t alignment);
 void port_release(void *pointer);
+size_t port_arena_spans(const unsigned char *saved, size_t size, uint64_t saved_at, uint64_t *spans, size_t limit);
 
 #ifdef __cplusplus
 }
