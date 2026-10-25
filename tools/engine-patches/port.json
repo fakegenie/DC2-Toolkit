@@ -1106,6 +1106,11 @@
     "replace": "    if (!NowTakePhoto()) {\n        port_hud(1);\n        DrawStatusBord();\n        port_hud(0);\n    }"
   },
   {
+    "file": "ps2/src/dng_main.cpp",
+    "find": "    if (show && debag_param) {\n        WarningGage2.Draw();\n",
+    "replace": "    if (show && debag_param) {\n        port_hud(1);\n        WarningGage2.Draw();\n        port_hud(0);\n"
+  },
+  {
     "file": "ps2/src/screeneffect.cpp",
     "find": "    mgRect<int> source(0, 0, mgScreenWidth * 16, mgScreenHeight * 16);\n    mgRect<int> destination(0, 0, mgScreenWidth * 8, mgScreenHeight * 8);",
     "replace": "    int side = (port_screen_width() - mgScreenWidth) / 2;\n    mgRect<int> source(-side * 16, 0, (mgScreenWidth + side) * 16, mgScreenHeight * 16);\n    mgRect<int> destination(0, 0, mgScreenWidth * 8, mgScreenHeight * 8);"

@@ -11,6 +11,7 @@
 #include "mglib.hpp"
 #include "savedata.hpp"
 #include "scenesnd.hpp"
+#include "subgame.hpp"
 #include <cerrno>
 #include <cmath>
 #include <cstdarg>
@@ -247,6 +248,7 @@ static const char *checkpoint_problem(void) {
     if (loop == LOOP_EDIT && LoopMode != EDIT_LOOP_WALK) return "walk about the town first: a menu or Georama is up";
     if (loop == LOOP_DUNGEON && DngStatus.mode != DNG_STATUS_FIELD) return "walk about the floor first: a menu or event is up";
     if (scene->event_run) return "wait for the event to finish";
+    if (SubGameRunning()) return "a minigame is running (holding the fishing rod is one): start recording before it";
     if (scene->exit_flag || scene->fade.mode != FADE_MODE_NONE) return "wait for the map change to finish";
     if (!player(scene)) return "the player is not on the map yet";
     if (!port_state_possible()) return "wait for the game to get back to its main loop";
@@ -1118,7 +1120,7 @@ static int command_recording_delete(const DebugArgs *args, DebugReply *reply) {
 extern const DebugCommand debug_recording_commands[] = {
     {"recording_start", command_recording_start, 0,
      "record from here: take a checkpoint (save data, place, player position, random and floor seeds), load it straight away "
-     "and record from there (F8); refused in menus, events and map changes"},
+     "and record from there (F8); refused in menus, events, minigames and map changes"},
     {"recording_save", command_recording_save, 0,
      "save what has been recorded since launch or the last recording_start to build/port/recordings/NAME, or a "
      "folder path (F9); name=N, default the time"},

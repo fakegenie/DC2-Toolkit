@@ -3,6 +3,7 @@
 #include "port_present.h"
 #include "port_state.h"
 #include "port_mod.h"
+#include "port_game.h"
 #include "sce/eekernel.h"
 #include "sce/libgraph.h"
 #include <cmath>
@@ -20,6 +21,10 @@ static int display_target;
 static int display_width;
 static int display_height;
 
+PORT_GAME_BEGIN
+static int world_wide;
+PORT_GAME_END
+
 PORT_OVERRIDE void mgSetRotateThread(int priority) {
     rotate_priority = priority;
 }
@@ -36,6 +41,7 @@ PORT_OVERRIDE void mgInit(int screen_mode, int video_mode) {
     mgInitRetail(screen_mode, video_mode);
 }
 
+extern "C" int port_world_shown(void);
 extern int DebugFlag;
 extern "C" int port_debug;
 int port_debug;
@@ -92,16 +98,15 @@ PORT_OVERRIDE void mgEndFrame(mgCDrawManager *manager) {
     sprite_next_frame();
     port_state_frame();
     port_mods_frame_exit();
+    world_wide = port_world_shown();
 }
 
 PORT_OVERRIDE void mgSetPkTextureRepeat(sceGsClamp clamp) {
     gs_write(SCE_GS_CLAMP_1, clamp.value);
 }
 
-extern "C" int port_world_shown(void);
-
 extern "C" int port_screen_width(void) {
-    return mgScreenWidth == LAYOUT_WIDTH && port_world_shown() ? render_frame_width() : mgScreenWidth;
+    return mgScreenWidth == LAYOUT_WIDTH && world_wide ? render_frame_width() : mgScreenWidth;
 }
 
 extern "C" int port_texture_shift(unsigned int base) { return gs_read_shift(base); }

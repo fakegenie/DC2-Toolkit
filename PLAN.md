@@ -201,7 +201,7 @@ What the fishing work kept needing, in the order to build it:
      map or floor, the player's position and rotation, the random seed and the seed the current
      dungeon floor was laid out with (`port_floor_seed`, patched into `RandomMapMainProc`). The
      checkpoint is loaded straight away through the game's own warp, so recording and playback
-     start from the same load. It is refused in menus, events, map changes and nested loops.
+     start from the same load. It is refused in menus, events, minigames (holding the fishing rod is one), map changes and nested loops.
    - A recording is that start, every frame's input, the debug commands that change the game
      (scenario and reload commands, `poke`, mod commands), the scheduler tick each field fell on,
      a per-frame trace of player and camera, and a copy of the memory card. F9, `recording_save`
