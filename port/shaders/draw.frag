@@ -16,8 +16,8 @@ layout(set = 3, binding = 0) uniform State {
     uint blend_fix;
     uint texture_alpha;
     uint fog_color;
-    uint unused0;
-    uint unused1;
+    uint tint;
+    uint unused;
 };
 
 layout(location = 0) out vec4 result;
@@ -38,6 +38,7 @@ const uint SOLID = 2048u;
 const uint OVERDRAW = 4096u;
 const uint DEST_TEST = 8192u;
 const uint DEST_SET = 16384u;
+const uint TINT = 32768u;
 
 const uint ALPHA_NEVER = 0u;
 const uint ALPHA_ALWAYS = 1u;
@@ -101,6 +102,7 @@ void main() {
         color.rgb = mix(fog, color.rgb, fog_amount());
     }
     if ((flags & ALPHA_TEST) != 0u && !alpha_passes(color.a)) discard;
+    if ((flags & TINT) != 0u) color *= vec4(tint & 255u, (tint >> 8) & 255u, (tint >> 16) & 255u, tint >> 24) / 128.0;
     if ((flags & OVERDRAW) != 0u) {
         result = vec4(0.1, 0.1, 0.1, 1.0);
         return;

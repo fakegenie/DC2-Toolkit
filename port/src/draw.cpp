@@ -115,6 +115,8 @@ struct TargetCopy {
 PORT_GAME_BEGIN
 GsRegisters gs;
 static int frame_shift;
+static int screen_shift_x;
+static int screen_shift_y;
 static struct {
     u_int base;
     int shift;
@@ -632,11 +634,16 @@ void gs_sample_limits(const RenderState *state, float scale_u, float scale_v, Re
 
 static float depth_scale();
 
+void gs_shift_screen(int x, int y) {
+    screen_shift_x = x;
+    screen_shift_y = y;
+}
+
 void gs_screen_mapping(RenderScreenMapping *screen, float *depth) {
     float width = (float)(frame_target ? render_width(frame_target) : 1);
     float height = (float)(frame_target ? render_height(frame_target) : 1);
-    float offset_x = (float)gs.xyoffset.OFX / GS_SUBPIXELS;
-    float offset_y = (float)gs.xyoffset.OFY / GS_SUBPIXELS;
+    float offset_x = (float)((int)gs.xyoffset.OFX - screen_shift_x) / GS_SUBPIXELS;
+    float offset_y = (float)((int)gs.xyoffset.OFY - screen_shift_y) / GS_SUBPIXELS;
     screen->scale_x = 2.0f / width;
     screen->offset_x = -2.0f * offset_x / width - 1.0f;
     screen->scale_y = -2.0f / height;

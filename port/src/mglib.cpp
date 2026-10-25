@@ -46,47 +46,7 @@ extern int DebugFlag;
 extern "C" int port_debug;
 int port_debug;
 
-enum { OUTLINE_LIMIT = 64 };
-
-static struct {
-    const void *key;
-    float low[2];
-    float high[2];
-    u_int frame;
-} outlines[OUTLINE_LIMIT];
-static u_int outline_frame;
-
-extern "C" void port_outline_span(const void *key, float *min_xy, float *max_xy) {
-    int slot = 0;
-    for (int i = 0; i < OUTLINE_LIMIT; ++i) {
-        if (outlines[i].key == key) {
-            slot = i;
-            break;
-        }
-        if (outlines[i].frame < outlines[slot].frame) slot = i;
-    }
-    float low[2] = {min_xy[0], min_xy[1]}, high[2] = {max_xy[0], max_xy[1]};
-    int seen = outlines[slot].key == key && outlines[slot].frame + 1 == outline_frame;
-    int side = (port_screen_width() - mgScreenWidth) / 2;
-    if (render_smoothing() && !seen) {
-        min_xy[0] = (float)-side;
-        min_xy[1] = 0.0f;
-        max_xy[0] = (float)(mgScreenWidth + side);
-        max_xy[1] = (float)mgScreenHeight;
-    }
-    if (render_smoothing() && seen)
-        for (int k = 0; k < 2; ++k) {
-            min_xy[k] = std::fmin(min_xy[k], outlines[slot].low[k]);
-            max_xy[k] = std::fmax(max_xy[k], outlines[slot].high[k]);
-        }
-    outlines[slot].key = key;
-    outlines[slot].frame = outline_frame;
-    memcpy(outlines[slot].low, low, sizeof low);
-    memcpy(outlines[slot].high, high, sizeof high);
-}
-
 PORT_OVERRIDE void mgEndFrame(mgCDrawManager *manager) {
-    outline_frame++;
     if (port_debug) DebugFlag = 1;
     port_mods_frame_enter();
     mgEndFrameRetail(manager);

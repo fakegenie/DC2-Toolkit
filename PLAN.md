@@ -251,8 +251,12 @@ one fits per tick on the iPhone (50 shown a second at 120 Hz), and in the swamp 
    before the field, game logic eats the start of a field, and a between frame can block 10 ms in
    `nextDrawable`. With smoothing the real frame is drawn offscreen and then replayed at alpha 0,
    so a tick costs 5-6.5 ms of GPU instead of 2-3.
-1. **Outlines inside the main pass.** Draw toon characters straight into the frame and mark them,
-   then make the edges in one pass, instead of a side target per character.
+1. **Outlines inside the main pass.** Done: `port/src/outline.cpp` overrides `COutLineDraw::Draw`.
+   The character's direct draws are held, drawn four times shifted by the edge width with the
+   edge colour as a tint (normal blend, no depth write, no shadow), then once more as the body
+   composited at the character's alpha. `MeshUniforms.edge` names the side so smoothing pairs
+   each copy with the same side a tick before. Swamp unpaced with 4x MSAA: 34 to 11 render passes
+   a frame, GPU 3.0 to 2.0 ms, 303 to 421 ticks a second; Palm Brinks 29.5 to 11.2 passes.
 2. **No mid-frame splits.** Texture animation, shadows and depth of field before the main pass;
    never reload an MSAA target; resolve once.
 3. **A render thread.** The game thread hands over each finished frame (passes, draws, transforms);

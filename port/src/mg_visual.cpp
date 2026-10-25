@@ -38,6 +38,8 @@ struct VisualDraw {
 static std::unordered_map<const mgCFace *, FaceMesh> face_meshes;
 static u_int mesh_frame;
 static std::vector<VisualDraw> sorted_draws;
+static std::vector<VisualDraw> outlined;
+static int outlining;
 PORT_GAME_BEGIN
 static VisualDraw current;
 PORT_GAME_END
@@ -115,9 +117,9 @@ static void copy_matrix(float *out, float (*matrix)[4]) {
     memcpy(out, matrix, 16 * sizeof(float));
 }
 
-static void draw_group(const VisualDraw &draw, const mgFACE_GROUP *group) {
+static void draw_group(const VisualDraw &draw, const mgFACE_GROUP *group, u_int tint, int edge) {
     if (group->vu_program == 1) {
-        shadow_draw(draw.visual, draw.shadow, group);
+        if (!edge) shadow_draw(draw.visual, draw.shadow, group);
         return;
     }
     if (group->vu_program != 0) return;
@@ -126,6 +128,7 @@ static void draw_group(const VisualDraw &draw, const mgFACE_GROUP *group) {
     memcpy(uniforms.diffuse, material->diffuse, sizeof uniforms.diffuse);
     memcpy(uniforms.specular, material->unk_10, sizeof uniforms.specular);
     uniforms.flags.specular_passes = SPECULAR_PASSES;
+    uniforms.edge = (float)edge;
     gs_screen_mapping(&uniforms.screen, &uniforms.depth_scale);
     RenderState textured = draw.state;
     gs_texture_state(&textured, material->texture, &uniforms.texture_scale_u, &uniforms.texture_scale_v);
@@ -136,21 +139,42 @@ static void draw_group(const VisualDraw &draw, const mgFACE_GROUP *group) {
         found->second.used = mesh_frame;
         if (found->second.vertices.empty()) continue;
         RenderState state = (found->second.type & MG_FACE_NO_TEXTURE) ? draw.state : textured;
+        if (tint) {
+            state.blending = {RENDER_BLEND_SOURCE, RENDER_BLEND_DESTINATION, RENDER_BLEND_SOURCE, RENDER_BLEND_DESTINATION, 0};
+            state.tint = tint;
+        }
+        if (edge) state.depth_write = 0;
         uniforms.flags.face_type = found->second.type;
         render_mesh(&state, draw.cull, &uniforms, draw.skinned ? draw.bones : NULL, found->second.vertices.data(),
                     (int)found->second.vertices.size(), found->second.resident);
     }
 }
 
-static void draw_visual(const VisualDraw &draw) {
+static void draw_visual(const VisualDraw &draw, u_int tint, int edge) {
     for (const mgFACE_GROUP *group = draw.visual->face_group; group != NULL; group = group->next)
-        draw_group(draw, group);
+        draw_group(draw, group, tint, edge);
+}
+
+void visual_outline_begin() {
+    outlined.clear();
+    outlining = 1;
+}
+
+void visual_outline_end(int offset, u_int edge_tint, u_int body_tint) {
+    static const int sides[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+    outlining = 0;
+    for (int side = 0; offset > 0 && side < 4; side++) {
+        gs_shift_screen(sides[side][0] * offset, sides[side][1] * offset);
+        for (const VisualDraw &draw : outlined) draw_visual(draw, edge_tint, side + 1);
+    }
+    gs_shift_screen(0, 0);
+    for (const VisualDraw &draw : outlined) draw_visual(draw, body_tint, 0);
 }
 
 int visual_packet_draw(const void *common, const void *packet) {
     u_int index = *(const u_int *)common;
     if (index >= sorted_draws.size() || sorted_draws[index].common != common) return 0;
-    draw_group(sorted_draws[index], (const mgFACE_GROUP *)packet);
+    draw_group(sorted_draws[index], (const mgFACE_GROUP *)packet, 0, 0);
     return 1;
 }
 
@@ -357,8 +381,12 @@ PORT_OVERRIDE int mgCVisualMDT::Draw(u_int *tag, float (*matrix)[4], mgCDrawMana
     CreateRenderInfoPacket(NULL, matrix, info);
     current.shadow = shadow_setup;
     CreatePacket(draw_manager);
+    if (tag != NULL && outlining) {
+        outlined.push_back(current);
+        return 0;
+    }
     if (tag != NULL) {
-        draw_visual(current);
+        draw_visual(current, 0, 0);
         return 0;
     }
     u_long128 *common = draw_manager->data_memory->Alloc(1);

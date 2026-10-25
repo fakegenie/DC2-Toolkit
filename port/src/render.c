@@ -37,7 +37,7 @@ enum { WINDOW_WIDTH = 960, WINDOW_HEIGHT = 720, TARGET_WIDTH = 640, TARGET_HEIGH
 enum {
     TEXTURED = 1, TEXA = 2, AEM = 4, FOG = 8, ALPHA_TEST = 16, FACTOR_FIX = 32,
     SCALE_SOURCE = 64, FACTOR_COLOR = 128, DECAL = 256, VERTEX_ALPHA = 512, DEPTH_READ = 1024, SOLID = 2048, OVERDRAW = 4096,
-    DEST_TEST = 8192, DEST_SET = 16384
+    DEST_TEST = 8192, DEST_SET = 16384, TINT = 32768
 };
 
 typedef struct {
@@ -85,8 +85,8 @@ typedef struct {
     uint32_t blend_fix;
     uint32_t texture_alpha;
     uint32_t fog_color;
-    uint32_t unused0;
-    uint32_t unused1;
+    uint32_t tint;
+    uint32_t unused;
 } FragmentState;
 
 typedef struct {
@@ -1002,9 +1002,11 @@ static void record_model(Recording *frame, Command *kept, const Command *command
     if (!frame->keys || !frame->model_bones || !frame->matches) return;
     frame->models[model] = models[command->model];
     frame->keys[model] = 0;
+    uint64_t edge = (uint64_t)models[command->model].edge;
     if (command->resident)
         frame->keys[model] = (((uint64_t)command->offset << 24 | (uint64_t)command->count) ^
-                              ((uint64_t)command->key.value << 24 | (uint64_t)target) * 0x9e3779b97f4a7c15ull) | 1;
+                              ((uint64_t)command->key.value << 24 | (uint64_t)target) * 0x9e3779b97f4a7c15ull ^
+                              edge * 0xc2b2ae3d27d4eb4full) | 1;
     frame->model_bones[model] = 0;
     if (command->bones > 0 &&
         grow((void **)&frame->bones, &frame->bone_capacity, frame->bone_count + 1, sizeof *frame->bones)) {
@@ -1623,6 +1625,7 @@ static int prepare(Command *command, const RenderState *state, PipelineKey key) 
     if (state->decal) flags |= DECAL;
     if (state->vertex_alpha) flags |= VERTEX_ALPHA;
     if (state->depth_read) flags |= DEPTH_READ;
+    if (state->tint) flags |= TINT;
     uint32_t fix = state->blending.fix;
     command->fragment.flags = flags;
     command->fragment.alpha_reference = state->tests.alpha_reference;
@@ -1630,6 +1633,7 @@ static int prepare(Command *command, const RenderState *state, PipelineKey key) 
     command->fragment.blend_fix = fix;
     command->fragment.texture_alpha = state->expansion.ta0;
     command->fragment.fog_color = state->fog_color;
+    command->fragment.tint = state->tint;
     command->blend_constant = fix >= 128 ? 1.0f : (float)fix / 128.0f;
     command->texture = textured ? state->texture : blank;
     command->resident = 0;

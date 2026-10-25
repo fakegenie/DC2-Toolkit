@@ -53,7 +53,7 @@ struct Model {
     float depth_scale;
     float texture_scale_u;
     float texture_scale_v;
-    float unused;
+    float edge;
     TexelLimits limits;
     MeshFlags flags;
 };

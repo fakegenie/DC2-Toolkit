@@ -61,9 +61,12 @@ RenderTests gs_tests(sceGsTest test);
 RenderExpansion gs_expansion(sceGsTexa texa);
 void gs_sample_limits(const RenderState *state, float scale_u, float scale_v, RenderTexelLimits *limits);
 void gs_screen_mapping(RenderScreenMapping *screen, float *depth);
+void gs_shift_screen(int x, int y);
 
 int visual_packet_draw(const void *common, const void *packet);
 void visual_next_frame();
+void visual_outline_begin();
+void visual_outline_end(int offset, u_int edge_tint, u_int body_tint);
 size_t visual_save(unsigned char *out);
 size_t visual_load(const unsigned char *in);
 size_t visual_keys(const unsigned char *in, std::vector<size_t> *offsets);

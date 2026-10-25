@@ -75,7 +75,7 @@ typedef struct {
     float depth_scale;
     float texture_scale_u;
     float texture_scale_v;
-    float unused;
+    float edge;
     RenderTexelLimits limits;
     RenderMeshFlags flags;
 } MeshUniforms;
@@ -140,6 +140,7 @@ typedef struct {
     uint32_t fog_color;
     int depth_write;
     uint32_t color_mask;
+    uint32_t tint;
     RenderRectangle scissor;
 } RenderState;
 

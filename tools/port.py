@@ -126,6 +126,8 @@ UNUSED_DEFINITIONS = {
                                "mgCTextureManager::ReloadTexture(int,u_int*)",
                                "mgCTextureManager::ReloadCLUT(mgCTexture*,u_int*)"],
     "ps2/src/mg_shadow.cpp": ["SetShadowData(u_int*,float(*)[4])"],
+    "ps2/src/outline.cpp": ["DrawDivSprite(mgCDrawPrim*,mgRect<int>,mgCTexture*,int*,int,int,int,int)",
+                            "DrawDivSprite4(mgCDrawPrim*,mgRect<int>,mgCTexture*,int*,int,int)"],
 }
 OPERATORS = {
     **dict.fromkeys(["_Znwm", "_Znam", "_ZnwmRKSt9nothrow_t", "_ZnamRKSt9nothrow_t"], "port_new"),
