@@ -18,6 +18,7 @@ extern "C" {
 #include <fcntl.h>
 #include <signal.h>
 #include <spawn.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -817,6 +818,8 @@ extern "C" void debug_audio(const short *samples, int frames) {
 }
 
 extern "C" void debug_start(void) {
+    mkdir("build", 0755);
+    mkdir("build/port", 0755);
     debug_log_start();
     port_cdvd_log_files(1);
     const char *dump_path = getenv("DC2TK_SOUND_DUMP");

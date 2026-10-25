@@ -43,7 +43,7 @@ def main():
         command[command.index("-o") + 1] = str(temporary / "test.o")
         subprocess.run(command, cwd=root, check=True)
         subprocess.run([native.OBJCOPY, f"--globalize-symbol={native.PREFIX}_ZL14ActiveSaveData", str(mainloop[0]), str(temporary / "mainloop.o")], check=True)
-        subprocess.run(["clang", "-std=c11", "-Wall", "-Wextra", "-Werror", *([] if native.DARWIN else ["-fno-pie"]), "-Iport/include", "-c", "port/src/memory_card.c", "-o", str(temporary / "memory_card.o")], cwd=root, check=True)
+        subprocess.run(["clang", "-std=c11", "-Wall", "-Wextra", "-Werror", *([] if native.DARWIN else ["-fno-pie"]), "-Iport/include", f"-I{out}/copy/ps2/include", f"-I{out}/copy/ps2/include/sce", "-c", "port/src/memory_card.c", "-o", str(temporary / "memory_card.o")], cwd=root, check=True)
         libraries = []
         if "-DPORT_GRAPHICS" in command:
             _, libraries = native.graphics_flags(out / "sdk")
@@ -59,7 +59,7 @@ def main():
         assert len(image) == 0x659c0
         assert image[:8] == b"dc2Ver4\0"
         assert image[0x45] == 0
-        assert image[0x2566c:0x25670] == b"\x56\x34\x12\x00"
+        assert int.from_bytes(image[0x2566c:0x25670], "little") == 0x25fb0 + 2 * 4096 - 0x2566c
         assert image[0x25fb0:0x25fb2] == b"\x34\x12"
         subprocess.run([str(binary), "load", str(saves)], cwd=root, check=True, timeout=15)
         subprocess.run([str(binary), "corrupt", str(saves)], cwd=root, check=True, timeout=15)

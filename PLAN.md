@@ -348,9 +348,9 @@ What the fishing work kept needing, in the order to build it:
   builds do not overwrite each other, and mount `dc2.iso` too. Speed there (8 to 50 frames a
   second on lavapipe under Rosetta) says nothing about real hardware.
 - **What Linux does differently:** EE threads switch with `ucontext` (about 47 switches a
-  second, 0.3 µs each, so no asm is needed); the binary is non-PIE at `0x400000`, with data and
-  BSS at `0x727000-0x9a77000` in a memfd mirrored at `+0x20000000` and `+0x30000000`, and the EE
-  registers, GS registers and scratchpad mapped at their PS2 addresses; shaders take the SPIR-V
+  second, 0.3 µs each, so no asm is needed); the binary is non-PIE at `0x400000`, so it loads at the
+  same address every launch and savestates never move a pointer; nothing is mapped at PS2
+  addresses; shaders take the SPIR-V
   path (`tools/port_shaders.py` there reproduces `shaders.h` byte for byte). `profile` is
   macOS-only (fix 18).
 - **Kazarov's image** `kazarov-dev:01b70a4a6008` is made by `dc2tk engine` when missing (a few

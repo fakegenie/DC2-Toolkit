@@ -22,7 +22,7 @@ def main():
     objects = []
     exports = {"title": ["_ZL9TitleInfo", "_ZL10TitlePhase", "_ZL16title_lang_phase"],
                "menuchr": ["_ZL10MenuCosPtr"], "nowload": ["_ZL8InitFlag"],
-               "editloop": ["_ZL11ControlMode", "_ZL8LoopMode", "_ZL5MapNo"]}
+               "editloop": ["_ZL11ControlMode", "_ZL5MapNo"]}
     exports["dngmenu"] = ["_ZL11DngTreeMode"]
     exports["menuop"] = ["_ZL11SaveMenuPtr", "_ZL13MemoryCardPtr"]
     manifest = build / "objects.json"

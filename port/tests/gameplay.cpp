@@ -35,7 +35,7 @@ extern int replay_language_phase asm(SYMBOL_PREFIX "_ZL16title_lang_phase");
 extern CMenuCostumeSel *replay_costume asm(SYMBOL_PREFIX "_ZL10MenuCosPtr");
 extern int replay_pause_frames asm(SYMBOL_PREFIX "_ZL8InitFlag");
 extern int replay_edit_control asm(SYMBOL_PREFIX "_ZL11ControlMode");
-extern int replay_edit_loop asm(SYMBOL_PREFIX "_ZL8LoopMode");
+extern int replay_edit_loop asm(SYMBOL_PREFIX "LoopMode");
 extern int replay_edit_map asm(SYMBOL_PREFIX "_ZL5MapNo");
 extern CSaveMenuClass *replay_save_menu asm(SYMBOL_PREFIX "_ZL11SaveMenuPtr");
 extern CMemoryCardManager *replay_card asm(SYMBOL_PREFIX "_ZL13MemoryCardPtr");
