@@ -1,6 +1,7 @@
 [
   {"launch": {}},
-  {"goto": 800},
-  {"replay": "port/tests/golden/select_language.txt"},
+  {"goto": 810},
+  {"press": "cross", "frames": 6},
+  {"step": 30},
   {"screenshot": "after_select"}
 ]

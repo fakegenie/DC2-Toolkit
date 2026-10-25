@@ -89,16 +89,7 @@ static void print_slot(DebugReply *reply, int index) {
     debug_print(reply, "}");
 }
 
-static void finish_box(void) {
-    request.kind = 0;
-    debug_blackbox_saved(!port_state_problem());
-}
-
 static void finish_request(void) {
-    if (request.slot < 0) {
-        finish_box();
-        return;
-    }
     Slot *slot = &slots[request.slot];
     float ms = port_state_ms();
     DebugReply reply;
@@ -116,6 +107,7 @@ static void finish_request(void) {
         if (request.path[0]) problem = write_state(slot, request.path);
     }
     if (!problem && request.kind == LOAD) {
+        debug_recording_lost("a savestate was loaded");
         slot->load_ms = ms;
         slot->loads++;
         show_thumbnail(slot);
@@ -163,7 +155,6 @@ static int request_state(const DebugArgs *args, DebugReply *reply, int kind) {
     }
     if (kind == LOAD && !slots[slot].state.data) return debug_fail(reply, "slot %ld is empty", slot);
     if (!port_state_request(kind, &slots[slot].state)) return debug_fail(reply, "%s", port_state_problem());
-    if (kind == LOAD) debug_blackbox_clear();
     request.kind = kind;
     request.slot = (int)slot;
     request.client = reply->client;
@@ -172,16 +163,6 @@ static int request_state(const DebugArgs *args, DebugReply *reply, int kind) {
     if (debug_paused && debug_steps == 0 && !pause_hook) debug_steps = 1;
     reply->deferred = 1;
     return 0;
-}
-
-int debug_savestate_into(PortState *state) {
-    if (request.kind || !port_state_possible() || !port_state_request(SAVE, state)) return 0;
-    request.kind = SAVE;
-    request.slot = -1;
-    request.client = DEBUG_CLIENT_NONE;
-    request.asked = debug_frame_total;
-    request.path[0] = 0;
-    return 1;
 }
 
 static int command_save(const DebugArgs *args, DebugReply *reply) {

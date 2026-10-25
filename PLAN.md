@@ -42,8 +42,8 @@ under `build/` (not in git).
 
 What the overnight agent recorded, and which the review did not rerun:
 
-- **Play, through a replay harness** (`port/tests/gameplay.py`, controller reports injected at
-  the input boundary, SDL's dummy video and audio drivers): the castle tutorial and its soldiers;
+- **Play, through a replay harness** (since removed for the debug build's recordings; controller
+  reports injected at the input boundary, SDL's dummy video and audio drivers): the castle tutorial and its soldiers;
   Palm Brinks and Cedric's workshop; a save through the game's own menu and Continue in a new
   process (416,192-byte saves, the retail record layout); the circus clowns; the whole opening
   movie, `OPEN1.PSS`; Underground Channel floor one with combat, item use and the key. Melee hits
@@ -158,10 +158,11 @@ written fresh. These are what it found to fix:
     equal, and `CCameraControl`'s height ratio divided 0 by 0. The PS2 FPU gives no NaN there; the
     host did, so the camera went NaN, only the sky drew and frames took a second. `port.json`
     guards the division. The same can hide anywhere the engine divides by a range: a solid sky
-    picture, an empty depth buffer or a NaN camera in a `clip` trace points at it.
+    picture, an empty depth buffer or a NaN camera in a recording's trace points at it.
 24. **The fishing recording.** `memory_tour.py record fishing` sets Max at the Palm Brinks canal
     with a rod and bait 317 (Carrots draw nothing there) and records the user's catch; the user
-    still has to record it. Then add starts for Finny Frenzy, Spheda, photos and Georama.
+    still has to record it (the old input file did not survive the move to recordings). Then add
+    starts for Finny Frenzy, Spheda, photos and Georama.
 
 ### Next: debugging and states that last
 
@@ -191,32 +192,39 @@ What the fishing work kept needing, in the order to build it:
      stack frames are moved or left without effect. Linux links without PIE and macOS starts the
      same address unless ASLR is asked for, so they never move anything.
    Checked: town and dungeon states load in a new process (macOS, ASLR macOS, iOS simulator
-   across launches, Linux) with identical pictures 120 frames later; a clip and a black box
-   replay in a new process with player and camera exact; a state from another build is refused.
-3. **A black box.** Done (`port/debug/blackbox.cpp`). The debug build keeps a savestate every 300
-   frames (7 of them, about 190 MB in a town) plus each frame's input and trace, and writes the
-   last 30 s or more as an ordinary clip on a crash (`crash-<time>`), on F9 or on `blackbox`
-   (`box-<time>`); `blackbox on=0`, the Clips tab checkbox or `DC2TK_BLACKBOX=0` turns it off.
-   Its saves go through `debug_savestate_frame` like every other, so a loaded box state resumes
-   where clip states do. A load empties it; debug commands that change the game outside input
-   (warps, `poke`) inside its window make the clip stray. Each state costs 15-20 ms once every
-   5 s. Checked: a written box and one written by a SIGSEGV both replay within 0.001.
-4. **Fault watch.** Done (`port/debug/fault.cpp`, `faults`, Clips tab). Every frame the player,
+   across launches, Linux) with identical pictures 120 frames later; a state from another build is
+   refused.
+3. **Recordings.** Done (`port/debug/recording.cpp`, the Recordings tab). One feature records play
+   so it can be replayed to debug or test a change, in another process or another build:
+   - The debug build records from launch all the time. F8, `recording_start` or "Record from
+     here" takes a checkpoint instead and records from it: the save data (`CSaveData`), the loop,
+     map or floor, the player's position and rotation, the random seed and the seed the current
+     dungeon floor was laid out with (`port_floor_seed`, patched into `RandomMapMainProc`). The
+     checkpoint is loaded straight away through the game's own warp, so recording and playback
+     start from the same load. It is refused in menus, events, map changes and nested loops.
+   - A recording is that start, every frame's input, the debug commands that change the game
+     (scenario and reload commands, `poke`, mod commands), the scheduler tick each field fell on,
+     a per-frame trace of player and camera, and a copy of the memory card. F9, `recording_save`
+     or Save writes it to `build/port/recordings/NAME` (a name with a `/` is a folder anywhere); a
+     crash writes `crash-<time>`, the fault watch `fault-<time>`. Loading a savestate ends it.
+   - `recording_play`, Play, or `DC2TK_RECORDING=folder` at launch plays one: a checkpoint
+     recording loads its checkpoint (from boot if need be), a launch one restarts the game with
+     `DC2TK_RECORDING`. Playback makes fields fall on the recorded ticks (`port_field_script` in
+     `graphics.c`), so play recorded at full speed replays exactly at any speed: the field count
+     during loads is what wall-clock timing changed. It pauses at the end (or `pause=N`) and
+     reports how far player and camera strayed from the trace, writing `play.jsonl`.
+   Checked: town and dungeon checkpoints, a normal-speed recording through a map change, launch
+   recordings, a crash recording, each replayed in a new process and after other play within 0.001.
+   Before the field script, a load at normal speed took 3 fields where an unpaced one took 11.
+4. **Fault watch.** Done (`port/debug/fault.cpp`, `faults`, Recordings tab). Every frame the player,
    the camera position and the camera, view and projection matrices are checked for NaN, infinity
-   or a position past a million; the first bad frame logs a `fault:` line and writes the black box
+   or a position past a million; the first bad frame logs a `fault:` line and saves the recording
    as `fault-<time>` (`faults pause=1` or `DC2TK_FAULT_PAUSE=1` also pauses there; memory_tour
    fails on a fault). The camera is not checked while a menu is up: `MenuWorldTrans` reads the menu
    camera's position before its first step, so the first menu frame always has a leftover camera,
    on the PS2 too. A pause by default looked like a freeze in play. The places tour (330 places)
    raised none.
-5. **Clips from any state.** Done. `clip from=STATE` records from a saved state instead of now, and
-   a clip or black box name with a `/` is a folder anywhere (so clips can sit in
-   `port/tests/recordings/NAME/`). `memory_tour.py clips` replays every clip in `build/port/clips`
-   and `port/tests/recordings` and reports the ones that strayed, faulted or crashed, and apart
-   from those the ones whose state no longer loads. The black box empties itself whenever a debug
-   command changes the game outside input (warps and every other scenario command, reload, poke,
-   mod commands), since those cannot replay.
-   Found on the way: the engine's `rand` was the host C library's, whose state no savestate holds,
+5. **The PS2's own `rand`.** The engine's `rand` was the host C library's, whose state no savestate holds,
    so every replay that drew random numbers after a load strayed (a dungeon floor loaded from a
    state came out different). `port/src/runtime.c` now has the PS2's own newlib `rand`
    (next * 1103515245 + 12345, low 31 bits, starting at 1) and its seed sits in the game data states keep.
@@ -295,8 +303,8 @@ What the fishing work kept needing, in the order to build it:
   `python3 -I tools/debug.py launch`, then `help`, `status`, `stats frames=200 --summary`,
   `press buttons=cross frames=6`, `step frames=10`, `speed value=0`, `screenshot out.png`,
   `windowshot out.png`, `tab name=Capture`, `profile seconds=3`, `town map=18`, `dungeon dungeon=0 floor=2`,
-  `capture`, `toggle name=shadows value=0`, `record path=...`, `replay path=...`, `save slot=1`,
-  `load slot=1`. Check the game through `screenshot` and `windowshot`, never a full-screen capture.
+  `capture`, `toggle name=shadows value=0`, `recording_start`, `recording_save name=...`,
+  `recording_play name=...`, `save slot=1`, `load slot=1`. Check the game through `screenshot` and `windowshot`, never a full-screen capture.
 - **Golden screenshot tests:** `python3 -I tools/golden_port.py` runs `port/tests/golden/*.json`
   against the debug build, paused and stepped frame by frame; `--update` writes the baselines to
   `build/port/golden/` (game imagery, never in git).
@@ -309,11 +317,12 @@ What the fishing work kept needing, in the order to build it:
   runs its own debug build (port 7793, throwaway saves, `DC2TK_MEMORY_STRICT=1` so the first overflow
   stops the game) from the cap8 preset with `unlock`, and visits every map and floor, opens every menu
   through the debug API's `menu`, equips every weapon, outfit and ridepod part, transforms into every
-  monster form, and replays the input recordings in `port/tests/recordings`. `untested` lists the pool
+  monster form, and plays every recording in `port/tests/recordings` and `build/port/recordings` in a
+  fresh game (failing on one that strays from its trace). `untested` lists the pool
   set-up sites in the source that no tour has reached. Results and screenshots go to
   `build/port/memory-tour`. `memory_tour.py record fishing` (a built-in start) or `record NAME town
-  map=m03` records new input; recordings replay exactly because set-up is seeded (`seed`), paused and
-  stepped, saves are fresh, and both record and replay run at speed 1. While paused, `press` holds
+  map=m03` sets the game up, records from a checkpoint there and saves the recording to
+  `port/tests/recordings/NAME` when Enter is pressed. While paused, `press` holds
   input only for frames that are stepped. Debug commands added for it: `menu open=NAME`, `seed`,
   `water` (fishing water around the player), `equip ... bait=N`, and `fishing` in `status`.
 - **Frame-time benchmark:** `python3 -I tools/perf_bench.py` measures CPU time per game frame (every
@@ -330,9 +339,6 @@ What the fishing work kept needing, in the order to build it:
   the add/subtract alternation of shadow volumes (about 2500 commands in the Dark Genie fight), the
   heat-haze frame copies (18 passes in Balance Valley), and characters composited one by one between
   targets 2 and 10.
-- **The replay harness:** `python3 -I port/tests/gameplay.py` links
-  `build/port/replay/darkchronicle`; `DC2TK_REPLAY_FIELDS`, `DC2TK_REPLAY_SKIP`,
-  `DC2TK_REPLAY_FIGHT` and `DC2TK_REPLAY_SCREENSHOTS` steer it.
 - **Linux** (the machine of the earlier work): clang 21, binutils, Python 3 and Docker; Rust in
   the `dc2tk-rust` image (`printf 'FROM rust:1-trixie\nRUN rustup component add rustfmt clippy\n' |
   docker build -t dc2tk-rust -`); `python3 -I tools/port_sdk.py` copies SDL3 out of Kazarov's
@@ -582,7 +588,7 @@ does the same and is kept in step with `native.rs` (fix 7):
 | `input.c`, `memory_card.c`, `movie.cpp`, `movie_decode.c` | pads, cards, movies | 1,000 |
 | `frame.cpp`, `collision.cpp`, `link_fixups.cpp` | asm replacements | 230 |
 | `mods.c`, `port_mod.h`, `hooks.c`, `port_stats.h` | port mods: the hook tables mods register (`PORT_MOD`), their debug API commands and window panels, `port_setting` from the override folder's `dc2tk-port.cfg`; counters | |
-| `port/debug/*` (the `dc2tk.debug-tools` port mod, debug build only) | debug window and API, scenario controls, frame capture, input replay, savestates | |
+| `port/debug/*` (the `dc2tk.debug-tools` port mod, debug build only) | debug window and API, scenario controls, frame capture, recordings, savestates | |
 
 About 7,900 lines with headers and shaders, not counting the generated `shaders.h`; the tests
 are about 3,100 more.
@@ -605,7 +611,7 @@ Each has a gate. A gate that needs PCSX2, a PS2, a display or a listener is the 
    x86-64 (checked in a container with software Vulkan; golden baselines differ by a few levels
    per channel, so Linux needs its own). Next: Windows, and Linux on real hardware.
 8. **P3 Input.** Built. Gate: New Game, Palm Brinks, the first dungeon floor, played by a person.
-   Next: replay from `first-floor-selection-save` past the gate where it crashed, and melee hits.
+   Next: play past the first floor's gate where it crashed, and melee hits.
 9. **P4 Sound.** Built. Gate: effects, music and voices, heard against retail.
 10. **P5 Saves and movies.** Built. Gate: a save made natively loads again (passed by replay); the
     opening movie plays (passed by replay); a save from a PS2 loads.

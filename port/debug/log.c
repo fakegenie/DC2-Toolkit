@@ -53,7 +53,7 @@ static void crashed(int signal_number) {
     void *frames[64];
     backtrace_symbols_fd(frames, backtrace(frames, 64), fd);
     signal(signal_number, SIG_DFL);
-    debug_blackbox_crash();
+    debug_recording_crash();
     raise(signal_number);
 }
 

@@ -8,13 +8,11 @@
 
 A scenario is a JSON list of steps, run against build/port/darkchronicle-debug through its localhost API:
 
-    {"launch": {"replay": "port/tests/golden/boot_to_title.txt", "speed": 0, "env": {}}}
-                                      first step; the game starts paused at frame 1, speed 0 is unlimited, replay
-                                      plays an input recording from boot
+    {"launch": {"speed": 0, "env": {}}}
+                                      first step; the game starts paused at frame 1, speed 0 is unlimited
     {"step": 300}                     run 300 frames, then pause
     {"goto": 800}                     run up to frame 800 (frames counted from boot), then pause
     {"press": "cross", "frames": 6}   hold buttons for frames; sticks with "lx", "ly", "rx", "ry"
-    {"replay": "file.txt"}            play an input recording from this frame and run until it ends
     {"debugflag": 1}                  set the engine's DebugFlag
     {"speed": 1}                      change the field rate
     {"api": "command", "args": {}}    any other debug API command
@@ -73,8 +71,6 @@ def launch(options):
     saves.mkdir(parents=True)
     environment = {**os.environ, "DC2TK_DEBUG_PORT": str(PORT), "DC2TK_DEBUG_PAUSED": "1", "DC2_SAVE_ROOT": str(saves),
                    "DC2TK_DEBUG_SPEED": str(options.get("speed", 0)), **options.get("env", {})}
-    if "replay" in options:
-        environment["DC2TK_REPLAY_INPUT"] = str(ROOT / options["replay"])
     log = open(ROOT / "build" / "port" / "golden-run.log", "w")
     process = subprocess.Popen([str(binary), "--mute", "--background", str(ROOT / "dc2.iso")], cwd=ROOT, stdout=log, stderr=log, env=environment)
     for _ in range(300):
@@ -200,9 +196,6 @@ def run_step(entry, scenario, update, tolerance):
     elif "press" in entry:
         arguments = {key: value for key, value in entry.items() if key != "press"}
         request("press", {"buttons": entry["press"], **arguments})
-    elif "replay" in entry:
-        started = call("replay", {"path": str(ROOT / entry["replay"])})
-        step(started["frames"])
     elif "debugflag" in entry:
         request("debugflag", {"value": entry["debugflag"]})
     elif "speed" in entry:

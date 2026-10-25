@@ -27,6 +27,7 @@
 
 extern int port_game_main(void);
 extern int port_debug;
+char **port_arguments;
 
 #if TARGET_OS_IPHONE
 static void enter_documents(void) {
@@ -66,6 +67,7 @@ static int setting_number(const char *name, int fallback) {
 }
 
 int main(int argc, char **argv) {
+    port_arguments = argv;
     setvbuf(stdout, NULL, _IOLBF, 0);
     keep_time();
     int first = 1;

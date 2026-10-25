@@ -17,7 +17,7 @@ static int armed = 1;
 static uint32_t fault_count;
 static uint32_t fault_frame;
 static char fault_what[FAULT_TEXT];
-static char fault_clip[FAULT_NAME];
+static char fault_recording[FAULT_NAME];
 
 static int setting(const char *name, int fallback) {
     const char *text = getenv(name);
@@ -41,7 +41,7 @@ static int bad_values(const char *name, const float *values, int count, float li
 
 static int find_fault(char *what, size_t size) {
     DebugPoint point;
-    debug_clip_sample(&point);
+    debug_recording_sample(&point);
     const mgRENDER_INFO *info = &mgRenderInfo;
     if (bad_values("player", point.player, 3, FAULT_FAR, what, size)) return 1;
     if (debug_menu_up()) return 0;
@@ -65,10 +65,10 @@ void debug_fault_frame(void) {
     fault_count++;
     fault_frame = debug_frame_total;
     snprintf(fault_what, sizeof fault_what, "%s", what);
-    const char *problem = debug_blackbox_write("fault", fault_clip, sizeof fault_clip);
-    if (problem) fault_clip[0] = 0;
+    const char *problem = debug_recording_write("fault", fault_recording, sizeof fault_recording);
+    if (problem) fault_recording[0] = 0;
     fprintf(stderr, "fault: frame %u, %s, loop %d; %s%s%s\n", fault_frame, fault_what, GetNowLoopNo(),
-            problem ? problem : "clip ", problem ? "" : fault_clip, pausing ? "; paused" : "");
+            problem ? problem : "recording ", problem ? "" : fault_recording, pausing ? "; paused" : "");
     if (!pausing) return;
     debug_paused = 1;
     debug_steps = 0;
@@ -83,7 +83,7 @@ void debug_fault_panel(void) {
     ImGui::TextDisabled("NaN or far-off player and camera");
     if (fault_count)
         ImGui::TextWrapped("%u faults; last at frame %u: %s%s%s", fault_count, fault_frame, fault_what,
-                           fault_clip[0] ? ", clip " : "", fault_clip);
+                           fault_recording[0] ? ", recording " : "", fault_recording);
 }
 
 static int command_faults(const DebugArgs *args, DebugReply *reply) {
@@ -93,8 +93,8 @@ static int command_faults(const DebugArgs *args, DebugReply *reply) {
     debug_print(reply, "{\"on\": %d, \"pause\": %d, \"count\": %u, \"frame\": %u, \"what\": ", watching, pausing,
                 fault_count, fault_frame);
     debug_print_string(reply, fault_what);
-    debug_print(reply, ", \"clip\": ");
-    debug_print_string(reply, fault_clip);
+    debug_print(reply, ", \"recording\": ");
+    debug_print_string(reply, fault_recording);
     debug_print(reply, "}");
     return 0;
 }
@@ -103,7 +103,7 @@ extern const DebugCommand debug_fault_commands[] = {
     {"faults", command_faults, 1,
      "the fault watch: every frame the player, camera and camera matrices are checked for NaN, infinity or a "
      "position past a million (the camera is not checked while a menu is up, as menus start from an unset camera); "
-     "the first bad frame is logged and written as a fault-<time> clip from the black box; on=0|1, pause=0|1 to "
+     "the first bad frame is logged and saved as the recording fault-<time>; on=0|1, pause=0|1 to "
      "also pause there"},
     {NULL, NULL, 0, NULL},
 };

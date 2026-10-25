@@ -198,10 +198,10 @@ void debug_finish(DebugReply *reply) {
 }
 
 static const DebugCommand *find_command(const char *name) {
-    const DebugCommand *tables[] = {debug_core_commands, debug_scenario_commands, debug_capture_commands,
-                                    debug_replay_commands, debug_savestate_commands, debug_reload_commands,
-                                    debug_overlay_commands, debug_clip_commands, debug_memory_commands, debug_watch_commands,
-                                    debug_blackbox_commands, debug_fault_commands};
+    const DebugCommand *tables[] = {debug_core_commands,    debug_scenario_commands, debug_capture_commands,
+                                    debug_recording_commands, debug_savestate_commands, debug_reload_commands,
+                                    debug_overlay_commands, debug_memory_commands,   debug_watch_commands,
+                                    debug_fault_commands};
     for (const DebugCommand *table : tables)
         for (const DebugCommand *command = table; command->name; ++command)
             if (!strcmp(command->name, name)) return command;
@@ -219,11 +219,17 @@ static int changes_game(const DebugCommand *command) {
 }
 
 static void execute(const DebugCommand *command, const DebugArgs *args, int client) {
-    if (changes_game(command)) debug_blackbox_clear();
     DebugReply reply;
     memset(&reply, 0, sizeof reply);
     reply.client = client;
     reply.status = 200;
+    int recorded = changes_game(command);
+    if (recorded && debug_recording_busy()) {
+        debug_fail(&reply, "a checkpoint is loading; try again once it has");
+        debug_finish(&reply);
+        return;
+    }
+    if (recorded) debug_recording_command(command->name, args);
     if (command->run(args, &reply) && reply.status == 200) reply.status = 400;
     if (!reply.deferred) debug_finish(&reply);
     else free(reply.text);
@@ -244,7 +250,7 @@ void debug_dispatch(const char *name, const DebugArgs *args, int client) {
         }
         static char answer[16384];
         answer[0] = 0;
-        debug_blackbox_clear();
+        debug_recording_command(name, args);
         int result = port_mods_command(name, keys, values, args->count, answer, sizeof answer);
         if (result < 0) debug_fail(&reply, "no command %s; try /help", name);
         else if (result > 0) debug_fail(&reply, "%s", answer);
@@ -518,10 +524,10 @@ static void finish_profile(void) {
 
 static int command_help(const DebugArgs *args, DebugReply *reply) {
     (void)args;
-    const DebugCommand *tables[] = {debug_core_commands, debug_scenario_commands, debug_capture_commands,
-                                    debug_replay_commands, debug_savestate_commands, debug_reload_commands,
-                                    debug_overlay_commands, debug_clip_commands, debug_memory_commands, debug_watch_commands,
-                                    debug_blackbox_commands, debug_fault_commands};
+    const DebugCommand *tables[] = {debug_core_commands,    debug_scenario_commands, debug_capture_commands,
+                                    debug_recording_commands, debug_savestate_commands, debug_reload_commands,
+                                    debug_overlay_commands, debug_memory_commands,   debug_watch_commands,
+                                    debug_fault_commands};
     debug_print(reply, "{\"commands\": [");
     int first = 1;
     for (const DebugCommand *table : tables)
@@ -803,7 +809,7 @@ extern const DebugCommand debug_core_commands[] = {
     {"debugflag", command_debug_flag, 1, "value=0|1 sets the engine's DebugFlag (Start+Select opens the debug menu)"},
     {"window", command_window, 1, "show or hide the debug window"},
     {"windowshot", debug_window_shot, 1, "the debug window as PNG, to check the UI"},
-    {"tab", debug_window_tab, 1, "select a debug window tab: name=Performance|Game|Scenario|Capture|Clips|Replay|Savestates|Watch|Log"},
+    {"tab", debug_window_tab, 1, "select a debug window tab: name=Performance|Game|Scenario|Capture|Recordings|Savestates|Watch|Log"},
     {"quit", command_quit, 1, "exit the game"},
     {NULL, NULL, 0, NULL},
 };
@@ -827,6 +833,7 @@ extern "C" void debug_start(void) {
     const char *port_text = getenv("DC2TK_DEBUG_PORT");
     debug_server_start(port_text ? atoi(port_text) : 7777);
     debug_window_start();
+    debug_recording_start();
 }
 
 extern "C" int debug_event(const void *event) {
@@ -847,11 +854,11 @@ extern "C" int debug_event(const void *event) {
             return 1;
         }
         if (e->key.scancode == SDL_SCANCODE_F8) {
-            debug_clip_hotkey();
+            debug_recording_hotkey_start();
             return 1;
         }
         if (e->key.scancode == SDL_SCANCODE_F9) {
-            debug_blackbox_hotkey();
+            debug_recording_hotkey_save();
             return 1;
         }
     }
@@ -883,6 +890,7 @@ extern "C" void debug_present(int target, int width, int height) {
 }
 
 extern "C" void debug_input(struct port_input_state *state) {
+    if (debug_recording_holds_input()) memset(state, 0, sizeof *state);
     if (injection.frames > 0 || injection.frames < 0) {
         state->buttons |= injection.buttons;
         if (injection.sticks) {
@@ -892,8 +900,7 @@ extern "C" void debug_input(struct port_input_state *state) {
             state->right_y = injection.right_y;
         }
     }
-    debug_replay_input(state);
-    debug_blackbox_input(state);
+    debug_recording_input(state);
 }
 
 static void record_frame(uint64_t exit_time) {
@@ -924,13 +931,11 @@ extern "C" void debug_frame_exit(void) {
     record_frame(now_ns());
     if (injection.frames > 0) injection.frames--;
     debug_capture_frame();
-    debug_replay_frame();
-    debug_blackbox_frame();
     debug_savestate_frame();
-    debug_clip_frame();
     debug_fault_frame();
     debug_reload_frame();
     debug_scenario_frame();
+    debug_recording_frame();
     debug_run_queued();
     release_frame_waiters();
     if (debug_steps > 0) debug_steps--;

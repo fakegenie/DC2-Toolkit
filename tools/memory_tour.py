@@ -5,15 +5,14 @@ pools, and reports how full each pool got.
     python3 -I tools/memory_tour.py places              every town map and dungeon floor
     python3 -I tools/memory_tour.py menus               every menu the debug API can open, in town and in a dungeon
     python3 -I tools/memory_tour.py models              every weapon, outfit and ridepod part equipped, every monster form
-    python3 -I tools/memory_tour.py recordings          replays port/tests/recordings
+    python3 -I tools/memory_tour.py recordings          plays every recording in port/tests/recordings and
+                                                        build/port/recordings, each in a fresh game, and reports the ones
+                                                        that strayed from their trace or would not load
     python3 -I tools/memory_tour.py untested            pool set-up sites in the source no tour has reached yet
     python3 -I tools/memory_tour.py all                 places, menus, models and recordings, then untested
-    python3 -I tools/memory_tour.py clips               replays every clip in build/port/clips and port/tests/recordings
-                                                        and reports the ones that strayed, faulted or crashed, and
-                                                        apart from those the ones whose state no longer loads
-    python3 -I tools/memory_tour.py record fishing       starts the game in front set up for that minigame, says what to
-                                                        play, and records your input to port/tests/recordings until you
-                                                        press Enter here
+    python3 -I tools/memory_tour.py record fishing       starts the game in front set up for that minigame, records from
+                                                        there, says what to play, and saves the recording to
+                                                        port/tests/recordings when you press Enter here
     python3 -I tools/memory_tour.py record NAME town map=m03
                                                         the same from any debug API warp
 
@@ -39,8 +38,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = ROOT / "build" / "port" / "darkchronicle-debug"
 OUT = ROOT / "build" / "port" / "memory-tour"
-RECORDINGS = ROOT / "port" / "tests" / "recordings"
-CLIPS = ROOT / "build" / "port" / "clips"
+RECORDINGS = [ROOT / "port" / "tests" / "recordings", ROOT / "build" / "port" / "recordings"]
 SOURCES = [ROOT / "build" / "port" / "copy" / "ps2" / "src", ROOT / "port" / "src"]
 PORT = 7793
 FLOOR_COUNTS = [6, 14, 22, 19, 21, 26, 37]
@@ -57,8 +55,8 @@ CHARACTERS = ["max", "monica", "ridepod"]
 MINIGAMES = {
     "fishing": {
         "start": ["town map=m01", "step frames=400", "reload map=m01 x=-735 y=0 z=-157 yaw=-1.75", "step frames=300",
-                  "equip chara=0 item=302 bait=317", "menu open=main_town", "step frames=200",
-                  "press buttons=circle frames=4", "step frames=300"],
+                  "equip chara=0 item=302 bait=317"],
+        "recorded": ["menu open=main_town", "step frames=200", "press buttons=circle frames=4", "step frames=300"],
         "play": "Max stands at the Palm Brinks canal holding a rod with bait the canal fish like. Press cross to aim, "
                 "hold the stick up for a second to cast as far as it goes (a short cast drifts back to the bank and "
                 "nothing bites), then press cross to cast. When the float bobs and a red ! shows over Max, pull the "
@@ -114,7 +112,7 @@ def stop():
     game["process"] = None
 
 
-def launch(front=False, paused=False, speed="0"):
+def launch(front=False, paused=False, speed="0", recording=None):
     stop()
     if request("status", timeout=2):
         raise SystemExit(f"another game already answers on port {PORT}")
@@ -123,6 +121,8 @@ def launch(front=False, paused=False, speed="0"):
     flags = [] if front else ["--mute", "--background"]
     env = {**os.environ, "DC2TK_DEBUG_PORT": str(PORT), "DC2_SAVE_ROOT": game["saves"],
            "DC2TK_OVERRIDES": game["overrides"], "DC2TK_MEMORY_STRICT": "1"}
+    if recording:
+        env.update({"DC2TK_RECORDING": str(recording), "DC2TK_DEBUG_SPEED": "0"})
     game["log"] = open(log_path(), "a")
     game["process"] = subprocess.Popen([str(BINARY), *flags, str(ROOT / "dc2.iso")], cwd=ROOT, stdout=game["log"],
                                        stderr=game["log"], env=env)
@@ -132,6 +132,8 @@ def launch(front=False, paused=False, speed="0"):
             raise SystemExit(f"the game exited with {game['process'].returncode} while starting; see {log_path()}")
         if request("status", timeout=1):
             break
+    if recording:
+        return
     request("pause")
     request("speed", {"value": "0"})
     run_start(["step frames=320", "press buttons=cross frames=6", "step frames=500", "preset name=cap8",
@@ -196,23 +198,27 @@ def visit(label, steps, shot=None):
     if record["alive"] and not close_menu():
         record["menu_left_open"] = True
         stop()
-    lines = log_lines()[before:]
+    judge(record, log_lines()[before:])
+    if not record["alive"]:
+        stop()
+    return record
+
+
+def judge(record, lines):
     over = [line for line in lines if line.startswith("memory over")]
     if over:
         record["over"] = over
-        results["overflows"].append({"where": label, "lines": over})
+        results["overflows"].append({"where": record["where"], "lines": over})
     faults = [line for line in lines if line.startswith("fault:")]
     if faults:
         record["faults"] = faults
-        results["faults"].append({"where": label, "lines": faults})
+        results["faults"].append({"where": record["where"], "lines": faults})
     if not record["alive"]:
         record["tail"] = lines[-12:]
         if not over:
-            results["crashes"].append({"where": label, "tail": lines[-12:]})
-        stop()
+            results["crashes"].append({"where": record["where"], "tail": lines[-12:]})
     results["visits"].append(record)
     print(json.dumps(record), flush=True)
-    return record
 
 
 def town(name, event=None):
@@ -268,55 +274,67 @@ def run_start(start):
         request(command, arguments, timeout=300)
 
 
-def recording_frames(recording):
-    return int(recording.read_text().split()[-1])
+def recording_folders():
+    return sorted(folder for base in RECORDINGS if base.exists() for folder in base.iterdir()
+                  if (folder / "recording.txt").exists())
+
+
+def recording_frames(folder):
+    for line in (folder / "recording.txt").read_text().splitlines():
+        if line.startswith("frames "):
+            return int(line.split()[1])
+    return 0
+
+
+def play_recording(folder):
+    before = len(log_lines())
+    launch(recording=folder)
+    status = None
+    for _ in range(recording_frames(folder) // 50 + 600):
+        time.sleep(0.2)
+        status = request("recording_status", timeout=10) if alive() else None
+        if not status or status["state"] not in ("playing", "loading playback"):
+            break
+    record = {"where": f"recording {folder.name}", "alive": alive() and status is not None}
+    if record["alive"]:
+        shot = request("screenshot", timeout=30)
+        if shot:
+            (OUT / f"recording-{folder.name}.png").write_bytes(shot)
+    judge(record, log_lines()[before:])
+    return status
 
 
 def tour_recordings():
-    for start in sorted(RECORDINGS.glob("*.json")):
-        recording = start.with_suffix(".txt")
-        launch(paused=True, speed="1")
-        visit(f"recording {start.stem}", [*start_steps(json.loads(start.read_text())["start"]),
-                                           ("replay", {"path": str(recording)}, 0), ("resume", {}, 0),
-                                           ("wait", {"frames": str(recording_frames(recording) + 25)}, 0)],
-              f"recording-{start.stem}")
+    for folder in recording_folders():
+        status = play_recording(folder)
         stop()
-
-
-def clip_frames(folder):
-    return len((folder / "trace.jsonl").read_text().splitlines())
-
-
-def tour_clips():
-    folders = sorted(folder for base in (CLIPS, RECORDINGS) if base.exists() for folder in base.iterdir()
-                     if (folder / "start.state").exists() and (folder / "trace.jsonl").exists())
-    for folder in folders:
-        record = visit(f"clip {folder.name}", [("clip_play", {"name": str(folder)}, clip_frames(folder) + 30)])
-        status = request("clip_status", timeout=10) if record["alive"] else None
         if not status:
             continue
         message = status["message"]
-        kind = "unplayable" if message.startswith("savestate failed") else "strayed"
-        if status["state"] != "idle" or not message.startswith("played") or status["first_apart"] >= 0:
-            results[kind].append({"clip": str(folder), "state": status["state"], "message": message})
-            print(json.dumps({"clip": folder.name, kind: message or status["state"]}), flush=True)
+        kind = "unplayable" if not message.startswith("played") else "strayed"
+        if status["state"] != "recording" or kind == "unplayable" or status["first_apart"] >= 0:
+            results[kind].append({"recording": str(folder), "state": status["state"], "message": message})
+            print(json.dumps({"recording": folder.name, kind: message or status["state"]}), flush=True)
 
 
 def record(name, words):
-    chosen = MINIGAMES[name]["start"] if name in MINIGAMES else [" ".join(words), "step frames=400"]
-    start = ["seed value=1", *chosen]
-    RECORDINGS.mkdir(parents=True, exist_ok=True)
+    chosen = MINIGAMES[name] if name in MINIGAMES else {"start": [" ".join(words), "step frames=400"], "recorded": []}
     print("setting the game up; leave the controls alone until the next message")
     launch(front=True, paused=True, speed="1")
-    run_start(start)
-    recording = RECORDINGS / f"{name}.txt"
-    request("record", {"path": str(recording)})
+    run_start(chosen["start"])
+    request("recording_start")
+    request("resume")
+    while request("recording_status", timeout=10)["state"] != "recording":
+        time.sleep(0.2)
+    request("pause")
+    run_start(chosen["recorded"])
     request("resume")
     if name in MINIGAMES:
         print(MINIGAMES[name]["play"])
-    input(f"recording to {recording}; play, then press Enter here to stop: ")
-    request("record_stop")
-    (RECORDINGS / f"{name}.json").write_text(json.dumps({"start": start}) + "\n")
+    folder = RECORDINGS[0] / name
+    input(f"recording; play, then press Enter here to save it to {folder}: ")
+    request("pause")
+    print(json.dumps(request("recording_save", {"name": str(folder)})))
     stop()
 
 
@@ -349,7 +367,7 @@ def report():
                                 key=lambda pool: -pool["full"])[:30]
     (OUT / "report.json").write_text(json.dumps(results, indent=1))
     print(f"{len(results['visits'])} visits, {len(results['overflows'])} overflows, {len(results['faults'])} faults, "
-          f"{len(results['strayed'])} clips strayed, {len(results['unplayable'])} could not load, "
+          f"{len(results['strayed'])} recordings strayed, {len(results['unplayable'])} would not play, "
           f"{len(results['crashes'])} crashes; {OUT / 'report.json'}")
     return 1 if results["overflows"] or results["faults"] or results["strayed"] or results["crashes"] else 0
 
@@ -366,8 +384,8 @@ def main():
         record(sys.argv[2], sys.argv[3:])
         return
     tours = {"places": tour_places, "menus": tour_menus, "models": tour_models, "recordings": tour_recordings,
-             "untested": tour_untested, "clips": tour_clips}
-    names = [name for name in tours if name != "clips"] if sys.argv[1] == "all" else sys.argv[1:]
+             "untested": tour_untested}
+    names = list(tours) if sys.argv[1] == "all" else sys.argv[1:]
     for name in names:
         if name not in tours:
             sys.exit(__doc__)

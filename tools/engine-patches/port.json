@@ -1788,5 +1788,15 @@
     "file": "ps2/src/gamepad.cpp",
     "find": "        SwitchGamePadThread();\n        old_vsync = now;\n",
     "replace": "        old_vsync = now;\n        SwitchGamePadThread();\n"
+  },
+  {
+    "file": "ps2/src/automap.cpp",
+    "find": "#include \"automap.hpp\"\n",
+    "replace": "#include \"automap.hpp\"\nextern \"C\" int port_floor_seed(int drawn);\n"
+  },
+  {
+    "file": "ps2/src/automap.cpp",
+    "find": "    seed = iRand(0xFFFF);",
+    "replace": "    seed = port_floor_seed(iRand(0xFFFF));"
   }
 ]

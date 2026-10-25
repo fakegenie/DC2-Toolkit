@@ -466,12 +466,8 @@ void debug_window_draw(void) {
             debug_capture_panel();
             ImGui::EndTabItem();
         }
-        if (tab("Clips")) {
-            debug_clip_panel();
-            ImGui::EndTabItem();
-        }
-        if (tab("Replay")) {
-            debug_replay_panel();
+        if (tab("Recordings")) {
+            debug_recording_panel();
             ImGui::EndTabItem();
         }
         if (tab("Savestates")) {

@@ -3,7 +3,7 @@
   "id": "dc2tk.debug-tools",
   "version": "1.0.0",
   "name": "Debug tools",
-  "description": "The debug window, the localhost API, frame capture, replays, savestates, hot reload, scenarios and helpers.",
+  "description": "The debug window, the localhost API, frame capture, recordings, savestates, hot reload, scenarios and helpers.",
   "targets": ["native"],
   "port": {
     "sources": ["*.c", "*.cpp"],

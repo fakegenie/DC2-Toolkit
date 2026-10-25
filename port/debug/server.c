@@ -46,6 +46,7 @@ void debug_server_start(int port) {
         return;
     }
     fcntl(listener, F_SETFL, fcntl(listener, F_GETFL) | O_NONBLOCK);
+    fcntl(listener, F_SETFD, FD_CLOEXEC);
     fprintf(stderr, "debug: commands on http://127.0.0.1:%d/help\n", port);
 }
 
@@ -103,6 +104,7 @@ void debug_server_poll(void) {
     for (;;) {
         int fd = accept(listener, NULL, NULL);
         if (fd < 0) break;
+        fcntl(fd, F_SETFD, FD_CLOEXEC);
         int slot = -1;
         for (int i = 0; i < CLIENT_LIMIT && slot < 0; ++i)
             if (clients[i].fd < 0) slot = i;

@@ -6,6 +6,8 @@
 
 PORT_GAME_BEGIN
 static uint32_t rand_next = 1;
+static int floor_seed_forced = -1;
+static int floor_seed_last = -1;
 PORT_GAME_END
 
 void mwInit(void) {
@@ -13,6 +15,24 @@ void mwInit(void) {
 
 void srand(unsigned int seed) {
     rand_next = seed;
+}
+
+unsigned int port_rand_state(void) {
+    return rand_next;
+}
+
+int port_floor_seed(int drawn) {
+    floor_seed_last = floor_seed_forced >= 0 ? floor_seed_forced : drawn;
+    floor_seed_forced = -1;
+    return floor_seed_last;
+}
+
+void port_floor_seed_force(int seed) {
+    floor_seed_forced = seed;
+}
+
+int port_floor_seed_last(void) {
+    return floor_seed_last;
 }
 
 int rand(void) {

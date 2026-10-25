@@ -1,5 +1,7 @@
 [
-  {"launch": {"replay": "port/tests/golden/boot_to_title.txt"}},
+  {"launch": {}},
+  {"goto": 1500},
+  {"press": "cross", "frames": 6},
   {"goto": 2400},
   {"screenshot": "title"},
   {"step": 600},

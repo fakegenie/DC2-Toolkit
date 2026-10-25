@@ -276,6 +276,20 @@ static int warp(int loop, INIT_LOOP_ARG arg, DebugReply *reply) {
     return 0;
 }
 
+int debug_scenario_enter(int loop, int map, int floor, int event) {
+    if (!ready()) return 0;
+    INIT_LOOP_ARG arg;
+    arg.map_no = map;
+    arg.floor_no = floor;
+    arg.event_no = event >= 0 ? event : loop == LOOP_DUNGEON ? FLOOR_START_EVENT : DefStartEventNo;
+    DebugReply reply;
+    memset(&reply, 0, sizeof reply);
+    reply.client = DEBUG_CLIENT_NONE;
+    int failed = warp(loop, arg, &reply);
+    free(reply.text);
+    return !failed;
+}
+
 void debug_scenario_frame(void) {
     if (title_frames < 0) return;
     if (GetNowLoopNo() != LOOP_TITLE || ++title_frames > TITLE_WARP_FRAMES) {
