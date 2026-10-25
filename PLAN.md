@@ -243,8 +243,14 @@ samples with MSAA), which a tile GPU pays for in bandwidth. Between frames come 
 one fits per tick on the iPhone (50 shown a second at 120 Hz), and in the swamp `present_ms` reaches
 12-24 ms.
 
-0. **Measure.** Playback writes each frame's timings and between frames to `play.jsonl` (done).
-   Still needed: GPU time per frame (submit to fence) and an uncapped shown-frame rate.
+0. **Measure.** Done: `play.jsonl` timings, `gpu_us` in stats (submit to fence, on a timer thread)
+   and `tools/bench.py` over `port/tests/recordings`. Mac (M-series, background window, scale 1):
+   unpaced 346 ticks/s in the swamp and 395 in Palm Brinks, game 2.4 ms and GPU 2-2.8 ms a tick,
+   so the Mac can already draw ~350 frames a second. Paced with `--smooth 0` it shows ~55 a second
+   on a 98 Hz display: `smooth_until` only starts a between frame that ends 5 ms (half a refresh)
+   before the field, game logic eats the start of a field, and a between frame can block 10 ms in
+   `nextDrawable`. With smoothing the real frame is drawn offscreen and then replayed at alpha 0,
+   so a tick costs 5-6.5 ms of GPU instead of 2-3.
 1. **Outlines inside the main pass.** Draw toon characters straight into the frame and mark them,
    then make the edges in one pass, instead of a side target per character.
 2. **No mid-frame splits.** Texture animation, shadows and depth of field before the main pass;
