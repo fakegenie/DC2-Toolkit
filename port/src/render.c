@@ -53,6 +53,8 @@ typedef struct {
     int stale;
     int used;
     int drawn;
+    int queued;
+    int sampled;
 } Texture;
 
 typedef union {
@@ -109,6 +111,7 @@ typedef struct {
     int follow;
     uint32_t copy;
     int moving;
+    int target;
 } Command;
 
 enum { STEP_PASS, STEP_COPY, STEP_BLIT };
@@ -282,6 +285,7 @@ static Texture textures[TEXTURE_LIMIT];
 static Pipeline pipelines[PIPELINE_LIMIT];
 static int pipeline_count;
 static Command pending[COMMAND_LIMIT];
+static Command ordered[COMMAND_LIMIT];
 static int pending_count;
 enum { SPARE_LIMIT = 64, SPARE_FRAMES = 3 };
 static struct {
@@ -799,9 +803,9 @@ static void release_depths(void) {
     memset(depths, 0, sizeof depths);
 }
 
-static int writes_depth(void) {
-    for (int i = 0; i < pending_count; ++i)
-        if (pending[i].key.depth_write) return 1;
+static int writes_depth(const Command *list, int count) {
+    for (int i = 0; i < count; ++i)
+        if (list[i].key.depth_write) return 1;
     return 0;
 }
 
@@ -1042,9 +1046,10 @@ static uint64_t draw_signature(const Command *command, const SDL_GPUTexture *tar
     return signature | 1;
 }
 
-static void record_pass(const Texture *target, int depth, SDL_GPULoadOp color_load, SDL_GPULoadOp depth_load, int mirror) {
+static void record_pass(const Texture *target, int depth, SDL_GPULoadOp color_load, SDL_GPULoadOp depth_load, int mirror,
+                        const Command *list, int count) {
     Recording *frame = &recordings[recording_slot];
-    if (!grow((void **)&frame->commands, &frame->command_capacity, frame->command_count + pending_count,
+    if (!grow((void **)&frame->commands, &frame->command_capacity, frame->command_count + count,
               sizeof *frame->commands))
         return;
     Step *step = new_step(frame);
@@ -1059,8 +1064,8 @@ static void record_pass(const Texture *target, int depth, SDL_GPULoadOp color_lo
     step->depth_load = depth_load;
     step->mirror = mirror;
     step->first = frame->command_count;
-    for (int i = 0; i < pending_count; ++i) {
-        const Command *command = &pending[i];
+    for (int i = 0; i < count; ++i) {
+        const Command *command = &list[i];
         Command *kept = &frame->commands[frame->command_count++];
         *kept = *command;
         kept->signature = command->model < 0 && !command->resident && command->shadow < 0 && !textures[command->texture].target
@@ -1165,26 +1170,9 @@ static void restart_buffers(void) {
     bone_flushed = 0;
 }
 
-static void flush(void) {
-    if (!pending_count) return;
-    if (held_valid && pending_count < COMMAND_LIMIT) pending[pending_count++] = held;
-    held_valid = 0;
-    SDL_GPUCommandBuffer *buffer = command_buffer();
-    upload_meshes(buffer);
-    uint32_t size = vertex_used - vertex_flushed;
-    unsigned char *mapped = SDL_MapGPUTransferBuffer(device, vertex_transfer, vertex_cycle);
-    if (!mapped) render_error("map vertices");
-    memcpy(mapped + vertex_flushed, vertex_data + vertex_flushed, size);
-    SDL_UnmapGPUTransferBuffer(device, vertex_transfer);
-    SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(buffer);
-    SDL_GPUTransferBufferLocation from = {vertex_transfer, vertex_flushed};
-    SDL_GPUBufferRegion to = {vertex_buffer, vertex_flushed, size};
-    SDL_UploadToGPUBuffer(copy, &from, &to, vertex_cycle);
-    upload_models(copy);
-    SDL_EndGPUCopyPass(copy);
-    vertex_cycle = 0;
-    Texture *target = &textures[drawing];
-    int shared = depth_for(drawing);
+static void encode_pass(SDL_GPUCommandBuffer *buffer, const Command *list, int count) {
+    Texture *target = &textures[list[0].target];
+    int shared = depth_for(list[0].target);
     if (shared < 0) {
         shared = 0;
         while (shared < 8 && depths[shared].texture) shared++;
@@ -1192,7 +1180,7 @@ static void flush(void) {
         create_depth(shared, target->width * target->scale, target->height * target->scale, target->samples);
     }
     int multi = target->samples > 1;
-    int mirror = multi && (writes_depth() || !depths[shared].cleared);
+    int mirror = multi && (writes_depth(list, count) || !depths[shared].cleared);
     SDL_GPUColorTargetInfo color[2];
     memset(color, 0, sizeof color);
     color[0].texture = multi ? target->multi : target->color;
@@ -1215,24 +1203,104 @@ static void flush(void) {
     SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(buffer, color, mirror ? 2 : 1, &depth);
     pass_serial++;
     port_stats.render_passes++;
-    port_stats.gpu_commands += (uint32_t)pending_count;
-    if (smoothing) record_pass(target, shared, color[0].load_op, depth.load_op, mirror);
-    encode(buffer, pass, pending, pending_count, model_buffer, bone_buffer, vertex_buffer, target->width, target->height,
-           mirror);
+    port_stats.gpu_commands += (uint32_t)count;
+    if (smoothing) record_pass(target, shared, color[0].load_op, depth.load_op, mirror, list, count);
+    encode(buffer, pass, list, count, model_buffer, bone_buffer, vertex_buffer, target->width, target->height, mirror);
     SDL_EndGPURenderPass(pass);
+}
+
+static void queue(const Command *command, int step) {
+    textures[command->target].queued += step;
+    textures[command->texture].sampled += step;
+}
+
+static const Command *pass_order(int count) {
+    int early = 0;
+    for (int i = 0; i < count; ++i)
+        if (pending[i].target != drawing) ordered[early++] = pending[i];
+    if (!early) return pending;
+    int at = early;
+    for (int i = 0; i < count; ++i)
+        if (pending[i].target == drawing) ordered[at++] = pending[i];
+    return ordered;
+}
+
+static SDL_GPUCommandBuffer *upload_pending(void) {
+    SDL_GPUCommandBuffer *buffer = command_buffer();
+    upload_meshes(buffer);
+    uint32_t size = vertex_used - vertex_flushed;
+    unsigned char *mapped = SDL_MapGPUTransferBuffer(device, vertex_transfer, vertex_cycle);
+    if (!mapped) render_error("map vertices");
+    memcpy(mapped + vertex_flushed, vertex_data + vertex_flushed, size);
+    SDL_UnmapGPUTransferBuffer(device, vertex_transfer);
+    SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(buffer);
+    SDL_GPUTransferBufferLocation from = {vertex_transfer, vertex_flushed};
+    SDL_GPUBufferRegion to = {vertex_buffer, vertex_flushed, size};
+    SDL_UploadToGPUBuffer(copy, &from, &to, vertex_cycle);
+    upload_models(copy);
+    SDL_EndGPUCopyPass(copy);
+    vertex_cycle = 0;
+    vertex_flushed = vertex_used;
+    return buffer;
+}
+
+static void encode_passes(SDL_GPUCommandBuffer *buffer, const Command *list, int count) {
+    for (int first = 0, last = 0; first < count; first = last) {
+        while (last < count && list[last].target == list[first].target) last++;
+        encode_pass(buffer, list + first, last - first);
+    }
+}
+
+static void flush(void) {
+    if (!pending_count) return;
+    if (held_valid && pending_count < COMMAND_LIMIT) {
+        pending[pending_count++] = held;
+        queue(&held, 1);
+    }
+    held_valid = 0;
+    SDL_GPUCommandBuffer *buffer = upload_pending();
+    encode_passes(buffer, pass_order(pending_count), pending_count);
+    for (int i = 0; i < pending_count; ++i) queue(&pending[i], -1);
     pending_count = 0;
     release_retired_meshes();
-    vertex_flushed = vertex_used;
+}
+
+static void flush_side(void) {
+    int side = 0, kept = 0;
+    for (int i = 0; i < pending_count; ++i) {
+        if (pending[i].target != drawing) ordered[side++] = pending[i];
+        else pending[kept++] = pending[i];
+    }
+    if (!side) return;
+    for (int i = 0; i < side; ++i) queue(&ordered[i], -1);
+    pending_count = kept;
+    encode_passes(upload_pending(), ordered, side);
 }
 
 static int used_by_pending(int texture) {
-    for (int i = 0; i < pending_count; ++i)
-        if (pending[i].texture == texture) return 1;
-    return 0;
+    return textures[texture].sampled > 0;
 }
 
-static void flush_if_used(int texture) {
-    if (used_by_pending(texture)) flush();
+static int target_pending(int slot) {
+    return textures[slot].queued > 0;
+}
+
+static void settle(int slot) {
+    if (!target_pending(slot) && !used_by_pending(slot)) return;
+    int side = 0;
+    for (int i = 0; i < pending_count; ++i) {
+        if (pending[i].texture != slot && pending[i].target != slot) continue;
+        if (pending[i].target == drawing) {
+            flush();
+            return;
+        }
+        side = 1;
+    }
+    if (side) flush_side();
+}
+
+static int touches_depth(const RenderState *state) {
+    return state->depth_write || (state->tests.depth_test && state->tests.depth_method != RENDER_DEPTH_ALWAYS);
 }
 
 static SDL_GPUTexture *spare_texture(int width, int height) {
@@ -1325,7 +1393,6 @@ int render_target(uint32_t base, int width, int height) {
         Texture *texture = &textures[i];
         if (!texture->used || !texture->target || texture->base != base) continue;
         if (texture->width >= width && texture->height >= height) return i;
-        if (drawing == i) flush();
         render_release(i);
         break;
     }
@@ -1357,8 +1424,7 @@ int render_scaled_texture(int width, int height) {
 
 void render_release(int slot) {
     if (slot <= 0 || slot >= TEXTURE_LIMIT || !textures[slot].used) return;
-    flush_if_used(slot);
-    if (drawing == slot) flush();
+    settle(slot);
     if (bound == slot) bound = 0;
     release_later(textures[slot].color);
     release_later(textures[slot].multi);
@@ -1429,8 +1495,7 @@ static void upload(SDL_GPUTexture *texture, int x, int y, int width, int height,
 
 void render_upload(int slot, int x, int y, int width, int height, const uint32_t *pixels) {
     if (width <= 0 || height <= 0) return;
-    flush_if_used(slot);
-    if (drawing == slot) flush();
+    settle(slot);
     if (textures[slot].scale == 1) upload(textures[slot].color, x, y, width, height, pixels);
     else {
         int temporary = render_texture(width, height);
@@ -1442,8 +1507,7 @@ void render_upload(int slot, int x, int y, int width, int height, const uint32_t
 }
 
 void render_upload_full(int slot, const uint32_t *pixels) {
-    flush_if_used(slot);
-    if (drawing == slot) flush();
+    settle(slot);
     Texture *texture = &textures[slot];
     upload(texture->color, 0, 0, texture->width * texture->scale, texture->height * texture->scale, pixels);
     changed(slot);
@@ -1493,7 +1557,8 @@ void render_download_full(int slot, int width, int height, uint32_t *pixels) {
 void render_copy(int source, int source_x, int source_y, int destination, int destination_x, int destination_y,
                  int width, int height) {
     if (width <= 0 || height <= 0) return;
-    if (drawing == source || drawing == destination) flush();
+    if (target_pending(drawing) && (source == drawing || destination == drawing)) flush();
+    if (target_pending(source) || target_pending(destination)) flush_side();
     if (used_by_pending(destination)) rename_texture(destination);
     int scale = textures[source].scale;
     if (scale == textures[destination].scale) {
@@ -1564,8 +1629,9 @@ void render_bind(int target) {
 }
 
 static void draw_to_bound(void) {
-    if (pending_count && drawing != bound) flush();
-    drawing = bound;
+    if (bound == drawing) return;
+    if (target_pending(drawing) && used_by_pending(bound)) flush();
+    if (!target_pending(drawing)) drawing = bound;
 }
 
 int render_bound(void) { return bound; }
@@ -1589,11 +1655,16 @@ static int prepare(Command *command, const RenderState *state, PipelineKey key) 
         fputs("render: a draw samples its own target\n", stderr);
         return 0;
     }
+    if (bound != drawing &&
+        (state->texture == drawing || (depth_for(bound) == depth_for(drawing) && touches_depth(state)))) {
+        flush();
+        drawing = bound;
+    }
     uint32_t source, destination, op, flags = 0;
     SDL_GPUTexture *alpha_copy = textures[blank].color;
     if (state->tests.destination_test) {
         int pass_set = state->tests.destination_mode;
-        if (!pending_count && !textures[bound].drawn) {
+        if (!target_pending(bound) && !textures[bound].drawn) {
             if (!pass_set) return 0;
         } else {
             alpha_copy = destination_copy();
@@ -1607,6 +1678,7 @@ static int prepare(Command *command, const RenderState *state, PipelineKey key) 
     if ((state->color_mask & 0x00ff0000) != 0x00ff0000) mask |= SDL_GPU_COLORCOMPONENT_B;
     if ((state->color_mask & 0xff000000) != 0xff000000) mask |= SDL_GPU_COLORCOMPONENT_A;
     memset(command, 0, sizeof *command);
+    command->target = bound;
     key.source = source;
     key.destination = destination;
     key.op = op;
@@ -1680,6 +1752,7 @@ static int store_vertices(Command *command, const void *vertices, uint32_t bytes
 
 static void append(const Command *command) {
     pending[pending_count++] = *command;
+    queue(command, 1);
     command_serial++;
 }
 
@@ -1774,7 +1847,7 @@ static void restore(void) {
 static void submit(const RenderState *state, int topology, const RenderVertex *vertices, int count, int index,
                    int source) {
     draw_to_bound();
-    if (!pending_count && textures[bound].stale) restore();
+    if (!target_pending(bound) && textures[bound].stale) restore();
     Command command;
     if (!prepare(&command, state, (PipelineKey){.topology = (uint32_t)topology}) ||
         !store_vertices(&command, vertices, (uint32_t)(count * (int)sizeof(RenderVertex)), count, sizeof(RenderVertex))) {
@@ -1786,7 +1859,7 @@ static void submit(const RenderState *state, int topology, const RenderVertex *v
     if (drawing_shadow >= 0)
         memcpy(point_data + command.offset / sizeof(RenderVertex), shadow_points, (size_t)count * sizeof *point_data);
     Command *last = pending_count ? &pending[pending_count - 1] : NULL;
-    int merged = last && last->model < 0 && last->offset + (uint32_t)last->count * sizeof(RenderVertex) == command.offset &&
+    int merged = last && last->target == command.target && last->model < 0 && last->offset + (uint32_t)last->count * sizeof(RenderVertex) == command.offset &&
                  last->shadow == command.shadow && last->follow == command.follow &&
                  last->key.value == command.key.value && last->texture == command.texture && last->color == command.color &&
                  last->destination == command.destination &&
@@ -1910,7 +1983,7 @@ void render_shadow(const RenderState *state, const RenderVertex *vertices, const
 
 static int extends_last(const Command *command, const MeshUniforms *uniforms, const RenderBone *bones) {
     const Command *last = pending_count ? &pending[pending_count - 1] : NULL;
-    if (!last || last->model < 0 || !command->resident || !last->resident) return 0;
+    if (!last || last->target != command->target || last->model < 0 || !command->resident || !last->resident) return 0;
     if (last->offset + (uint32_t)last->count * sizeof(MeshVertex) != command->offset) return 0;
     if (last->key.value != command->key.value || last->texture != command->texture || last->color != command->color ||
         last->destination != command->destination || last->sampler != command->sampler ||
@@ -1937,7 +2010,7 @@ void render_mesh(const RenderState *state, int cull, const MeshUniforms *uniform
         bone_flushed = 0;
     }
     draw_to_bound();
-    if (!pending_count && textures[bound].stale) restore();
+    if (!target_pending(bound) && textures[bound].stale) restore();
     Command command;
     int prepared = prepare(&command, state, (PipelineKey){.topology = RENDER_TRIANGLES, .mesh = 1, .cull = (uint32_t)cull});
     if (prepared && resident >= 0) {

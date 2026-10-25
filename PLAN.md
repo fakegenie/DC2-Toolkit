@@ -257,8 +257,16 @@ one fits per tick on the iPhone (50 shown a second at 120 Hz), and in the swamp 
    composited at the character's alpha. `MeshUniforms.edge` names the side so smoothing pairs
    each copy with the same side a tick before. Swamp unpaced with 4x MSAA: 34 to 11 render passes
    a frame, GPU 3.0 to 2.0 ms, 303 to 421 ticks a second; Palm Brinks 29.5 to 11.2 passes.
-2. **No mid-frame splits.** Texture animation, shadows and depth of field before the main pass;
-   never reload an MSAA target; resolve once.
+2. **No mid-frame splits.** Partly done: each pending command keeps its target, and draws to
+   another target that nothing pending reads (and that neither reads the frame nor shares its
+   depth buffer while testing depth) are queued beside the frame's and encoded before them, so
+   texture animation no longer ends the main pass. A copy or upload that needs only those side
+   targets encodes just them (`flush_side`). Palm Brinks 11.2 to 9.2 passes, swamp 11 to 10, all
+   pictures identical. What still splits the frame is real: depth of field copies the frame into
+   slot 22, its strips read slot 22, shadows draw into slot 22 against the frame's depth, and the
+   characters read the shadows. Next would be copy-on-write for MSAA targets (a fresh texture for
+   slot 22 when pending draws still read it), which would let shadows and the fire effect queue
+   beside the frame, leaving one split for depth of field.
 3. **A render thread.** The game thread hands over each finished frame (passes, draws, transforms);
    the render thread draws at the display's rate, blending the last two, and neither waits on the
    other. Screen readbacks (`MenuCapture`, `mgStoreImage`) have to meet it.
