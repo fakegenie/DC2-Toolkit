@@ -213,6 +213,7 @@ typedef struct {
     float view[16];
     int has_camera;
     SDL_GPUTexture *shown;
+    int shown_target;
     int shown_width;
     int shown_height;
     int shown_scale;
@@ -220,6 +221,8 @@ typedef struct {
 } Recording;
 
 static Recording recordings[3];
+static int kept[2];
+static int kept_now;
 static struct {
     SDL_GPUTexture *texture;
     uint64_t frame;
@@ -2643,6 +2646,7 @@ static void layout_moving(Recording *frame) {
 static void finish_recording(int target, int width, int height) {
     Recording *frame = &recordings[recording_slot];
     frame->shown = textures[target].color;
+    frame->shown_target = target;
     frame->shown_width = width;
     frame->shown_height = height;
     frame->shown_scale = textures[target].scale;
@@ -3111,7 +3115,7 @@ int render_replay(float alpha) {
     submit_timed(buffer);
     smooth_shown();
     port_stats.replays++;
-    port_debug_replayed(alpha);
+    port_debug_replayed(frame->shown_target, alpha);
     return 1;
 }
 
@@ -3128,6 +3132,36 @@ int render_refresh_rate(void) {
     return mode && mode->refresh_rate > 0.0f ? (int)(mode->refresh_rate + 0.5f) : 60;
 }
 
+static void keep_frame(int target) {
+    Texture *source = &textures[target];
+    kept_now ^= 1;
+    int slot = kept[kept_now];
+    if (!slot || textures[slot].width != source->width || textures[slot].height != source->height ||
+        textures[slot].scale != source->scale) {
+        render_release(slot);
+        slot = kept[kept_now] = new_texture(source->width, source->height, source->scale, 1);
+    }
+    SDL_GPUTextureLocation from = {source->color, 0, 0, 0, 0, 0};
+    SDL_GPUTextureLocation to = {textures[slot].color, 0, 0, 0, 0, 0};
+    SDL_GPUCopyPass *pass = SDL_BeginGPUCopyPass(command_buffer());
+    SDL_CopyGPUTextureToTexture(pass, &from, &to, (Uint32)(source->width * source->scale),
+                                (Uint32)(source->height * source->scale), 1, false);
+    SDL_EndGPUCopyPass(pass);
+}
+
+static int show_kept(void) {
+    const Recording *before = &recordings[previous_slot];
+    int slot = kept[kept_now ^ 1];
+    if (!before->valid || !slot) return 0;
+    SDL_GPUCommandBuffer *buffer = command_buffer();
+    present_texture(buffer, textures[slot].color, textures[slot].scale, before->shown_width, before->shown_height);
+    submit_timed(buffer);
+    commands = NULL;
+    smooth_shown();
+    port_debug_replayed(slot, 0.0f);
+    return 1;
+}
+
 void render_present(int target, int width, int height) {
     flush();
     port_stats.gpu_ns += (uint64_t)(unsigned)SDL_SetAtomicInt(&gpu_busy_ns, 0);
@@ -3137,17 +3171,19 @@ void render_present(int target, int width, int height) {
     if (replayed) finish_recording(target, width, height);
     SDL_GPUCommandBuffer *buffer = command_buffer();
     if (!replayed) present_texture(buffer, target ? textures[target].color : NULL, target ? textures[target].scale : 1, width, height);
+    if (replayed) keep_frame(target);
     submit_timed(buffer);
     commands = NULL;
     restart_buffers();
     apply_quality();
     bury(presented);
     if (!replayed) {
-        if (target) port_debug_replayed(1.0f);
+        if (target) port_debug_replayed(target, 1.0f);
         return;
     }
     smooth_presented();
     if (recordings[shown_slot].valid && !smooth_due()) return;
+    if (show_kept()) return;
     if (render_replay(0.0f)) return;
     buffer = command_buffer();
     present_texture(buffer, textures[target].color, textures[target].scale, width, height);

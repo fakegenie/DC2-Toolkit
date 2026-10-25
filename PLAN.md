@@ -267,9 +267,20 @@ one fits per tick on the iPhone (50 shown a second at 120 Hz), and in the swamp 
    characters read the shadows. Next would be copy-on-write for MSAA targets (a fresh texture for
    slot 22 when pending draws still read it), which would let shadows and the fire effect queue
    beside the frame, leaving one split for depth of field.
-3. **A render thread.** The game thread hands over each finished frame (passes, draws, transforms);
-   the render thread draws at the display's rate, blending the last two, and neither waits on the
-   other. Screen readbacks (`MenuCapture`, `mgStoreImage`) have to meet it.
+3. **A render thread.** Groundwork done: with smoothing the tick copies its frame aside
+   (`keep_frame`) and shows the copy of the one before (`show_kept`) instead of replaying the whole
+   frame at alpha 0, so a paced tick costs 3.6-3.9 ms of GPU instead of 6. Recording playback now
+   draws between frames too (`scripted_tick` waits with `smooth_until`, it used to sleep), and
+   `smooth_until` no longer fires a second replay straight after one that blocked. `tools/bench.py`
+   counts shown frames from the per-field stats. Swamp, front window, 98 Hz, `--smooth 0`: 25 to
+   100 shown a second, but ticks slip to 24.8 a second because a between frame can block 5-30 ms
+   in `nextDrawable` and overrun the field; `--smooth 75` keeps 25.0 ticks with 88 shown.
+   `--vsync` is worse (61 shown, 24.6 ticks). SDL only lets the window's thread acquire a
+   swapchain texture, so the thread split has to go the other way: the game runs on its own
+   thread and the main thread keeps the window, events and presenting. The game thread hands over
+   each finished recording; the main thread blends the last two at the display's rate and may
+   block on `nextDrawable` without touching the game's timing. Screen readbacks (`MenuCapture`,
+   `mgStoreImage`), input, audio and the debug server have to meet it.
 4. **Less per tick.** Dirty marks instead of `texture_checksum` every frame; fewer, bigger draws.
 5. **60 ticks (optional, later).** Menus already run at `mgFrameRate` 1 and movement scales by it,
    but timers, animations and events count ticks.

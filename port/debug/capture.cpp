@@ -363,11 +363,11 @@ static void write_presents() {
     }
 }
 
-extern "C" void port_debug_replayed(float alpha) {
-    if ((int)presents.size() >= presents_wanted || !shown_target) return;
-    int scale = render_scale(shown_target);
+extern "C" void port_debug_replayed(int slot, float alpha) {
+    if ((int)presents.size() >= presents_wanted || !slot) return;
+    int scale = render_scale(slot);
     std::vector<uint32_t> full((size_t)(shown_width * scale) * (size_t)(shown_height * scale));
-    render_download_full(shown_target, shown_width, shown_height, full.data());
+    render_download_full(slot, shown_width, shown_height, full.data());
     int step = presents_full ? 1 : scale;
     present_width = shown_width * scale / step;
     present_height = shown_height * scale / step;

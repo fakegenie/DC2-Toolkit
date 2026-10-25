@@ -64,11 +64,16 @@ static void sleep_until(uint64_t deadline) {
     port_stats.wait_ns += monotonic_ns() - start;
 }
 
+static void wait_until(uint64_t deadline) {
+    if (render_smoothing()) smooth_until(deadline);
+    else sleep_until(deadline);
+}
+
 static void scripted_tick(void) {
     if (port_ticks < port_field_script_base + port_field_script[port_field_script_next]) return;
     port_field_script_next++;
     uint64_t now = monotonic_ns();
-    if (next_field > now) sleep_until(next_field);
+    if (next_field > now) wait_until(next_field);
     next_field = (next_field > now ? next_field : now) + port_field_period;
     graphics_field();
 }
@@ -93,8 +98,7 @@ void port_graphics_tick(void) {
 void port_graphics_wait(void) {
     uint64_t now = monotonic_ns();
     if (!next_field) next_field = now + port_field_period;
-    if (render_smoothing()) smooth_until(next_field);
-    else sleep_until(next_field);
+    wait_until(next_field);
     port_graphics_tick();
 }
 

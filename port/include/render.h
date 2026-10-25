@@ -204,7 +204,7 @@ void render_quality(int *scale, int *samples);
 int render_replay(float alpha);
 int render_refresh_rate(void);
 void render_set_camera(const float *eye, const float (*pose)[4], const float (*view)[4]);
-void port_debug_replayed(float alpha);
+void port_debug_replayed(int slot, float alpha);
 
 int render_target(uint32_t base, int width, int height);
 int render_target_at(uint32_t base);

@@ -49,9 +49,10 @@ void smooth_until(uint64_t deadline) {
     for (uint64_t now = start; now < deadline; now = monotonic_ns()) {
         if (now >= next_refresh && now + margin < deadline) {
             render_replay((float)(now - presented_at) / (float)interval);
-            port_stats.replay_ns += monotonic_ns() - now;
+            uint64_t done = monotonic_ns();
+            port_stats.replay_ns += done - now;
             next_refresh += refresh_period();
-            if (next_refresh <= now) next_refresh = now + refresh_period();
+            if (next_refresh <= done) next_refresh = done + refresh_period() / 2;
             continue;
         }
         uint64_t until = next_refresh > now && next_refresh < deadline ? next_refresh : deadline;

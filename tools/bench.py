@@ -7,8 +7,8 @@
     python3 -I tools/bench.py --front                in a window in front, which is how a player sees it
 
 Each recording is copied to build/port/recordings/bench-NAME and played from there, so the game writes
-play.jsonl next to it. Shown frames are ticks plus the frames drawn between them. gpu_ms is the time the
-GPU was busy, measured from each submission to its fence.
+play.jsonl next to it. Drawn frames are the presents counted in the per-frame stats: one a game frame plus the
+replays between them. gpu_ms is the time the GPU was busy, measured from each submission to its fence.
 """
 
 import json
@@ -89,16 +89,18 @@ def play(name, unpaced):
         time.sleep(0.5)
         if request("recording_status", {})["state"] not in ("playing", "loading playback"):
             break
-    passes = [frame["stats"]["render_passes"] for frame in request("stats", {"frames": "600"})["frames"]]
+    frames = request("stats", {"frames": "600"})["frames"]
     rows = [json.loads(line) for line in open(folder / "play.jsonl")][5:]
-    return rows, passes
+    return rows, frames
 
 
-def report(name, rows, passes):
+def report(name, rows, frames):
     seconds = sum(row["frame_ms"] for row in rows) / 1000
-    shown = len(rows) + sum(row["replays"] for row in rows)
-    print(f"{name}: {len(rows)} ticks, {len(rows) / seconds:.1f} ticks/s, {shown / seconds:.1f} drawn/s, "
-          f"{statistics.mean(passes):.1f} render passes a frame")
+    fields = sum(frame["frame_ms"] for frame in frames) / 1000
+    shown = len(frames) + sum(frame["stats"]["replays"] for frame in frames)
+    passes = statistics.mean(frame["stats"]["render_passes"] for frame in frames)
+    print(f"{name}: {len(rows)} ticks, {len(rows) / seconds:.1f} ticks/s, {shown / fields:.1f} drawn/s, "
+          f"{passes:.1f} render passes a frame")
     for key in KEYS:
         values = sorted(row[key] for row in rows)
         print(f"  {key:>10}: mean {statistics.mean(values):7.2f}  median {values[len(values) // 2]:7.2f}  "
@@ -113,8 +115,8 @@ def main():
     process = launch("--front" in words, flags)
     try:
         for name in names:
-            rows, passes = play(name, "--unpaced" in words)
-            report(name, rows, passes)
+            rows, frames = play(name, "--unpaced" in words)
+            report(name, rows, frames)
     finally:
         stop(process)
 

@@ -7,7 +7,10 @@ PortStats port_stats;
 
 __attribute__((weak)) void port_kernel_yield(void) {}
 
-__attribute__((weak)) void port_debug_replayed(float alpha) { (void)alpha; }
+__attribute__((weak)) void port_debug_replayed(int slot, float alpha) {
+    (void)slot;
+    (void)alpha;
+}
 
 __attribute__((weak)) void port_memory_set(const void *pool, const char *file, int line, int size) {
     (void)pool;
