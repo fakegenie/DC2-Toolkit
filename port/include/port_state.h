@@ -7,16 +7,14 @@
 extern "C" {
 #endif
 
-#define STATE_RESUMABLE __attribute__((optnone, noinline))
-
 enum { STATE_SAVE = 1, STATE_LOAD = 2 };
-enum { STATE_THUMB_WIDTH = 160, STATE_THUMB_HEIGHT = 120, STATE_RETURN_LIMIT = 1024 };
+enum { STATE_THUMB_WIDTH = 160, STATE_THUMB_HEIGHT = 120, STATE_BUILD_SIZE = 32 };
 
 typedef struct {
     char magic[8];
     uint32_t version;
     uint32_t regions;
-    unsigned char layout[16];
+    char build[STATE_BUILD_SIZE];
     uint32_t frame;
     int32_t loop;
     int32_t map;
@@ -28,11 +26,6 @@ typedef struct {
     uint64_t sound;
     uint64_t size;
     uint64_t base;
-    uint64_t guard;
-    uint64_t stack_low;
-    uint64_t stack_high;
-    uint64_t return_count;
-    uint64_t return_slots[STATE_RETURN_LIMIT];
 } PortStateHeader;
 
 typedef struct {
@@ -41,18 +34,15 @@ typedef struct {
     size_t room;
 } PortState;
 
-const char *port_state_ready(void);
 int port_state_request(int kind, PortState *state);
 int port_state_pending(void);
+int port_state_possible(void);
+void port_state_cancel(const char *reason);
 const char *port_state_problem(void);
 const char *port_state_note(void);
-void port_state_force(int force);
 float port_state_ms(void);
-const char *port_state_keep(void);
-void port_state_builds(const char *folder);
-void port_state_drop_builds(void);
-STATE_RESUMABLE void port_state_frame(void);
-void port_state_host(void);
+void port_state_frame(void);
+void port_end_main_frame(void);
 const PortStateHeader *port_state_header(const PortState *state);
 const uint32_t *port_state_thumbnail(const PortState *state);
 const char *port_state_write(const PortState *state, const char *path);

@@ -6,7 +6,7 @@
 extern "C" {
 #endif
 
-#define PORT_MOD_API "1.2.0"
+#define PORT_MOD_API "2.0.0"
 
 enum { RENDER_SCALE_AUTO = -1 };
 
@@ -31,7 +31,6 @@ typedef struct {
     void (*present)(int target, int width, int height);
     void (*input)(struct port_input_state *state);
     void (*audio)(const short *samples, int frames);
-    void (*host)(void);
 } PortMod;
 
 typedef int (*PortCommandRun)(const char *const *keys, const char *const *values, int count, char *reply,
@@ -79,7 +78,6 @@ void port_mods_overlay(void);
 void port_mods_present(int target, int width, int height);
 void port_mods_input(struct port_input_state *state);
 void port_mods_audio(const short *samples, int frames);
-void port_mods_host(void);
 
 #define PORT_MOD(table)                                                       \
     __attribute__((constructor)) static void port_mod_register_##table(void) { \

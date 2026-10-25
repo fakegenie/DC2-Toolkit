@@ -917,7 +917,7 @@ static void record_frame(uint64_t exit_time) {
     port_stats.arena_blocks = kept.arena_blocks;
 }
 
-extern "C" STATE_RESUMABLE void debug_frame_exit(void) {
+extern "C" void debug_frame_exit(void) {
     record_frame(now_ns());
     if (injection.frames > 0) injection.frames--;
     debug_capture_frame();
@@ -943,7 +943,7 @@ extern "C" STATE_RESUMABLE void debug_frame_exit(void) {
 
 static const PortMod debug_tools = {
     "dc2tk.debug-tools", debug_start,   debug_event,   debug_field, debug_frame_enter, debug_frame_drawn,
-    debug_frame_exit,    debug_overlay, debug_present, debug_input, debug_audio,       debug_host,
+    debug_frame_exit,    debug_overlay, debug_present, debug_input, debug_audio,
 };
 
 PORT_MOD(debug_tools)

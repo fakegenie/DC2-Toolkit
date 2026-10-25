@@ -79,7 +79,7 @@ extern "C" void port_outline_span(const void *key, float *min_xy, float *max_xy)
     memcpy(outlines[slot].high, high, sizeof high);
 }
 
-PORT_OVERRIDE STATE_RESUMABLE void mgEndFrame(mgCDrawManager *manager) {
+PORT_OVERRIDE void mgEndFrame(mgCDrawManager *manager) {
     outline_frame++;
     if (port_debug) DebugFlag = 1;
     port_mods_frame_enter();

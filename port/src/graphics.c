@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "port_graphics.h"
+#include "port_game.h"
 #include "audio.h"
 #include <stddef.h>
 #include <time.h>
@@ -10,12 +11,14 @@
 
 extern void port_kernel_vblank(void);
 
+PORT_GAME_BEGIN
 uint64_t port_fields;
 static int (*vblank_callback)(int);
+static uint32_t timer_lines;
+PORT_GAME_END
 static uint64_t next_field;
 uint64_t port_field_period = UINT64_C(20000000);
 enum { LINES_PER_FIELD = 312 };
-static uint32_t timer_lines;
 
 static uint64_t monotonic_ns(void) {
     struct timespec now;

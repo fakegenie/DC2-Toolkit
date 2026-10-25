@@ -17,8 +17,6 @@ void port_graphics_wait(void) {
     port_graphics_tick();
 }
 
-void port_mods_host(void) {}
-void port_state_host(void) {}
 static void worker(void *argument) {
     assert(argument == &trace);
     trace[position++] = 1;

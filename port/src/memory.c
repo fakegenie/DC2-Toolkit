@@ -2,6 +2,7 @@
 #define _DARWIN_C_SOURCE
 #endif
 #include "port_arena.h"
+#include "port_game.h"
 #include "port_stats.h"
 #include <stdatomic.h>
 #include <stdio.h>
@@ -30,9 +31,11 @@ struct FreeLinks {
     struct Allocation *previous;
 };
 
+PORT_GAME_BEGIN
 static unsigned char arena[ARENA_SIZE] __attribute__((aligned(64)));
 static struct Allocation *allocations;
 static struct Allocation *free_head;
+PORT_GAME_END
 static atomic_flag allocation_lock = ATOMIC_FLAG_INIT;
 
 static void lock_allocations(void) {
@@ -167,6 +170,11 @@ size_t port_arena_spans(const unsigned char *saved, size_t size, uint64_t saved_
         at = (uint64_t)(uintptr_t)block.next;
     }
     return count;
+}
+
+void port_arena_bounds(uint64_t *start, uint64_t *size) {
+    *start = (uint64_t)(uintptr_t)arena;
+    *size = sizeof arena;
 }
 
 void *port_new(size_t size) {

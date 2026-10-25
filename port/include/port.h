@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <new>
 #include <strings.h>
+#include "port_game.h"
 #include <sys/types.h>
 
 #define PORT_INIT(...) = __VA_ARGS__

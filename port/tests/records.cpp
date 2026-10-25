@@ -11,6 +11,7 @@ static_assert(sizeof(USER_PICTURE_INFO) == 0x18);
 
 static unsigned char index_bytes[64];
 static char pixels[2][16];
+static USER_PICTURE_INFO photos[2];
 
 int main() {
     uint32_t record[] = {24, 17, 9, 32, 33, 10};
@@ -22,7 +23,6 @@ int main() {
     assert(!strcmp((char *)index_bytes + headers[1].name_offset, "b.img"));
     assert(headers[0].size == 17 && headers[1].size == 33);
     assert(headers[0].sector == 9 && headers[1].sector == 10);
-    USER_PICTURE_INFO photos[2];
     photos[0].image = pixels[0];
     photos[1].image = pixels[1];
     assert((char *)photos[0].image == pixels[0] && (char *)photos[1].image == pixels[1]);

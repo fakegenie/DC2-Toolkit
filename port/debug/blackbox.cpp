@@ -33,7 +33,6 @@ static BoxInput inputs[BOX_FRAMES];
 static BoxTrace traces[BOX_FRAMES];
 static int keeping = -1;
 static int saving = -1;
-static int build_kept;
 static float save_ms;
 static char box_message[512];
 
@@ -122,11 +121,6 @@ void debug_blackbox_saved(int saved) {
         save_ms = port_state_ms();
     }
     saving = -1;
-    if (saved && !build_kept) {
-        const char *problem = port_state_keep();
-        if (problem) fprintf(stderr, "blackbox: %s\n", problem);
-        build_kept = 1;
-    }
 }
 
 static int write_all(int fd, const void *data, size_t size) {

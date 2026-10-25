@@ -1,7 +1,6 @@
 #include "port_fiber.h"
+#include "port_game.h"
 #include "port_kernel.h"
-#include "port_mod.h"
-#include "port_state.h"
 #include "sce/eekernel.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -27,18 +26,19 @@ static struct {
     int semaphore;
 } threads[THREAD_LIMIT];
 static unsigned char stacks[THREAD_LIMIT][STACK_SIZE] __attribute__((aligned(STACK_ALIGNMENT)));
-static struct { int used; int count; int maximum; } semaphores[SEMA_LIMIT];
-static struct { int (*function)(int); int cause; int dma; int next; } handlers[HANDLER_LIMIT];
-static int handler_heads[HANDLER_KINDS][INTERRUPT_CAUSES];
-static unsigned int intc_enabled;
-static unsigned int dmac_enabled;
 static uint64_t queue_order;
 static int running;
 static int interrupt_active;
 static PortFiber host_context;
 static int (*game_entry)(void);
 static int game_result;
-static int host_requested;
+PORT_GAME_BEGIN
+static struct { int used; int count; int maximum; } semaphores[SEMA_LIMIT];
+static struct { int (*function)(int); int cause; int dma; int next; } handlers[HANDLER_LIMIT];
+static int handler_heads[HANDLER_KINDS][INTERRUPT_CAUSES];
+static unsigned int intc_enabled;
+static unsigned int dmac_enabled;
+PORT_GAME_END
 
 extern void port_graphics_tick(void);
 extern void port_graphics_wait(void);
@@ -317,40 +317,16 @@ int port_kernel_run(int (*entry)(void)) {
     threads[MAIN_THREAD].state = RUNNING;
     port_fiber_make(&threads[MAIN_THREAD].context, stacks[MAIN_THREAD], STACK_SIZE, main_entry);
     port_fiber_switch(&host_context, &threads[MAIN_THREAD].context);
-    while (host_requested) {
-        host_requested = 0;
-        port_state_host();
-        port_mods_host();
-        port_fiber_switch(&host_context, &threads[running].context);
-    }
     return game_result;
 }
 
-size_t port_kernel_returns(uint64_t *slots, size_t limit) {
-    size_t count = 0;
-    for (int id = 0; id < THREAD_LIMIT; ++id) {
-        if (threads[id].state == UNUSED || threads[id].state == DORMANT) continue;
-        uintptr_t low = (uintptr_t)stacks[id];
-        uintptr_t top = low + STACK_SIZE;
-        uintptr_t frame = port_fiber_frame(&threads[id].context);
-        if (frame == UINTPTR_MAX) return limit + 1;
-        while (frame >= low && frame + 16 <= top) {
-            if (count == limit) return limit + 1;
-            slots[count++] = frame + 8;
-            uintptr_t next = *(const uintptr_t *)frame;
-            if (next <= frame) break;
-            frame = next;
-        }
-    }
-    return count;
+uint64_t port_kernel_main_stack_top(void) {
+    return (uint64_t)(uintptr_t)stacks[MAIN_THREAD] + STACK_SIZE;
 }
 
-void port_kernel_stacks(uint64_t *low, uint64_t *high) {
-    *low = (uintptr_t)stacks;
-    *high = *low + sizeof stacks;
-}
-
-void port_kernel_host(void) {
-    host_requested = 1;
-    port_fiber_switch(&threads[running].context, &host_context);
+int port_kernel_quiet(void (*parked)(void *)) {
+    if (running != MAIN_THREAD || interrupt_active) return 0;
+    for (int id = FIRST_THREAD; id < THREAD_LIMIT; ++id)
+        if (threads[id].state != UNUSED && (threads[id].state != READY || threads[id].entry != parked)) return 0;
+    return 1;
 }

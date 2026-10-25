@@ -2,6 +2,7 @@
 #include "executable.h"
 #include "split_data.h"
 #include "port_elf.h"
+#include "port_game.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +24,7 @@ enum {
     EXECUTABLE_SIZE_LIMIT = 64 * 1024 * 1024
 };
 
+PORT_GAME_BEGIN
 _Alignas(QUADWORD) unsigned char Vu_prog_3dsp[VU_PROG_3DSP_SIZE];
 _Alignas(QUADWORD) unsigned char Vu_prog_sdw[VU_PROG_SDW_SIZE];
 _Alignas(QUADWORD) unsigned char Vu_progmain[VU_PROGMAIN_SIZE];
@@ -31,6 +33,7 @@ _Alignas(QUADWORD) unsigned char Vu_prog_wtr[VU_PROG_WTR_SIZE];
 _Alignas(QUADWORD) unsigned char My_dma_start0[MY_DMA_START0_SIZE];
 __asm__(".globl My_DrawEnv\n.set My_DrawEnv, My_dma_start0 + " SYMBOL_OFFSET(MY_DRAW_ENV_START));
 _Alignas(QUADWORD) unsigned char _gp[GP_SIZE];
+PORT_GAME_END
 
 static const struct {
     const char *name;

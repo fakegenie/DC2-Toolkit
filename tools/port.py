@@ -58,8 +58,6 @@ FLAGS = [
     "-Wno-c++11-narrowing", "-Wno-register", "-Wno-return-mismatch", "-w",
 ]
 LINK_FLAGS = ["-pthread", *(["-lobjc"] if DARWIN else [])]
-MAC_IMAGE_BASE = 0x3E9100000000
-SEGMENTS = {"__TEXT": 0, "__DATA_CONST": 0xC00000, "__DATA": 0x1000000, "__PS2RAM": 0x4000000, "__PS2PORT": 0xC000000}
 IOS = {
     "simulator": {"sdk": "iphonesimulator", "target": "arm64-apple-ios17.0-simulator", "platform": "iPhoneSimulator"},
     "device": {"sdk": "iphoneos", "target": "arm64-apple-ios17.0", "platform": "iPhoneOS"},
@@ -129,8 +127,6 @@ UNUSED_DEFINITIONS = {
                                "mgCTextureManager::ReloadCLUT(mgCTexture*,u_int*)"],
     "ps2/src/mg_shadow.cpp": ["SetShadowData(u_int*,float(*)[4])"],
 }
-RESTORED_PORT_FILES = ["memory", "split_data", "kernel", "graphics", "cdvd", "spu2", "iop", "devices", "mg_shadow", "mg_drawprim", "frame", "draw",
-                       "mg_visual", "mg_sprite", "water", "runtime"]
 OPERATORS = {
     **dict.fromkeys(["_Znwm", "_Znam", "_ZnwmRKSt9nothrow_t", "_ZnamRKSt9nothrow_t"], "port_new"),
     **dict.fromkeys(["_ZnwmSt11align_val_t", "_ZnamSt11align_val_t", "_ZnwmSt11align_val_tRKSt9nothrow_t",
@@ -238,16 +234,10 @@ def compile_one(source, name):
         changes.append(f"--redefine-sym={PREFIX}main={PREFIX}port_game_main")
     return compile_command(source, target, depfile, command_file, command, changes,
                            operators=not c and not name.startswith(("mod_", "port_")),
-                           segment=data_segment(name) if DARWIN else None)
+                           game=not name.startswith(("mod_", "port_")))
 
 
-def data_segment(name):
-    if name.startswith("port_"):
-        return "__PS2PORT" if name.removeprefix("port_") in RESTORED_PORT_FILES else None
-    return None if name.startswith(("mod_", "imgui_")) else "__PS2RAM"
-
-
-def move_data(target, segment):
+def move_mach_data(target):
     data = bytearray(target.read_bytes())
     commands = struct.unpack_from("<I", data, 16)[0]
     at = 32
@@ -259,14 +249,42 @@ def move_data(target, segment):
                 header = at + 72 + index * 80
                 if data[header + 16:header + 32].rstrip(b"\0") == b"__DATA" and \
                         data[header:header + 16].rstrip(b"\0") in (b"__data", b"__bss", b"__common"):
-                    data[header + 16:header + 32] = segment.encode().ljust(16, b"\0")
+                    data[header + 16:header + 32] = b"__GAME".ljust(16, b"\0")
         at += size
     target.write_bytes(data)
 
 
-def compile_command(source, target, depfile, command_file, command, changes, operators=False, segment=None):
+def elf_sections(target):
+    data = target.read_bytes()
+    table = struct.unpack_from("<Q", data, 40)[0]
+    size, count, names = struct.unpack_from("<HHH", data, 58)
+    strings = struct.unpack_from("<Q", data, table + names * size + 24)[0]
+    offsets = [strings + struct.unpack_from("<I", data, table + index * size)[0] for index in range(count)]
+    return {data[offset:data.index(b"\0", offset)].decode() for offset in offsets}
+
+
+def move_elf_data(target):
+    renames = []
+    for name in elf_sections(target):
+        if name.startswith(".data.rel.ro"):
+            continue
+        for kind in ("data", "bss"):
+            if name == f".{kind}" or name.startswith(f".{kind}."):
+                renames.append(f"--rename-section={name}=game_{kind}")
+    if renames:
+        subprocess.run([OBJCOPY, *sorted(renames), str(target)], check=True)
+
+
+def move_data(target):
+    if DARWIN:
+        move_mach_data(target)
+    else:
+        move_elf_data(target)
+
+
+def compile_command(source, target, depfile, command_file, command, changes, operators=False, game=False):
     name = target.stem
-    signature = json.dumps([command, changes, operators, segment])
+    signature = json.dumps([command, changes, operators, game])
     if up_to_date(source, target, depfile) and command_file.exists() and command_file.read_text() == signature:
         return name, None
     result = subprocess.run(command, capture_output=True, text=True)
@@ -279,8 +297,8 @@ def compile_command(source, target, depfile, command_file, command, changes, ope
         for old, new in OPERATORS.items():
             if f"{PREFIX}{old}" in used:
                 subprocess.run([OBJCOPY, f"--redefine-sym={PREFIX}{old}={PREFIX}{new}", str(target)], check=True)
-    if segment:
-        move_data(target, segment)
+    if game:
+        move_data(target)
     command_file.write_text(signature, encoding="utf-8")
     return name, None
 
@@ -317,16 +335,27 @@ def compile_all(units, debug=False, mods=()):
     return [OBJ / f"{name}.o" for _source, name in jobs], len(units), len(jobs) - len(units)
 
 
+def build_id(inputs, binary):
+    digest = hashlib.sha256(json.dumps([TARGET, LINK_FLAGS]).encode())
+    for path in inputs:
+        digest.update(path.read_bytes())
+    source = OBJ / f"build_id_{binary.name}.c"
+    target = source.with_suffix(".o")
+    write_if_changed(source, f'const char port_build_id[] = "{digest.hexdigest()[:32]}";\n')
+    if not target.exists() or target.stat().st_mtime < source.stat().st_mtime:
+        subprocess.run(["clang", *TARGET, "-c", "-O0", *([] if DARWIN else ["-fno-pie"]), str(source), "-o", str(target)],
+                       check=True)
+    return target
+
+
 def link(objects, extra, binary):
     if DARWIN:
         platform = [f"-Wl,-alias,_{target},_{alias}" for alias, target in ALIASES.items()]
-        base = 0x100000000 if TARGET else MAC_IMAGE_BASE
-        for segment, offset in SEGMENTS.items():
-            platform += [f"-Wl,-segaddr,{segment},{base + offset:#x}"]
     else:
         platform = ["-no-pie", "-Wl,--no-demangle", *(f"-Wl,--defsym={alias}={target}" for alias, target in ALIASES.items())]
     fresh = binary.with_name(binary.name + ".linking")
-    command = [LINKER, *TARGET, "-o", str(fresh), *map(str, objects), *map(str, extra), *platform, *LINK_FLAGS]
+    inputs = [*objects, *extra]
+    command = [LINKER, *TARGET, "-o", str(fresh), *map(str, inputs), str(build_id(inputs, binary)), *platform, *LINK_FLAGS]
     result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode == 0:
         os.replace(fresh, binary)
@@ -568,7 +597,8 @@ def main():
     final = link(objects, extra, BINARY)
     if final.returncode != 0:
         sys.exit(final.stderr)
-    write_if_changed(OUT / "objects.json", json.dumps([str(path) for path in [*objects, *extra]], indent=2) + "\n")
+    manifest = [*objects, *extra, OBJ / f"build_id_{BINARY.name}.o"]
+    write_if_changed(OUT / "objects.json", json.dumps([str(path) for path in manifest], indent=2) + "\n")
     if options.debug:
         debugged = link([*objects, *debug_objects], extra, DEBUG_BINARY)
         if debugged.returncode != 0:

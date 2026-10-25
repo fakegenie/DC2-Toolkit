@@ -8,12 +8,14 @@
 
 enum { DIRECT_LIMIT = 4096, GIF_REGISTER_BITS = 4, GIF_REGISTER_MASK = 15 };
 
+PORT_GAME_BEGIN
 static u_long packed_registers;
 static int packed_count;
 static int packed_index;
 static int packed_mode;
 static u_long128 direct_buffer[DIRECT_LIMIT];
 static int direct_pending;
+PORT_GAME_END
 
 static void packed_data(const void *qword) {
     int reg = packed_mode ? (int)((packed_registers >> (packed_index * GIF_REGISTER_BITS)) & GIF_REGISTER_MASK)

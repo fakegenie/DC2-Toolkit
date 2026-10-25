@@ -19,4 +19,3 @@ typedef struct {
 
 void port_fiber_make(PortFiber *fiber, void *stack, size_t size, void (*entry)(void));
 void port_fiber_switch(PortFiber *from, PortFiber *to);
-uintptr_t port_fiber_frame(const PortFiber *fiber);

@@ -133,7 +133,6 @@ void debug_overlay(void);
 void debug_present(int target, int width, int height);
 void debug_input(struct port_input_state *state);
 void debug_audio(const short *samples, int frames);
-void debug_host(void);
 
 void debug_scenario_status(DebugReply *reply);
 void debug_capture_frame(void);

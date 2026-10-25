@@ -65,8 +65,6 @@ void port_fiber_make(PortFiber *fiber, void *stack, size_t size, void (*entry)(v
     fiber->stack_pointer = ((uint64_t)(uintptr_t)stack + size) & ~(uint64_t)(STACK_ALIGNMENT - 1);
 }
 
-uintptr_t port_fiber_frame(const PortFiber *fiber) { return (uintptr_t)fiber->frame_pointer; }
-
 #else
 
 void port_fiber_make(PortFiber *fiber, void *stack, size_t size, void (*entry)(void)) {
@@ -78,11 +76,6 @@ void port_fiber_make(PortFiber *fiber, void *stack, size_t size, void (*entry)(v
     fiber->context.uc_stack.ss_size = size;
     fiber->context.uc_link = NULL;
     makecontext(&fiber->context, entry, 0);
-}
-
-uintptr_t port_fiber_frame(const PortFiber *fiber) {
-    (void)fiber;
-    return UINTPTR_MAX;
 }
 
 void port_fiber_switch(PortFiber *from, PortFiber *to) {

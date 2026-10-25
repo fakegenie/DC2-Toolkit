@@ -1022,7 +1022,7 @@
   {
     "file": "ps2/include/mglib.hpp",
     "find": "extern int mgScreenWidth;",
-    "replace": "extern int mgScreenWidth;\nextern \"C\" int port_screen_width(void);\nextern \"C\" int port_wide_width(void);\nextern \"C\" int port_texture_shift(unsigned int base);\nextern \"C\" void port_texture_loaded(const void *image);\nextern \"C\" void port_hud(int spread);\nextern \"C\" void port_outline_span(const void *key, float *min_xy, float *max_xy);"
+    "replace": "extern int mgScreenWidth;\nextern \"C\" int port_screen_width(void);\nextern \"C\" int port_wide_width(void);\nextern \"C\" int port_texture_shift(unsigned int base);\nextern \"C\" void port_texture_loaded(const void *image);\nextern \"C\" void port_hud(int spread);\nextern \"C\" void port_outline_span(const void *key, float *min_xy, float *max_xy);\nextern \"C\" void port_end_main_frame(void);"
   },
   {
     "file": "ps2/src/editloop.cpp",
@@ -1768,5 +1768,25 @@
     "file": "ps2/src/mg_texture.cpp",
     "find": "int mgGetIMGHeaderNum(char *img) {\n    int *words = (int *) img;\n\n    if (words == NULL) {\n        return 0;\n    }\n\n    int version = GetIMGVersion(img);\n\n    if (version == 0) {\n        return 0;\n    }\n\n    if (version == 1 || version == 2) {\n        return words[1];\n    }\n\n    if (version == 3) {\n        return words[2];\n    }\n\n    return 0;\n}\n\nmgIMG_HEADER mgGetIMGHeader(char *img, int index) {\n    mgIMG_HEADER header;\n    int          version;\n    int          count;\n    int          stride;\n    int          i;\n    char        *entry;\n    char        *start;\n    memset(&header, 0, sizeof(mgIMG_HEADER));\n\n    if (img == NULL) {\n        return header;\n    }\n\n    entry = img;\n    version = GetIMGVersion(img);\n\n    if (version == 0) {\n        return header;\n    }\n\n    count = 0;\n    stride = 0;\n\n    if (version == 1 || version == 2) {\n        entry += 0x10;\n        count = *(int *) (img + 4);\n        stride = 0x30;\n    }\n\n    if (version == 3) {\n        start = entry;\n        entry += 0x10;\n        count = *(int *) (start + 8);\n        stride = 0x40;\n    }\n\n    for (i = 0; i < count; i++) {\n        if (index == i) {\n            switch (version) {\n                case 2:\n                    header.swizzled = 1;\n                case 1:\n                    memcpy(&header, entry, 0x20);\n                    header.offset = *(u_int *) (entry + 0x20);\n                    break;\n                case 3:\n                    header.name_copy = *(IMG_HEADER_NAME *) entry;\n                    header.unk_20 = *(u_int *) (entry + 0x20);\n                    header.offset = *(u_int *) (entry + 0x24);\n                    header.swizzled = *(u_int *) (entry + 0x28);\n                    header.block = *(u_int *) (entry + 0x2C);\n                    header.no_image = *(short *) (entry + 0x30);\n                    short *half = &header.unk_32;\n                    *half = *(short *) (entry + 0x32);\n                    header.size = *(int *) (entry + 0x34);\n                    header.clamp_bits = *(long long *) (entry + 0x38);\n                    break;\n            }\n        }\n\n        entry += stride;\n    }\n\n    return header;\n}\n\n",
     "replace": "int mgGetIMGHeaderNum(char *img) {\n    if (img == NULL) {\n        return 0;\n    }\n\n    mgIMG_FILE_HEADER *file = (mgIMG_FILE_HEADER *) img;\n    int version = GetIMGVersion(img);\n\n    if (version == MG_IMG_VERSION_IMG || version == MG_IMG_VERSION_IM2) {\n        return (int) file->num;\n    }\n\n    if (version == MG_IMG_VERSION_IM3) {\n        return (int) file->num3;\n    }\n\n    return 0;\n}\n\nmgIMG_HEADER mgGetIMGHeader(char *img, int index) {\n    mgIMG_HEADER header;\n    memset(&header, 0, sizeof(mgIMG_HEADER));\n\n    if (img == NULL || index < 0 || index >= mgGetIMGHeaderNum(img)) {\n        return header;\n    }\n\n    mgIMG_FILE_HEADER *file = (mgIMG_FILE_HEADER *) img;\n    int version = GetIMGVersion(img);\n\n    if (version == MG_IMG_VERSION_IMG || version == MG_IMG_VERSION_IM2) {\n        mgIMG1_HEADER *entries = (mgIMG1_HEADER *) (file + 1);\n        memcpy(header.name, entries[index].name, sizeof(header.name));\n        header.offset = entries[index].offset;\n        header.swizzled = version == MG_IMG_VERSION_IM2;\n    }\n\n    if (version == MG_IMG_VERSION_IM3) {\n        header = ((mgIMG_HEADER *) (file + 1))[index];\n    }\n\n    return header;\n}\n\n"
+  },
+  {
+    "file": "ps2/src/mainloop.cpp",
+    "find": "    int               mode_finished;\n",
+    "replace": "    static int        mode_finished;\n"
+  },
+  {
+    "file": "ps2/src/mainloop.cpp",
+    "find": "            frame_border.End();\n            mgEndFrame(NULL);\n",
+    "replace": "            frame_border.End();\n            port_end_main_frame();\n"
+  },
+  {
+    "file": "ps2/src/gamepad.cpp",
+    "find": "static void GamePadStep(void *arg) {",
+    "replace": "void GamePadStep(void *arg) {"
+  },
+  {
+    "file": "ps2/src/gamepad.cpp",
+    "find": "        SwitchGamePadThread();\n        old_vsync = now;\n",
+    "replace": "        old_vsync = now;\n        SwitchGamePadThread();\n"
   }
 ]

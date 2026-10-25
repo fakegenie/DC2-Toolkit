@@ -1,9 +1,12 @@
+#include "port_game.h"
 #include <limits.h>
 #include <math.h>
 #include <stddef.h>
 #include <stdint.h>
 
+PORT_GAME_BEGIN
 static uint32_t rand_next = 1;
+PORT_GAME_END
 
 void mwInit(void) {
 }

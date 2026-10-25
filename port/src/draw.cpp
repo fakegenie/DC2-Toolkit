@@ -112,9 +112,8 @@ struct TargetCopy {
     int height;
 };
 
+PORT_GAME_BEGIN
 GsRegisters gs;
-
-static int frame_target;
 static int frame_shift;
 static struct {
     u_int base;
@@ -124,6 +123,9 @@ static RenderVertex queue[3];
 static int queued;
 static mgCTexture source_texture;
 static const mgCTexture *source;
+PORT_GAME_END
+
+static int frame_target;
 static CachedTexture cache[CACHE_LIMIT];
 static TargetCopy copies[COPY_LIMIT];
 static u_int frame_number = 1;

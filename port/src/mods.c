@@ -123,7 +123,7 @@ void port_mods_frame_drawn(void) {
         if (mods[i]->frame_drawn) mods[i]->frame_drawn();
 }
 
-STATE_RESUMABLE void port_mods_frame_exit(void) {
+void port_mods_frame_exit(void) {
     for (int i = 0; i < mod_count; ++i)
         if (mods[i]->frame_exit) mods[i]->frame_exit();
 }
@@ -146,11 +146,6 @@ void port_mods_input(struct port_input_state *state) {
 void port_mods_audio(const short *samples, int frames) {
     for (int i = 0; i < mod_count; ++i)
         if (mods[i]->audio) mods[i]->audio(samples, frames);
-}
-
-void port_mods_host(void) {
-    for (int i = 0; i < mod_count; ++i)
-        if (mods[i]->host) mods[i]->host();
 }
 
 void port_mod_command(const char *name, PortCommandRun run, const char *help) {

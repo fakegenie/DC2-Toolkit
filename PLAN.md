@@ -138,10 +138,8 @@ written fresh. These are what it found to fix:
     `tools/test_native_prepare.py` and `port/tests/native_save.py` lack the usage docstring.
 16. **Disk:** `build/` is 33 GB, 22 GB of it `build/validation` (traces and captures). Once the
     work is committed, keep the save checkpoints and delete the traces.
-17. **Savestates on Linux.** `port/debug/savestate.cpp` finds the restored objects' data through
-    the Mach-O debug map and refuses elsewhere. Read the ELF `.symtab` instead (`STT_FILE` symbols
-    name each object's locals; globals through `build/port/objects.json`), and replace the
-    `mincore` walk of `0x10000000-0x20000000`, mostly unmapped on Linux, with the mapped pieces.
+17. **Savestates on Linux.** Done with the redesign (savestate entry 2 below): states keep the
+    `game_data`/`game_bss` sections, and a non-PIE binary never needs relocation.
 18. **`profile` on Linux.** `port/debug/core.cpp` runs macOS's `/usr/bin/sample`; use `perf`, or
     say it is missing.
 19. **Golden baselines are per GPU.** Lavapipe's pictures differ from Metal's by 1 to 3 per
@@ -173,29 +171,28 @@ What the fishing work kept needing, in the order to build it:
    `poke`, `symbols match=` and `watch` (a Watch tab in the debug window) read and write any global
    or file static through the executable's own symbol table. `status` also reports the player's
    and the camera's position.
-2. **Savestates that outlive a rebuild.** Done. Saving a state keeps the build that made it in
-   `build/port/builds/<layout>/` (10 MB each); loading it in a later build moves every word that
-   points into the old image to the same symbol and offset in the new one. What made that exact:
-   - macOS links the image at `0x3E91_0000_0000`, so a host pointer's high half is a value PS2
-     data never holds (at the old `0x1_0000_0000` any `{n, 1}` int pair looked like a pointer and
-     got moved, which showed up as seams on walls).
-   - Engine data sits in its own segment, `__PS2RAM`; restored port files' data (with
-     `memory.c`'s arena and `split_data.c`) sits in `__PS2PORT` and the rest of the port's data in
-     `__DATA` (`tools/port.py` `SEGMENTS`, `RESTORED_PORT_FILES`). States keep only the first
-     two, and engine data moves by symbol like any other.
-   - Functions that can be on a game stack when a state is taken (`mgEndFrame`,
-     `port_mods_frame_exit`, `debug_frame_exit`, `debug_savestate_frame`, `port_state_frame`) are
-     `STATE_RESUMABLE` (unoptimised), as the engine and `kernel.c` already are, so no register
-     holds a page address across the switch; a function on a stack that changed size is refused.
-     Only live return addresses count: a state lists the return slots on each thread's
-     frame-pointer chain (`port_kernel_returns`), and stale ones elsewhere in the stacks are moved
-     without complaint. Before that, any edit to a debug hook (`debug_fault_frame`) broke every
-     state through a leftover return address in a live frame's padding.
-   - States store the stack guard and swap it on load (it changes every launch).
-   Checked by saving in one build, rebuilding with code changed, port data added, and data added to
-   a restored port file, loading in each and playing the same input: every picture identical. A
-   clip recorded in one build replays in a rebuilt one with player and camera within 0.001. The
-   iOS app links at `0x1_0000_0000` with the same segments and still runs.
+2. **Savestates on every platform.** Done. A state loads only in the build that made it (the
+   header carries a build id hashed from every linked object), and that build can load it in any
+   later launch on macOS, Linux and iOS. What keeps it simple:
+   - States are taken only at the end of a main loop frame (`port_end_main_frame`), with every
+     other EE thread parked in `GamePadStep` and no interrupt running, so no stack is saved and no
+     return address has to survive. Nested loops that call `mgEndFrame` themselves (the START
+     pause, event movies, now-loading, the language select) never reach it; a request waits, and
+     the debug API gives up after 300 frames with a message.
+   - Everything the game owns sits in one place: `tools/port.py` renames engine objects' data and
+     BSS to segment `__GAME` (Mach-O) or sections `game_data`/`game_bss` (ELF), and port files put
+     their game variables between `PORT_GAME_BEGIN`/`PORT_GAME_END` (`port/include/port_game.h`).
+     The state is that range, found through the linker's section bounds, plus audio and the mesh
+     cache. Host handles (file descriptors, GPU objects, fibers) stay outside it.
+   - A launch at another address (iOS always, macOS with `DC2TK_ASLR=1`) moves every 8-byte word
+     that points into the old image by the slide: into code and constants only when 4-aligned,
+     into the arena only inside a used block, plus the live main-thread frames. In a dungeon
+     state that is 117,000 words; 35 lookalikes in one buffer and 14,800 stale pointers into dead
+     stack frames are moved or left without effect. Linux links without PIE and macOS starts the
+     same address unless ASLR is asked for, so they never move anything.
+   Checked: town and dungeon states load in a new process (macOS, ASLR macOS, iOS simulator
+   across launches, Linux) with identical pictures 120 frames later; a clip and a black box
+   replay in a new process with player and camera exact; a state from another build is refused.
 3. **A black box.** Done (`port/debug/blackbox.cpp`). The debug build keeps a savestate every 300
    frames (7 of them, about 190 MB in a town) plus each frame's input and trace, and writes the
    last 30 s or more as an ordinary clip on a crash (`crash-<time>`), on F9 or on `blackbox`
@@ -222,7 +219,7 @@ What the fishing work kept needing, in the order to build it:
    Found on the way: the engine's `rand` was the host C library's, whose state no savestate holds,
    so every replay that drew random numbers after a load strayed (a dungeon floor loaded from a
    state came out different). `port/src/runtime.c` now has the PS2's own newlib `rand`
-   (next * 1103515245 + 12345, low 31 bits, starting at 1) and `runtime` is restored with states.
+   (next * 1103515245 + 12345, low 31 bits, starting at 1) and its seed sits in the game data states keep.
    Random numbers now follow the PS2 sequence, so input recorded before this may play differently.
 
 ### Gates only the user can run
@@ -354,8 +351,8 @@ What the fishing work kept needing, in the order to build it:
   second, 0.3 µs each, so no asm is needed); the binary is non-PIE at `0x400000`, with data and
   BSS at `0x727000-0x9a77000` in a memfd mirrored at `+0x20000000` and `+0x30000000`, and the EE
   registers, GS registers and scratchpad mapped at their PS2 addresses; shaders take the SPIR-V
-  path (`tools/port_shaders.py` there reproduces `shaders.h` byte for byte). Savestates and
-  `profile` are macOS-only (fixes 17, 18).
+  path (`tools/port_shaders.py` there reproduces `shaders.h` byte for byte). `profile` is
+  macOS-only (fix 18).
 - **Kazarov's image** `kazarov-dev:01b70a4a6008` is made by `dc2tk engine` when missing (a few
   minutes).
 - **The scratch folder under `/tmp` is cleared by a reboot.**

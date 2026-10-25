@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "cdvd.h"
+#include "port_game.h"
 #include "sce/sifdev.h"
 #include "port_kernel.h"
 #include "port_overrides.h"
@@ -94,7 +95,6 @@ enum { DATA_INDEX_LIMIT = 1024 * 1024 };
 static int disc = -1;
 static uint64_t disc_size;
 static struct sceCdlFILE root;
-static int cd_error;
 static char missing_paths[MISSING_LIMIT][1024];
 static size_t missing_count;
 static union {
@@ -105,12 +105,15 @@ static uint32_t archive_size;
 static uint32_t archive_sector;
 static uint32_t archive_last_sector;
 static int archive_checked;
+PORT_GAME_BEGIN
+static int cd_error;
 static struct {
     int used;
     struct sceCdlFILE file;
     uint32_t position;
     int override;
 } handles[HANDLE_LIMIT];
+PORT_GAME_END
 
 static uint64_t sector_offset(uint32_t sector) {
     return (uint64_t)sector * CDVD_SECTOR_SIZE;

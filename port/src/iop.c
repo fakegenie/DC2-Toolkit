@@ -1,5 +1,6 @@
 #include <stddef.h>
 #include "audio.h"
+#include "port_game.h"
 
 typedef struct sceSifRpcHeader sceSifRpcHeader;
 typedef struct sceSifServeData sceSifServeData;
@@ -7,7 +8,9 @@ typedef struct sceSifServeData sceSifServeData;
 #include "sce/sifdma.h"
 #include "sce/libsdr.h"
 
+PORT_GAME_BEGIN
 static int module_id;
+PORT_GAME_END
 
 void sceSifInitRpc(int mode) {}
 

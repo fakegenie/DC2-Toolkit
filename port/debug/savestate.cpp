@@ -8,7 +8,7 @@
 #include <ctime>
 #include <sys/stat.h>
 
-enum { SLOT_LIMIT = 8, THUMB_WIDTH = STATE_THUMB_WIDTH, THUMB_HEIGHT = STATE_THUMB_HEIGHT, SAVE = STATE_SAVE,
+enum { WAIT_LIMIT = 300, SLOT_LIMIT = 8, THUMB_WIDTH = STATE_THUMB_WIDTH, THUMB_HEIGHT = STATE_THUMB_HEIGHT, SAVE = STATE_SAVE,
        LOAD = STATE_LOAD };
 
 typedef PortStateHeader Header;
@@ -26,6 +26,7 @@ typedef struct {
     int kind;
     int slot;
     int client;
+    uint32_t asked;
     char path[512];
 } Request;
 
@@ -44,8 +45,6 @@ static const char *loop_name(int loop) {
 }
 
 static const Header *slot_header(const Slot *slot) { return port_state_header(&slot->state); }
-
-extern "C" void debug_host(void) {}
 
 static void show_thumbnail(Slot *slot) {
     if (!slot->state.data || slot->shown) return;
@@ -141,12 +140,15 @@ static void finish_request(void) {
     debug_finish(&reply);
 }
 
-STATE_RESUMABLE void debug_savestate_frame(void) {
+void debug_savestate_frame(void) {
     if (debug_frame_total == frame_seen) pause_hook = 1;
     frame_seen = debug_frame_total;
     if (!request.kind) return;
     if (port_state_pending()) port_state_frame();
+    if (port_state_pending() && debug_frame_total - request.asked > WAIT_LIMIT)
+        port_state_cancel("the game stayed in a pause screen, movie or loading screen, where savestates cannot stop");
     if (!port_state_pending()) finish_request();
+    else if (debug_paused && debug_steps == 0) debug_steps = 1;
 }
 
 static int request_state(const DebugArgs *args, DebugReply *reply, int kind) {
@@ -154,19 +156,18 @@ static int request_state(const DebugArgs *args, DebugReply *reply, int kind) {
     const char *path = debug_arg(args, "path", "");
     if (slot < 0 || slot >= SLOT_LIMIT) return debug_fail(reply, "slot must be 0 to %d", SLOT_LIMIT - 1);
     if (request.kind) return debug_fail(reply, "a savestate is already waiting for the end of the frame");
-    if (port_state_ready()) return debug_fail(reply, "%s", port_state_ready());
     if (strlen(path) >= sizeof request.path) return debug_fail(reply, "path is too long");
     if (kind == LOAD && *path) {
         const char *problem = read_state(&slots[slot], path);
         if (problem) return debug_fail(reply, "%s", problem);
     }
     if (kind == LOAD && !slots[slot].state.data) return debug_fail(reply, "slot %ld is empty", slot);
-    port_state_force(kind == LOAD && debug_arg_int(args, "force", 0));
     if (!port_state_request(kind, &slots[slot].state)) return debug_fail(reply, "%s", port_state_problem());
     if (kind == LOAD) debug_blackbox_clear();
     request.kind = kind;
     request.slot = (int)slot;
     request.client = reply->client;
+    request.asked = debug_frame_total;
     snprintf(request.path, sizeof request.path, "%s", kind == SAVE ? path : "");
     if (debug_paused && debug_steps == 0 && !pause_hook) debug_steps = 1;
     reply->deferred = 1;
@@ -174,10 +175,11 @@ static int request_state(const DebugArgs *args, DebugReply *reply, int kind) {
 }
 
 int debug_savestate_into(PortState *state) {
-    if (request.kind || port_state_ready() || !port_state_request(SAVE, state)) return 0;
+    if (request.kind || !port_state_possible() || !port_state_request(SAVE, state)) return 0;
     request.kind = SAVE;
     request.slot = -1;
     request.client = DEBUG_CLIENT_NONE;
+    request.asked = debug_frame_total;
     request.path[0] = 0;
     return 1;
 }
@@ -204,11 +206,10 @@ static int command_savestates(const DebugArgs *args, DebugReply *reply) {
 }
 
 extern const DebugCommand debug_savestate_commands[] = {
-    {"save", command_save, 1, "save the whole game into slot=N (0-7) at the end of the frame; path=name also writes "
-                              "build/port/savestates/name"},
-    {"load", command_load, 1, "load slot=N at the end of the frame; path=name first reads build/port/savestates/name; a state "
-                              "from another kept build is moved into this one, and force=1 loads it even when code "
-                              "or data it uses changed size"},
+    {"save", command_save, 1, "save the whole game into slot=N (0-7) at the end of the next main loop frame; path=name "
+                              "also writes build/port/savestates/name"},
+    {"load", command_load, 1, "load slot=N at the end of the next main loop frame; path=name first reads "
+                              "build/port/savestates/name, which only this build can load"},
     {"savestates", command_savestates, 1, "list the savestate slots"},
     {NULL, NULL, 0, NULL},
 };
@@ -221,15 +222,11 @@ static void describe_age(char *text, size_t size, int64_t taken) {
 }
 
 void debug_savestate_panel(void) {
-    if (port_state_ready()) {
-        ImGui::TextWrapped("savestates are unavailable: %s", port_state_ready());
-        return;
-    }
     ImGui::SetNextItemWidth(260);
     ImGui::InputText("file", path_text, sizeof path_text);
     ImGui::SameLine();
     ImGui::TextDisabled("under build/port/savestates");
-    if (request.kind) ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "%s slot %d at the end of the frame",
+    if (request.kind) ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "%s slot %d at the end of a main loop frame",
                                          request.kind == SAVE ? "saving" : "loading", request.slot);
     else ImGui::TextUnformatted(message[0] ? message : "no savestate taken yet");
     if (!ImGui::BeginTable("savestates", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders)) return;

@@ -1,4 +1,5 @@
 #include "spu2.h"
+#include "port_game.h"
 #include "spu2_gaussian.h"
 #include "spu2_reverb_presets.h"
 #include <string.h>
@@ -24,6 +25,7 @@ static const unsigned route_dry[SPU_CHANNELS] = {SPU_ROUTE_DRY_LEFT, SPU_ROUTE_D
 static const unsigned route_wet[SPU_CHANNELS] = {SPU_ROUTE_WET_LEFT, SPU_ROUTE_WET_RIGHT};
 static const unsigned core_mixer_bits[SPU_CORES] = {SPU_MIX_ALL & ~SPU_MIX_EXTERNAL, SPU_MIX_ALL};
 
+PORT_GAME_BEGIN
 static unsigned char ram[SPU_RAM_SIZE];
 static struct {
     unsigned address, start, loop, pitch, phase, index, flags;
@@ -45,6 +47,7 @@ static struct {
     int16_t down[SPU_CHANNELS][2 * REVERB_FILTER_TAPS], up[SPU_CHANNELS][2 * REVERB_FILTER_TAPS];
     unsigned filter_cursor;
 } effects[SPU_CORES];
+PORT_GAME_END
 
 static int clamp(int value) {
     if (value > INT16_MAX) return INT16_MAX;

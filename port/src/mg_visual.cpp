@@ -38,7 +38,9 @@ struct VisualDraw {
 static std::unordered_map<const mgCFace *, FaceMesh> face_meshes;
 static u_int mesh_frame;
 static std::vector<VisualDraw> sorted_draws;
+PORT_GAME_BEGIN
 static VisualDraw current;
+PORT_GAME_END
 
 static u_char colour_byte(float value) {
     float scaled = value * 128.0f;

@@ -189,13 +189,12 @@ static void run_action(int kind) {
 static const char *finish_message(void) {
     const char *problem = port_state_problem();
     if (problem && strstr(problem, "movie")) return "Can't save during a movie";
-    if (problem && strstr(problem, "force=1")) return "This state is from an older version";
+    if (problem && strstr(problem, "another build")) return "This state is from an older version";
     if (problem) return quick_kind == STATE_SAVE ? "The state couldn't be saved" : "The state couldn't be loaded";
     if (quick_kind == STATE_LOAD) return "State loaded";
     char path[1100];
     quick_path(path, sizeof path);
     if (port_state_write(&quick, path)) return "The state couldn't be written to the saves folder";
-    port_state_drop_builds();
     quick_stored = 1;
     return "State saved";
 }

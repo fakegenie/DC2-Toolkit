@@ -6,7 +6,9 @@
 
 extern "C" int port_screen_width(void);
 
+PORT_GAME_BEGIN
 static float clip_corners[8][4];
+PORT_GAME_END
 
 static void corner_bounds(float corners[8][4], float *high, float *low) {
     for (int lane = 0; lane < 4; lane++) {

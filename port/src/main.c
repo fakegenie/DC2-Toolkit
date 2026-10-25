@@ -8,7 +8,6 @@
 #include "port_overrides.h"
 #include "render.h"
 #include "launcher.h"
-#include "port_state.h"
 #include "touch.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,19 +34,9 @@ static void enter_documents(void) {
 }
 
 static int touch_default(void) { return TOUCH_SMART; }
-
-static void choose_builds_folder(void) {
-    char *folder = SDL_GetPrefPath("DC2 Toolkit", "Dark Chronicle");
-    if (!folder) return;
-    char path[1024];
-    snprintf(path, sizeof path, "%sbuilds", folder);
-    port_state_builds(path);
-    SDL_free(folder);
-}
 #else
 static void enter_documents(void) {}
 static void port_ios_saves(void) {}
-static void choose_builds_folder(void) {}
 static int touch_default(void) { return TOUCH_OFF; }
 #endif
 
@@ -145,7 +134,6 @@ int main(int argc, char **argv) {
     if (!port_cdvd_init(disc) || !port_executable_check() || !port_split_data_init()) return 1;
     if (!port_present_init(1)) return 1;
     port_ios_saves();
-    choose_builds_folder();
     atexit(port_present_close);
     if (!audio_init(!mute)) return 1;
     atexit(audio_shutdown);

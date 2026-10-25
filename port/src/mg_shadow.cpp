@@ -7,7 +7,9 @@
 #include <cstring>
 #include <vector>
 
+PORT_GAME_BEGIN
 ShadowSetup shadow_setup;
+PORT_GAME_END
 
 PORT_OVERRIDE int mgCShadowMDT::CreateFacePacket(u_int *packet, mgCFace *face) {
     (void)packet;

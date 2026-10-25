@@ -14,6 +14,7 @@ typedef struct {
 } PortArenaSpan;
 
 size_t port_arena_spans(const unsigned char *saved, size_t size, uint64_t saved_at, PortArenaSpan *spans, size_t limit);
+void port_arena_bounds(uint64_t *start, uint64_t *size);
 
 #ifdef __cplusplus
 }

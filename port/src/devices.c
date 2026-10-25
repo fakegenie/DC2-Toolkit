@@ -1,10 +1,13 @@
 #include <string.h>
 #include "sce/libpad.h"
 #include "input.h"
+#include "port_game.h"
 
 enum { PAD_PORTS = 2 };
 
+PORT_GAME_BEGIN
 static unsigned char pad_open[PAD_PORTS];
+PORT_GAME_END
 
 int scePadInit(int mode) {
     memset(pad_open, 0, sizeof(pad_open));
