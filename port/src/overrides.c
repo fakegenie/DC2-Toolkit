@@ -114,7 +114,7 @@ const char *port_data_folder(void) {
     size_t length = base ? strlen(base) : 0;
     size_t suffix = strlen(bundle_resources);
     int bundled = length > suffix && !strcmp(base + length - suffix, bundle_resources);
-    char *preferred = bundled ? SDL_GetPrefPath("DC2 Toolkit", "Dark Chronicle") : NULL;
+    char *preferred = bundled ? SDL_GetPrefPath("DC2 Toolkit", "DC2") : NULL;
     snprintf(data, sizeof data, "%s", preferred ? preferred : base ? base : "");
     SDL_free(preferred);
     return data;

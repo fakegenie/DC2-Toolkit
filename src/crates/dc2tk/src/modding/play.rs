@@ -19,7 +19,7 @@ pub fn run_native(
     common: &Common,
 ) -> Result<ExitCode> {
     let root = crate::files::root();
-    let mut binary = root.join("build").join("port").join("darkchronicle");
+    let mut binary = root.join("build").join("port").join("dc2");
     let name =
         set.and_then(Path::file_stem).map_or_else(|| "none".to_string(), |stem| stem.to_string_lossy().into_owned());
     let folder = root.join("build").join("sets").join(name);
@@ -27,7 +27,7 @@ pub fn run_native(
     if let Some(set) = set {
         let (built, executable) = build::built_game_files(source, disc, &[], Some(set), mods, common)?;
         if executable {
-            binary = folder.join("darkchronicle");
+            binary = folder.join("dc2");
             build::build_native_binary(source, disc, set, mods, common, &binary)?;
         }
         let (written, removed) = watch::write_overlay(&overrides, &built)?;

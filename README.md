@@ -1,7 +1,7 @@
 # DC2-Toolkit
 
 <p align="center">
-  <img src="docs/images/header.png" alt="A Dark Chronicle town map with its trigger points, beside decompiled scripts" width="830">
+  <img src="docs/images/header.png" alt="A DC2 town map with its trigger points, beside decompiled scripts" width="830">
 </p>
 
 <p align="center">
@@ -10,7 +10,7 @@
   <a href="https://github.com/fakegenie/DC2-Toolkit/releases"><b>Download Releases</b></a>
 </p>
 
-**DC2-Toolkit / dc2tk** is a set of tools for modifying the PS2 game Dark Chronicle/Dark Cloud 2. With them you can extract or modify almost everything in the game and even create total conversions. We support extracting, converting and injecting:
+**DC2-Toolkit / dc2tk** is a set of tools for modifying the PS2 game DC2. With them you can extract or modify almost everything in the game and even create total conversions. We support extracting, converting and injecting:
 
 - **Scripting** DC2 heavily uses its own scripting language for almost all behaviour in the game. dc2tk can extract all the game's scripts as human readable C code, and compile them back into the game's original bytecode format.
 - **Mapping** All game maps can be extracted to modern formats, and we provide a Blender plugin to help editing/creating them and a compiler to convert them to the original DC2 Format.
@@ -35,7 +35,7 @@ The goal of this project is to support converting from and to the original game 
 
 ## Playing on PC
 
-Each release also has a native port of the game for macOS (Apple silicon, macOS 13 or later), Linux (x86-64) and Windows (x64, Windows 10 1903 or later): `dark-chronicle-<version>-macos-arm64.zip` holds `Dark Chronicle.app`, `dark-chronicle-<version>-linux-x64.tar.gz` holds `darkchronicle`, and `dark-chronicle-<version>-windows-x64.zip` holds `Dark Chronicle.exe`. It contains no game data and plays from a disc image of your own PAL copy, which you pick in its launcher, where built mods (`.dc2pak`) are turned on and off too. The app is not notarised: the first time, open it from System Settings, Privacy & Security, Open Anyway. The Windows exe is not signed either: when Windows says it protected your PC, choose More info, Run anyway. The `README.md` in the download covers the controls and where saves and settings are kept. `dark-chronicle-<version>-ios.ipa` is the same for iPhone and iPad (iOS 17 or later): it is unsigned, so install it with a sideloading tool such as AltStore or Sideloadly, which signs it with your own Apple ID. `dark-chronicle-<version>-android-arm64.apk` is the same for 64-bit Android phones and tablets (Android 10 or later, with Vulkan): allow installing apps from your browser or file manager and open it, and later releases install over it.
+Each release also has a native port of the game for macOS (Apple silicon, macOS 13 or later), Linux (x86-64) and Windows (x64, Windows 10 1903 or later): `dc2-<version>-macos-arm64.zip` holds `DC2.app`, `dc2-<version>-linux-x64.tar.gz` holds `dc2`, and `dc2-<version>-windows-x64.zip` holds `DC2.exe`. It contains no game data and plays from a disc image of your own PAL copy, which you pick in its launcher, where built mods (`.dc2pak`) are turned on and off too. The app is not notarised: the first time, open it from System Settings, Privacy & Security, Open Anyway. The Windows exe is not signed either: when Windows says it protected your PC, choose More info, Run anyway. The `README.md` in the download covers the controls and where saves and settings are kept. `dc2-<version>-ios.ipa` is the same for iPhone and iPad (iOS 17 or later): it is unsigned, so install it with a sideloading tool such as AltStore or Sideloadly, which signs it with your own Apple ID. `dc2-<version>-android-arm64.apk` is the same for 64-bit Android phones and tablets (Android 10 or later, with Vulkan): allow installing apps from your browser or file manager and open it, and later releases install over it.
 
 ## Notes
 
@@ -48,4 +48,4 @@ Each release also has a native port of the game for macOS (Apple silicon, macOS 
 
 ## Licence
 
-dc2tk, its SDK, definitions, Blender add-on, documentation and the port's own code (`port/`) are under the [MIT licence](LICENCE). Dark Chronicle and its content (code, art, text, audio, and screenshots of it such as `docs/images/header.png`) belong to Level-5 and Sony Interactive Entertainment and are not covered by it. The port's engine is [ChronicleTwo](https://github.com/TheMoonPeople/ChronicleTwo)'s decompilation, used with their permission and not covered by the MIT licence either ([port/package/NOTICE.md](port/package/NOTICE.md)). Every release zip carries `THIRD-PARTY-LICENCES.md`: for dc2tk the licences of the crates built into it, and for the port those of SDL3 (zlib), FFmpeg's MPEG-2 decoder (LGPL 2.1: replaceable shared libraries on macOS and Linux, linked into the iOS and Android apps, whose complete source here lets you relink them), the Manrope font (OFL), stb_truetype and Kazarov's libvu0 (MIT).
+dc2tk, its SDK, definitions, Blender add-on, documentation and the port's own code (`port/`) are under the [MIT licence](LICENCE). DC2 and its content (code, art, text, audio, and screenshots of it such as `docs/images/header.png`) belong to Level-5 and Sony Interactive Entertainment and are not covered by it. The port's engine is [ChronicleTwo](https://github.com/TheMoonPeople/ChronicleTwo)'s decompilation, used with their permission and not covered by the MIT licence either ([port/package/NOTICE.md](port/package/NOTICE.md)). Every release zip carries `THIRD-PARTY-LICENCES.md`: for dc2tk the licences of the crates built into it, and for the port those of SDL3 (zlib), FFmpeg's MPEG-2 decoder (LGPL 2.1: replaceable shared libraries on macOS and Linux, linked into the iOS and Android apps, whose complete source here lets you relink them), the Manrope font (OFL), stb_truetype and Kazarov's libvu0 (MIT).

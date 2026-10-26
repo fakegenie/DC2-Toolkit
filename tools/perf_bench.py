@@ -6,7 +6,7 @@ port can be compared.
     python3 -I tools/perf_bench.py --scenes genie   only the scenes whose names contain these words
     python3 -I tools/perf_bench.py --frames 500     record more frames per scene (default 250)
 
-It runs its own copy of build/port/darkchronicle-debug on DC2TK_DEBUG_PORT 7792 with throwaway saves, warps
+It runs its own copy of build/port/dc2-debug on DC2TK_DEBUG_PORT 7792 with throwaway saves, warps
 to each scene, lets it settle, then reads the per-frame timings. Busy time is the frame time less the wait
 for the next field, and cpu is the process's CPU time per game frame across all its threads. Results go to build/port/perf-bench.json and are compared with
 the previous run's.
@@ -24,7 +24,7 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-BINARY = ROOT / "build" / "port" / "darkchronicle-debug"
+BINARY = ROOT / "build" / "port" / "dc2-debug"
 RESULTS = ROOT / "build" / "port" / "perf-bench.json"
 PORT = 7792
 SCENES = [

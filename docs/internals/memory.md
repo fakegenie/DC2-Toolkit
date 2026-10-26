@@ -1,6 +1,6 @@
 # Memory budgets
 
-Dark Chronicle loads maps, character models, textures, event scripts, and sound banks into fixed-size memory buffers and stacks. This page documents each runtime memory budget, where the engine configures it, the largest asset allocation on the PAL disc, and the remaining headroom.
+DC2 loads maps, character models, textures, event scripts, and sound banks into fixed-size memory buffers and stacks. This page documents each runtime memory budget, where the engine configures it, the largest asset allocation on the PAL disc, and the remaining headroom.
 - For how `dc2tk build` checks modified files against these budgets, see [staying within memory](../guide/memory.md).
 - For record-count limits in gameplay data tables, see [game data](data.md).
 

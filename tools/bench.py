@@ -40,7 +40,7 @@ def request(command, arguments, timeout=300):
 
 
 def launch(front, flags):
-    binary = ROOT / "build" / "port" / "darkchronicle-debug"
+    binary = ROOT / "build" / "port" / "dc2-debug"
     if not binary.exists():
         sys.exit("build it first: python3 -I tools/port.py --movies --debug")
     log = open(ROOT / "build" / "port" / "bench.log", "w")

@@ -1,4 +1,4 @@
-//! Dark Chronicle's scripts: the .stb format, its text assembly, the native tables, decompiling
+//! DC2's scripts: the .stb format, its text assembly, the native tables, decompiling
 //! to C and compiling back, and the tools a mod is built with.
 
 // The modules by area. Those only the crate itself uses are pub(crate); the others are what

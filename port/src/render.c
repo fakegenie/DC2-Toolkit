@@ -588,7 +588,7 @@ int render_init(void) {
     wake_event = SDL_RegisterEvents(1);
     timed_ready = SDL_CreateCondition();
     timer = SDL_CreateThread(time_fences, "gpu timer", NULL);
-    window = SDL_CreateWindow("Dark Chronicle", window_width, window_height,
+    window = SDL_CreateWindow("DC2", window_width, window_height,
                               WINDOW_FLAGS | (fullscreen ? SDL_WINDOW_FULLSCREEN : 0));
     if (!window || !SDL_ClaimWindowForGPUDevice(device, window)) render_error("window");
     screens[SCREEN_GAME].window = window;

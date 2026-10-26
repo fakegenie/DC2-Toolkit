@@ -9,7 +9,7 @@
 # with the licences of the crates built into that platform's executable
 # (tools/third_party_licences.py). The add-on's zip is a Blender extension: blender_manifest.toml
 # at its root, so Blender's Install from Disk takes it as it is, with the LICENCE beside it. The port's packages
-# (tools/port_package.py) hold Dark Chronicle.app, the Linux binary or the Windows exe with SDL3 and FFmpeg's MPEG-2 decoder built from
+# (tools/port_package.py) hold DC2.app, the Linux binary or the Windows exe with SDL3 and FFmpeg's MPEG-2 decoder built from
 # pinned sources (tools/port_sdk.py), and no game data: players supply their own disc image.
 #
 #   git tag v1.0.0 && git push origin v1.0.0
@@ -117,7 +117,7 @@ jobs:
           if-no-files-found: error
 
   port:
-    name: Dark Chronicle (${{ matrix.platform }})
+    name: DC2 (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: true
@@ -183,12 +183,12 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: dark-chronicle-${{ matrix.platform }}
-          path: build/port/package/dark-chronicle-*.*
+          name: dc2-${{ matrix.platform }}
+          path: build/port/package/dc2-*.*
           if-no-files-found: error
 
   ios:
-    name: Dark Chronicle (iOS)
+    name: DC2 (iOS)
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -220,12 +220,12 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: dark-chronicle-ios
-          path: build/port/package/dark-chronicle-*.ipa
+          name: dc2-ios
+          path: build/port/package/dc2-*.ipa
           if-no-files-found: error
 
   android:
-    name: Dark Chronicle (Android)
+    name: DC2 (Android)
     runs-on: ubuntu-22.04
     env:
       NDK_VERSION: 27.1.12297006
@@ -270,8 +270,8 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: dark-chronicle-android
-          path: build/port/package/dark-chronicle-*.apk
+          name: dc2-android
+          path: build/port/package/dc2-*.apk
           if-no-files-found: error
 
   blender-plugin:

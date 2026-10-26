@@ -2,8 +2,8 @@ schema_version = "1.0.0"
 
 id = "dc2tk_maps"
 version = "1.0.0"
-name = "Dark Chronicle Maps (dc2tk)"
-tagline = "Edit Dark Chronicle maps exported by dc2tk, export them into a mod"
+name = "DC2 Maps (dc2tk)"
+tagline = "Edit DC2 maps exported by dc2tk, export them into a mod"
 maintainer = "DC2-Toolkit"
 type = "add-on"
 

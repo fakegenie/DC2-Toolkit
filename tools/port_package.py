@@ -1,8 +1,8 @@
 """Run python3 -I tools/port_package.py [--version NAME] [--ios | --android] to build the port with movies and pack it for
-players into build/port/package: Dark Chronicle.app in a zip on macOS, a folder with darkchronicle and its libraries in
-a tar.gz on Linux, or a folder with Dark Chronicle.exe and its DLLs in a zip on Windows, each beside the README, NOTICE,
+players into build/port/package: DC2.app in a zip on macOS, a folder with dc2 and its libraries in
+a tar.gz on Linux, or a folder with DC2.exe and its DLLs in a zip on Windows, each beside the README, NOTICE,
 LICENCE and THIRD-PARTY-LICENCES.md. Build the SDK first with
-python3 -I tools/port_sdk.py. With --ios it packs an unsigned DarkChronicle.app for iPhone and iPad in an .ipa, with the
+python3 -I tools/port_sdk.py. With --ios it packs an unsigned DC2.app for iPhone and iPad in an .ipa, with the
 NOTICE and licences inside the app, from the SDKs python3 -I tools/ios_sdk.py builds. With --android it packs an arm64
 APK, signed with port/android's public key and with the NOTICE and licences in its assets, from the SDKs
 python3 -I tools/android_sdk.py builds."""
@@ -27,10 +27,10 @@ ANDROID_SDK = OUT / "android-sdk"
 ANDROID = ROOT / "port" / "android"
 ANDROID_MINIMUM = 29
 ANDROID_TARGET = 35
-KEY = {"store": ANDROID / "dark-chronicle.keystore", "alias": "dark-chronicle", "password": "dark-chronicle"}
+KEY = {"store": ANDROID / "dc2.keystore", "alias": "dc2", "password": "dc2"}
 PACKAGE = OUT / "package"
 DARWIN = sys.platform == "darwin"
-IDENTIFIER = "dc2toolkit.darkchronicle"
+IDENTIFIER = "dc2toolkit.dc2"
 MACOS_MINIMUM = "13.0"
 ICON_SIZES = {"16x16": 16, "16x16@2x": 32, "32x32": 32, "32x32@2x": 64, "128x128": 128, "128x128@2x": 256,
               "256x256": 256, "256x256@2x": 512, "512x512": 512}
@@ -90,7 +90,7 @@ def licences(sdk, ffmpeg):
         ("Kazarov's libvu0", "MIT licence, from ChronicleTwo's Kazarov toolchain.",
          (ROOT / "engine/tools/kazarov/LICENSE").read_text()),
     ]
-    lines = ["# Third-party licences", "", "The Dark Chronicle port contains or ships with the following."]
+    lines = ["# Third-party licences", "", "The DC2 port contains or ships with the following."]
     for name, about, text in sections:
         lines += ["", f"## {name}", "", about, "", "```", text.strip(), "```"]
     return "\n".join(lines) + "\n"
@@ -121,12 +121,12 @@ def bundle_version(name):
 def app_info(name):
     return {
         "CFBundleDevelopmentRegion": "en",
-        "CFBundleDisplayName": "Dark Chronicle",
-        "CFBundleExecutable": "DarkChronicle",
+        "CFBundleDisplayName": "DC2",
+        "CFBundleExecutable": "DC2",
         "CFBundleIconFile": "icon",
         "CFBundleIdentifier": IDENTIFIER,
         "CFBundleInfoDictionaryVersion": "6.0",
-        "CFBundleName": "Dark Chronicle",
+        "CFBundleName": "DC2",
         "CFBundlePackageType": "APPL",
         "CFBundleShortVersionString": bundle_version(name),
         "CFBundleVersion": bundle_version(name),
@@ -138,14 +138,14 @@ def app_info(name):
 
 def macos(name):
     subprocess.run([sys.executable, "-I", str(ROOT / "tools/port.py"), "--movies"], check=True)
-    folder = PACKAGE / f"dark-chronicle-{name}-macos-arm64"
+    folder = PACKAGE / f"dc2-{name}-macos-arm64"
     folder.mkdir(parents=True)
     shutil.copyfile(ROOT / "port/package/README.md", folder / "README.md")
     notices(folder, SDK, shared_ffmpeg())
-    contents = folder / "Dark Chronicle.app" / "Contents"
-    executable = contents / "MacOS" / "DarkChronicle"
+    contents = folder / "DC2.app" / "Contents"
+    executable = contents / "MacOS" / "DC2"
     executable.parent.mkdir(parents=True)
-    shutil.copyfile(OUT / "darkchronicle", executable)
+    shutil.copyfile(OUT / "dc2", executable)
     executable.chmod(0o755)
     subprocess.run(["strip", str(executable)], check=True)
     copy_libraries(executable, contents / "Frameworks")
@@ -162,12 +162,12 @@ def macos(name):
 
 def linux(name):
     subprocess.run([sys.executable, "-I", str(ROOT / "tools/port.py"), "--movies"], check=True)
-    folder = PACKAGE / f"dark-chronicle-{name}-linux-x64"
+    folder = PACKAGE / f"dc2-{name}-linux-x64"
     folder.mkdir(parents=True)
     shutil.copyfile(ROOT / "port/package/README.md", folder / "README.md")
     notices(folder, SDK, shared_ffmpeg())
-    executable = folder / "darkchronicle"
-    shutil.copyfile(OUT / "darkchronicle", executable)
+    executable = folder / "dc2"
+    shutil.copyfile(OUT / "dc2", executable)
     executable.chmod(0o755)
     subprocess.run(["strip", str(executable)], check=True)
     copy_libraries(executable, folder / "lib")
@@ -183,12 +183,12 @@ def windows(name):
     subprocess.run([sys.executable, "-I", str(ROOT / "tools/port.py"), "--movies"], check=True)
     built = OUT / "windows"
     strip = OUT / "llvm-mingw" / "bin" / "llvm-strip.exe"
-    folder = PACKAGE / f"dark-chronicle-{name}-windows-x64"
+    folder = PACKAGE / f"dc2-{name}-windows-x64"
     folder.mkdir(parents=True)
     shutil.copyfile(ROOT / "port/package/README.md", folder / "README.md")
     notices(folder, SDK, shared_ffmpeg())
-    executable = folder / "Dark Chronicle.exe"
-    shutil.copyfile(built / "darkchronicle.exe", executable)
+    executable = folder / "DC2.exe"
+    shutil.copyfile(built / "dc2.exe", executable)
     subprocess.run([str(strip), str(executable)], check=True)
     for library in sorted(built.glob("*.dll")):
         shutil.copyfile(library, folder / library.name)
@@ -202,14 +202,14 @@ def windows(name):
 def ios(name):
     subprocess.run([sys.executable, "-I", str(ROOT / "tools/port.py"), "--ios", "device"], check=True)
     payload = PACKAGE / "Payload"
-    app = payload / "DarkChronicle.app"
-    shutil.copytree(OUT / "ios-device" / "DarkChronicle.app", app)
-    subprocess.run(["xcrun", "strip", str(app / "DarkChronicle")], check=True)
+    app = payload / "DC2.app"
+    shutil.copytree(OUT / "ios-device" / "DC2.app", app)
+    subprocess.run(["xcrun", "strip", str(app / "DC2")], check=True)
     info = plistlib.loads((app / "Info.plist").read_bytes())
     info["CFBundleShortVersionString"] = info["CFBundleVersion"] = bundle_version(name)
     (app / "Info.plist").write_bytes(plistlib.dumps(info, fmt=plistlib.FMT_BINARY))
     notices(app, IOS_SDK, static_ffmpeg("ios_sdk.py"))
-    archive = PACKAGE / f"dark-chronicle-{name}-ios.ipa"
+    archive = PACKAGE / f"dc2-{name}-ios.ipa"
     subprocess.run(["ditto", "-c", "-k", "--norsrc", "--noextattr", "--keepParent", str(payload), str(archive)], check=True)
     shutil.rmtree(payload)
     return archive
@@ -264,7 +264,7 @@ def android(name):
             apk.write(library, f"lib/arm64-v8a/{library.name}", compress_type=zipfile.ZIP_STORED)
     aligned = work / "aligned.apk"
     subprocess.run([str(tools / "zipalign"), "-P", "16", "-f", "4", str(packed), str(aligned)], check=True)
-    archive = PACKAGE / f"dark-chronicle-{name}-android-arm64.apk"
+    archive = PACKAGE / f"dc2-{name}-android-arm64.apk"
     subprocess.run([str(tools / "apksigner"), "sign", "--ks", str(KEY["store"]), "--ks-key-alias", KEY["alias"],
                     "--ks-pass", f"pass:{KEY['password']}", "--out", str(archive), str(aligned)], check=True)
     archive.with_name(archive.name + ".idsig").unlink(missing_ok=True)

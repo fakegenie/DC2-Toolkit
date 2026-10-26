@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Talks to a running build/port/darkchronicle-debug through its localhost API.
+"""Talks to a running build/port/dc2-debug through its localhost API.
 
     python3 -I tools/debug.py help                       list the game's commands
     python3 -I tools/debug.py status
@@ -42,7 +42,7 @@ def request(command, arguments, timeout=120):
 
 
 def launch(extra):
-    binary = ROOT / "build" / "port" / "darkchronicle-debug"
+    binary = ROOT / "build" / "port" / "dc2-debug"
     if not binary.exists():
         sys.exit("build it first: python3 -I tools/port.py --movies --debug")
     log = open(ROOT / "build" / "port" / "debug-run.log", "w")

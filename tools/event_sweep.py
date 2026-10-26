@@ -8,7 +8,7 @@ which ones crash or hang.
     python3 -I tools/event_sweep.py --frames 1800   play each event for longer (default 900 fields)
     python3 -I tools/event_sweep.py --keep          stop at the first hang and leave that game running
 
-It runs its own copy of build/port/darkchronicle-debug on DC2TK_DEBUG_PORT 7791 with throwaway saves, warps
+It runs its own copy of build/port/dc2-debug on DC2TK_DEBUG_PORT 7791 with throwaway saves, warps
 the way the debug menu does (town map and event, or dungeon floor and event), presses cross now and then to
 get through dialogue, and writes build/port/event-sweep.json plus the top of each crash's backtrace. It runs
 with DC2TK_MEMORY_STRICT=1, so a memory pool overflow stops the game and shows up as a crash in the pool's code.
@@ -26,7 +26,7 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-BINARY = ROOT / "build" / "port" / "darkchronicle-debug"
+BINARY = ROOT / "build" / "port" / "dc2-debug"
 REPORTS = Path.home() / "Library" / "Logs" / "DiagnosticReports"
 EVENTS = ROOT / "extracted" / "disc" / "event" / "view_pal.txt"
 PORT = 7791
@@ -75,7 +75,7 @@ def rows():
 
 def crash_report(since):
     for _ in range(40):
-        reports = [path for path in REPORTS.glob("darkchronicle-debug-*.ips") if path.stat().st_mtime >= since]
+        reports = [path for path in REPORTS.glob("dc2-debug-*.ips") if path.stat().st_mtime >= since]
         if reports:
             return max(reports, key=lambda path: path.stat().st_mtime)
         time.sleep(0.25)

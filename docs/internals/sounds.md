@@ -1,4 +1,4 @@
-# Dark Chronicle sound banks (`.snd`)
+# DC2 sound banks (`.snd`)
 
 This page documents how the PAL disc stores sound effects inside `.snd` archives and how `play_se(bank, n)` triggers SPU2 hardware voices.
 - For replacing and adding sound effects in a mod, see [editing sounds](../guide/sounds.md).

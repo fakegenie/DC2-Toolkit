@@ -107,12 +107,12 @@ static const char *default_root(void) {
     if (path[0]) return path;
     const char *home = getenv("HOME");
     struct stat info;
-    snprintf(path, sizeof path, "%s/Library/Mobile Documents/com~apple~CloudDocs/Dark Chronicle", home ? home : "");
+    snprintf(path, sizeof path, "%s/Library/Mobile Documents/com~apple~CloudDocs/DC2", home ? home : "");
     if (home && !stat(path, &info) && S_ISDIR(info.st_mode)) {
-        snprintf(path, sizeof path, "%s/Library/Mobile Documents/com~apple~CloudDocs/Dark Chronicle/saves", home);
+        snprintf(path, sizeof path, "%s/Library/Mobile Documents/com~apple~CloudDocs/DC2/saves", home);
         return path;
     }
-    char *preferred = SDL_GetPrefPath("DC2 Toolkit", "Dark Chronicle");
+    char *preferred = SDL_GetPrefPath("DC2 Toolkit", "DC2");
     snprintf(path, sizeof path, "%ssaves", preferred ? preferred : "");
     SDL_free(preferred);
     return path;

@@ -1,4 +1,4 @@
-//! Dark Chronicle's disc: the ISO 9660 image, the DATA.HD4 index of DATA.DAT, the packs inside
+//! DC2's disc: the ISO 9660 image, the DATA.HD4 index of DATA.DAT, the packs inside
 //! its files, extracting them all, and writing a new image with files replaced or added.
 
 use std::fs::File;

@@ -1,6 +1,6 @@
 # DC2 Internals
 
-This section documents the engine architecture and binary file formats of Dark Chronicle (Dark Cloud 2, PAL PS2 `SCES_511.90`). These specifications describe the retail game files and engine behavior, independent of any modding tool.
+This section documents the engine architecture and binary file formats of DC2 (PAL PS2 `SCES_511.90`). These specifications describe the retail game files and engine behavior, independent of any modding tool.
 
 - For instructions on how to modify game files, see [Guide](../guide/README.md).
 - For instructions on how to write script code, see [Scripting](../scripting/README.md).

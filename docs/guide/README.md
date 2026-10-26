@@ -1,10 +1,10 @@
 # Getting Started
 
-This guide shows you how to extract *Dark Chronicle* (*Dark Cloud 2*) and build your first mod.
+This guide shows you how to extract DC2 and build your first mod.
 
 ## What you need
 
-1. **`dc2.iso`**: Your PAL PlayStation 2 `.iso` copy of *Dark Chronicle* (`SCES_511.90`).
+1. **`dc2.iso`**: Your PAL PlayStation 2 `.iso` copy of DC2 (`SCES_511.90`).
 2. **`dc2tk`**: Download and extract the latest release zip from [GitHub Releases](https://github.com/fakegenie/DC2-Toolkit/releases).
 3. **[PCSX2](https://pcsx2.net/)**: PlayStation 2 emulator to run and test your modded `.iso`.
 

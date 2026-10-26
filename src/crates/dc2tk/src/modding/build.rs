@@ -72,7 +72,7 @@ pub struct BuildArgs {
     /// build` wrote.
     #[arg(long, value_name = "FILE")]
     executable: Option<PathBuf>,
-    #[arg(long, num_args = 0..=1, default_missing_value = "build/port/darkchronicle", value_name = "FILE", help = "Build the SDL3 native port, optionally writing it to FILE")]
+    #[arg(long, num_args = 0..=1, default_missing_value = "build/port/dc2", value_name = "FILE", help = "Build the SDL3 native port, optionally writing it to FILE")]
     native: Option<PathBuf>,
     #[arg(long, requires = "native", help = "Enable MPEG2 playback in the native port using the local movie SDK")]
     movies: bool,
@@ -644,7 +644,7 @@ mod tests {
     fn native_build_accepts_a_default_path_and_an_optional_iso_output() {
         let parsed = crate::Cli::try_parse_from(["dc2tk", "build", "scripts", "disc.iso", "--native"]).unwrap();
         let crate::Command::Build(args) = parsed.command else { panic!("expected build") };
-        assert_eq!(args.native.unwrap(), std::path::PathBuf::from("build/port/darkchronicle"));
+        assert_eq!(args.native.unwrap(), std::path::PathBuf::from("build/port/dc2"));
         assert!(args.output.is_none());
         let parsed =
             crate::Cli::try_parse_from(["dc2tk", "build", "scripts", "disc.iso", "--native", "game", "-o", "mod.iso"])

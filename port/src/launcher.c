@@ -18,7 +18,7 @@
 enum { DESKTOP = 0, SAVES_ITEM = 1 };
 #define WINDOW_FLAGS (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY)
 #define MODS_HINT_TOP "Put built mods (.dc2pak files) in the mods folder:"
-#define MODS_HINT_BOTTOM "Files, On My iPhone, Dark Chronicle, mods."
+#define MODS_HINT_BOTTOM "Files, On My iPhone, DC2, mods."
 #define MODS_ACTION "Open mods folder"
 #elif defined(__ANDROID__)
 #include "android_files.h"
@@ -1120,7 +1120,7 @@ static void fit_view(void) {
 static int open_window(int hidden) {
     float zoom = window_zoom();
     SDL_WindowFlags flags = WINDOW_FLAGS | (hidden ? SDL_WINDOW_HIDDEN : 0);
-    if (!SDL_CreateWindowAndRenderer("Dark Chronicle", (int)(CANVAS_WIDTH * zoom), (int)(CANVAS_HEIGHT * zoom), flags,
+    if (!SDL_CreateWindowAndRenderer("DC2", (int)(CANVAS_WIDTH * zoom), (int)(CANVAS_HEIGHT * zoom), flags,
                                      &window, &renderer)) {
         fprintf(stderr, "launcher: %s\n", SDL_GetError());
         return 0;
@@ -1188,7 +1188,7 @@ static void take_picture(const char *path, const char *keys, float now) {
 
 int port_launcher(void) {
     const char *chosen = SDL_getenv("DC2TK_LAUNCHER_SETTINGS");
-    char *folder = chosen ? NULL : SDL_GetPrefPath("DC2 Toolkit", "Dark Chronicle");
+    char *folder = chosen ? NULL : SDL_GetPrefPath("DC2 Toolkit", "DC2");
     if (chosen) snprintf(settings_path, sizeof settings_path, "%s", chosen);
     else snprintf(settings_path, sizeof settings_path, "%slauncher.cfg", folder ? folder : "");
     SDL_free(folder);

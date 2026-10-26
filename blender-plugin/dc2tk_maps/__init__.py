@@ -1,10 +1,10 @@
 bl_info = {
-    "name": "Dark Chronicle Maps (dc2tk)",
+    "name": "DC2 Maps (dc2tk)",
     "author": "DC2-Toolkit",
     "version": (1, 1, 0),
     "blender": (3, 6, 0),
-    "location": "File > Import > Dark Chronicle map; View3D > Sidebar > Dark Chronicle; Add > Dark Chronicle",
-    "description": "Edit Dark Chronicle (PS2) maps exported by dc2tk, make new ones, and build them into a mod",
+    "location": "File > Import > DC2 map; View3D > Sidebar > DC2; Add > DC2",
+    "description": "Edit DC2 (PS2) maps exported by dc2tk, make new ones, and build them into a mod",
     "category": "Import-Export",
 }
 

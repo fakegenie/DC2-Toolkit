@@ -199,7 +199,7 @@ fn default_saves() -> PathBuf {
         }
     }
     if let Some(home) = std::env::var_os("HOME") {
-        let cloud = Path::new(&home).join("Library/Mobile Documents/com~apple~CloudDocs/Dark Chronicle");
+        let cloud = Path::new(&home).join("Library/Mobile Documents/com~apple~CloudDocs/DC2");
         if cloud.is_dir() {
             return cloud.join("saves");
         }

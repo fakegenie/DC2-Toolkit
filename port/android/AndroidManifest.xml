@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dc2toolkit.darkchronicle"
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dc2toolkit.dc2"
     android:installLocation="auto">
     <uses-feature android:name="android.hardware.vulkan.version" android:version="0x400003" android:required="true" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
@@ -8,12 +8,12 @@
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-permission android:name="android.permission.VIBRATE" />
 
-    <application android:label="Dark Chronicle" android:icon="@mipmap/icon" android:appCategory="game"
+    <application android:label="DC2" android:icon="@mipmap/icon" android:appCategory="game"
         android:isGame="true" android:allowBackup="true" android:hardwareAccelerated="true"
         android:extractNativeLibs="false" android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
         <meta-data android:name="SDL_ENV.SDL_ANDROID_TRAP_BACK_BUTTON" android:value="1" />
         <meta-data android:name="SDL_ENV.SDL_RENDER_DRIVER" android:value="vulkan" />
-        <activity android:name="DarkChronicle" android:label="Dark Chronicle" android:exported="true"
+        <activity android:name="DC2" android:label="DC2" android:exported="true"
             android:alwaysRetainTaskState="true" android:launchMode="singleInstance"
             android:screenOrientation="sensorLandscape" android:preferMinimalPostProcessing="true"
             android:configChanges="layoutDirection|locale|grammaticalGender|fontScale|fontWeightAdjustment|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation">

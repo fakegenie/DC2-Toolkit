@@ -1,4 +1,4 @@
-"""The add-on in Blender's own menus: Add (Shift+A) > Dark Chronicle, the object context menu
+"""The add-on in Blender's own menus: Add (Shift+A) > DC2, the object context menu
 (right click), and a pie menu of the common actions (Shift+Alt+D)."""
 
 import bpy
@@ -11,7 +11,7 @@ _keymaps = []
 
 class DC2TK_MT_add(bpy.types.Menu):
     bl_idname = "DC2TK_MT_add"
-    bl_label = "Dark Chronicle"
+    bl_label = "DC2"
 
     def draw(self, context):
         layout = self.layout
@@ -31,7 +31,7 @@ class DC2TK_MT_add(bpy.types.Menu):
 
 class DC2TK_MT_context(bpy.types.Menu):
     bl_idname = "DC2TK_MT_context"
-    bl_label = "Dark Chronicle"
+    bl_label = "DC2"
 
     def draw(self, context):
         layout = self.layout
@@ -46,7 +46,7 @@ class DC2TK_MT_context(bpy.types.Menu):
 
 class DC2TK_MT_pie(bpy.types.Menu):
     bl_idname = "DC2TK_MT_pie"
-    bl_label = "Dark Chronicle"
+    bl_label = "DC2"
 
     def draw(self, context):
         pie = self.layout.menu_pie()

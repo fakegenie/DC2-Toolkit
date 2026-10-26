@@ -27,8 +27,8 @@ To see a change in the game without building an ISO, press **Play in Game** (F5)
 
 1. Download `dc2tk-<version>-blender.zip` from [GitHub Releases](https://github.com/fakegenie/DC2-Toolkit/releases).
 2. In Blender (4.2+), open **Edit > Preferences > Add-ons**, click the menu at the top right, choose **Install from Disk**, and select the zip file.
-3. In the add-on's preferences (**Dark Chronicle Maps (dc2tk)**), set the **dc2tk repository** folder to your unzipped `dc2tk` release.
-4. Press `N` in the 3D Viewport and open the **Dark Chronicle** tab. Pick a map from the list and press **Import**.
+3. In the add-on's preferences (**DC2 Maps (dc2tk)**), set the **dc2tk repository** folder to your unzipped `dc2tk` release.
+4. Press `N` in the 3D Viewport and open the **DC2** tab. Pick a map from the list and press **Import**.
 
 The add-on also checks a map against the game's limits (**Validate Map**), shows what a build would change (**Preview Changes**), and builds the ISO. See [its README](../../blender-plugin/README.md) for everything it does.
 
@@ -85,7 +85,7 @@ The `"script"` file is a complete map script, compiled once per language. When t
 
 A door is an `event` point of kind `door` in a map's scene, plus a program in that map's script:
 
-1. Add the door point in Blender (**Add > Dark Chronicle > Door**), or use **Door to Another Map**, which also writes the program and the `"programs"` entry.
+1. Add the door point in Blender (**Add > DC2 > Door**), or use **Door to Another Map**, which also writes the program and the `"programs"` entry.
 2. Name the door's program on the map's line in `mod.json`, so the scene never holds a generated number:
    ```json
    "replace": {

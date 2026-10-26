@@ -148,7 +148,7 @@ written fresh. These are what it found to fix:
     platform (for example `build/port/golden/baseline-<platform>/`), or compare across GPUs
     with a tolerance and an outlier count.
 20. **The default save folder** on Linux is `./saves` (macOS uses iCloud Drive when it exists).
-    Use `$XDG_DATA_HOME/Dark Chronicle/saves`, falling back to `~/.local/share`.
+    Use `$XDG_DATA_HOME/DC2/saves`, falling back to `~/.local/share`.
 21. **The costume screen draws white patches over Max** (face, hands, a block over the body),
     on macOS and Linux alike, in the release build after New Game.
 22. **Done: debug warps from the title during the attract demo.** The warp's Start+Select press
@@ -308,7 +308,7 @@ one fits per tick on the iPhone (50 shown a second at 120 Hz), and in the swamp 
 `tools/android_sdk.py` builds shared SDL3 and static FFmpeg for arm64-v8a with the NDK (27.1.12297006 locally and on
 CI); `tools/port.py --android` compiles the engine with clang 23 against the NDK sysroot (`-fPIC`) and links
 `libmain.so` with the NDK's clang++; `tools/port_package.py --android` makes the APK without Gradle and signs it with
-`port/android/dark-chronicle.keystore` (CN=Fake Genie, password `dark-chronicle`, public on purpose). The `android`
+`port/android/dc2.keystore` (CN=Fake Genie, password `dc2`, public on purpose). The `android`
 release job uploads it. Checked on the Marathon7_API36 emulator (arm64, API 36): launcher, disc and mod picking
 through `content://` URIs, the game with movies under SDL_GPU on Vulkan, touch controls, a save state loaded in a later
 launch at another `libmain.so` address, and leaving and returning to the app. Not yet tried on a phone. On the
@@ -321,10 +321,10 @@ which resets its textures when the app comes back from another activity (the lau
 
 Built and checked on a Windows 11 x64 box (2026-10-26). `tools/port_sdk.py` unpacks llvm-mingw 20261020 (LLVM 23.1.4,
 ucrt, sha256-pinned) into `build/port/llvm-mingw` and builds SDL3 and FFmpeg with it into `build/port/windows-sdk`;
-`tools/port.py --movies` links `build/port/windows/darkchronicle.exe` with 0 stubs (148 units, 57 other files);
+`tools/port.py --movies` links `build/port/windows/dc2.exe` with 0 stubs (148 units, 57 other files);
 `port/tests/run.py --iso pal.iso` passes there, the retail logo and tutorial movies included; the exe, started on
 `pal.iso` in a real window, draws the language select under Vulkan, and the launcher opens; `tools/port_package.py`
-packs `dark-chronicle-<version>-windows-x64.zip`. The shared changes were checked on Linux too (WSL Ubuntu, llvm-mingw's
+packs `dc2-<version>-windows-x64.zip`. The shared changes were checked on Linux too (WSL Ubuntu, llvm-mingw's
 own Linux clang 23 with the system's GNU ld): the port links with 0 stubs and `port/tests/run.py` passes. Not yet: a
 human playing past the language select (input needs the window focused), sound on a real device, a savestate taken and
 loaded on Windows, a save through the game's menu, and the release job's first run (`windows-latest`).
@@ -426,7 +426,7 @@ Open on Windows:
 - **macOS arm64** (the machine the native rewrite was done on), with Homebrew's `sdl3`,
   `ffmpeg`, `llvm` (for `llvm-objcopy` and `llvm-nm`), `pkg-config`, `glslang` and
   `spirv-cross`, and Rust from rustup. The retail disc is `dc2.iso` in the repository root.
-- **Building the port:** `python3 -I tools/port.py --movies`, then `build/port/darkchronicle
+- **Building the port:** `python3 -I tools/port.py --movies`, then `build/port/dc2
   dc2.iso`. Running it needs the window server. Keys: WASD move, F/H/T/G camera, arrows the
   D-pad, I/J/K/L triangle/square/cross/circle, Q/E L1/R1, 1/3 L2/R2, C/V L3/R3, Enter Start,
   Backspace Select. Saves go to `DC2_SAVE_ROOT` (default `./saves`, ignored by git).
@@ -438,11 +438,11 @@ Open on Windows:
   starts the game muted and behind other windows (`--sound`, `--front` undo that), as the golden,
   sweep and benchmark tools do.
 - **Crashes:** the binary re-executes itself at start (see Part 2), which LLDB follows badly.
-  macOS writes a report for every crash to `~/Library/Logs/DiagnosticReports/darkchronicle-*.ips`
+  macOS writes a report for every crash to `~/Library/Logs/DiagnosticReports/dc2-*.ips`
   (JSON after the first line), with the faulting thread's frames.
 - **The debug build:** `python3 -I tools/imgui_sdk.py` once (Dear ImGui 1.92.9b into
   `build/port/imgui-sdk`), then `python3 -I tools/port.py --movies --debug` also links
-  `build/port/darkchronicle-debug`. It opens a second window (F1 shows or hides it, F5 pauses, F6
+  `build/port/dc2-debug`. It opens a second window (F1 shows or hides it, F5 pauses, F6
   steps) and serves the same commands on `http://127.0.0.1:7777/` (`DC2TK_DEBUG_PORT`).
   `python3 -I tools/debug.py launch`, then `help`, `status`, `stats frames=200 --summary`,
   `press buttons=cross frames=6`, `step frames=10`, `speed value=0`, `screenshot out.png`,

@@ -1,6 +1,6 @@
 # How Scripts Work & Lifecycle
 
-Dark Chronicle (Dark Cloud 2) runs its gameplay logic through bytecode scripts. `dc2tk setup` decompiles all ~2,500 scripts on the disc into C files in `extracted/scripts/`.
+DC2 runs its gameplay logic through bytecode scripts. `dc2tk setup` decompiles all ~2,500 scripts on the disc into C files in `extracted/scripts/`.
 
 ## The big picture
 
@@ -49,7 +49,7 @@ void on_talk(void)
 
 ## What a `PROGRAM` is
 
-A standard C program has one `main()` function. A Dark Chronicle script has a **program table** declared with `PROGRAM(id, function)` lines.
+A standard C program has one `main()` function. A DC2 script has a **program table** declared with `PROGRAM(id, function)` lines.
 
 Each `PROGRAM` maps an event number (or enum name from the SDK header) to a C function. Functions only run when the engine or another script starts one of the script's programs:
 

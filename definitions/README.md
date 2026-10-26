@@ -108,7 +108,7 @@ line endings and a final newline, and read CRLF the same.
 ```json
 {
   "name": "pal",
-  "description": "Dark Chronicle PAL (SCES_511.90) retail scripts",
+  "description": "DC2 PAL (SCES_511.90) retail scripts",
   "engine": "dc2",
   "extends": [],
   "language": "en",

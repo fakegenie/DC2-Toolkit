@@ -1,4 +1,4 @@
-package dc2toolkit.darkchronicle;
+package dc2toolkit.dc2;
 
 import android.content.Intent;
 import android.database.Cursor;
@@ -6,7 +6,7 @@ import android.net.Uri;
 import android.provider.OpenableColumns;
 import org.libsdl.app.SDLActivity;
 
-public class DarkChronicle extends SDLActivity {
+public class DC2 extends SDLActivity {
     @Override
     protected String[] getLibraries() {
         return new String[] {"SDL3", "main"};

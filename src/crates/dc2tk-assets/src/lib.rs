@@ -1,4 +1,4 @@
-//! Dark Chronicle's assets in formats common tools open, exported and built back: an asset written
+//! DC2's assets in formats common tools open, exported and built back: an asset written
 //! back unedited gives the game's bytes, byte for byte.
 //!
 //! - Textures (.img, .im2, .im3 archives of TIM2 pictures) as PNGs; character and map models (MDS,

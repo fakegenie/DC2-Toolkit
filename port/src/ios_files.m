@@ -7,7 +7,7 @@
 
 static NSString *const FOLDER_KEY = @"SaveFolder";
 static NSString *const DISC_KEY = @"DiscFile";
-static NSString *const FOLDER_NAME = @"Dark Chronicle";
+static NSString *const FOLDER_NAME = @"DC2";
 static NSURL *picked;
 static int picking;
 

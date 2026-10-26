@@ -104,7 +104,7 @@ void debug_window_start(void) {
     return;
 #endif
     SDL_GPUDevice *device = render_device();
-    window = SDL_CreateWindow("Dark Chronicle Debug", 1100, 820, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    window = SDL_CreateWindow("DC2 Debug", 1100, 820, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (!window || !SDL_ClaimWindowForGPUDevice(device, window)) {
         fprintf(stderr, "debug: no window: %s\n", SDL_GetError());
         window = NULL;

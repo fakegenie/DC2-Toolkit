@@ -1,4 +1,4 @@
-# Dark Chronicle texture archives (`.img`: IM3, IM2, IMG)
+# DC2 texture archives (`.img`: IM3, IM2, IMG)
 
 A `.img` file is an archive of **standard TIM2 images** preceded by a name table. At runtime, `mgCTextureManager::EnterIMGFile` loads an entire `.img` archive and registers each picture under its name inside a texture block. Engine code, 3D models, and animation scripts look up textures **by name**. Three format versions exist: `IM3`, `IM2`, and `IMG`. Almost all archives on the disc use `IM3`.
 

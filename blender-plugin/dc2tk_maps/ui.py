@@ -4,7 +4,7 @@ import bpy
 
 from . import budgets, c2data, edit, import_map, outliner, prefs, props, runner, schema, scripts, validate
 
-CATEGORY = "Dark Chronicle"
+CATEGORY = "DC2"
 ROLE_LABELS = {
     "map": "Map root",
     "placement": "Placement",

@@ -1,7 +1,7 @@
 # DC2-Toolkit
 
 <p align="center">
-  <img src="images/header.png" alt="A Dark Chronicle town map with its trigger points, beside decompiled scripts" width="830">
+  <img src="images/header.png" alt="A DC2 town map with its trigger points, beside decompiled scripts" width="830">
 </p>
 
 <p align="center">
@@ -10,14 +10,14 @@
   <a href="https://github.com/fakegenie/DC2-Toolkit/releases"><b>Download Releases</b></a>
 </p>
 
-**DC2-Toolkit (`dc2tk`)** is a toolset for modding the PlayStation 2 game *Dark Chronicle* (*Dark Cloud 2*, PAL version). It extracts the game into standard formats (`.png`, `.wav`, `.mid`, `.gltf`, `.json`, and `.c` scripts) and builds your changes into a playable `.iso` disc image.
+**DC2-Toolkit (`dc2tk`)** is a toolset for modding the PlayStation 2 game DC2 (PAL version). It extracts the game into standard formats (`.png`, `.wav`, `.mid`, `.gltf`, `.json`, and `.c` scripts) and builds your changes into a playable `.iso` disc image.
 
-> **Note:** No game files are included. You need your own legally obtained PAL PlayStation 2 `.iso` of *Dark Chronicle* (`SCES_511.90`).
+> **Note:** No game files are included. You need your own legally obtained PAL PlayStation 2 `.iso` of DC2 (`SCES_511.90`).
 
 ## Quick Start
 
 1. Download and extract the latest release from [GitHub Releases](https://github.com/fakegenie/DC2-Toolkit/releases).
-2. Copy your PAL *Dark Chronicle* `.iso` into the folder and name it `dc2.iso`.
+2. Copy your PAL DC2 `.iso` into the folder and name it `dc2.iso`.
 3. Extract the game files:
    ```sh
    dc2tk setup dc2.iso

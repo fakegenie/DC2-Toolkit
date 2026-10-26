@@ -2,18 +2,18 @@
 """Builds the native port for Linux x86-64, macOS arm64 or Windows x64: the engine's units with tools/engine-patches/port.json applied,
 ChronicleTwo's C++ for the MWCC asm (its symbols made weak, so where the engine still has a
 function its own definition is used), and port/src, compiled by clang and linked into
-build/port/darkchronicle, with the shared SDL3 and FFmpeg of tools/port_sdk.py copied into build/port/lib. On Windows
-llvm-mingw from tools/port_sdk.py links build/port/windows/darkchronicle.exe, with the DLLs beside it. Every symbol
+build/port/dc2, with the shared SDL3 and FFmpeg of tools/port_sdk.py copied into build/port/lib. On Windows
+llvm-mingw from tools/port_sdk.py links build/port/windows/dc2.exe, with the DLLs beside it. Every symbol
 nothing defines yet becomes a stub that names itself and aborts, and build/port/missing.txt lists them by library.
 
     python3 -I tools/port.py            build
     python3 -I tools/port.py --run      build, then run it
-    python3 -I tools/port.py --debug    also link build/port/darkchronicle-debug with the debug tools mod (port/debug) and Dear ImGui
+    python3 -I tools/port.py --debug    also link build/port/dc2-debug with the debug tools mod (port/debug) and Dear ImGui
     python3 -I tools/port.py --mod DIR  link a mod's port code (its mod.json's "port" sources) into the binaries
     python3 -I tools/port.py --ios simulator
-                                        build build/port/ios-simulator/DarkChronicle.app
+                                        build build/port/ios-simulator/DC2.app
     python3 -I tools/port.py --ios device [--team TEAM]
-                                        build build/port/ios-device/DarkChronicle.app, signed for an iPhone by TEAM
+                                        build build/port/ios-device/DC2.app, signed for an iPhone by TEAM
                                         or left unsigned
     python3 -I tools/port.py --android  build build/port/android/libmain.so for arm64 Android with the SDKs of
                                         tools/android_sdk.py
@@ -41,8 +41,8 @@ PORT = ROOT / "port"
 OUT = ROOT / "build" / "port"
 COPY = OUT / "copy"
 OBJ = OUT / "obj"
-BINARY = OUT / "darkchronicle"
-DEBUG_BINARY = OUT / "darkchronicle-debug"
+BINARY = OUT / "dc2"
+DEBUG_BINARY = OUT / "dc2-debug"
 IMGUI = OUT / "imgui-sdk"
 IMGUI_SOURCES = ["imgui.cpp", "imgui_draw.cpp", "imgui_tables.cpp", "imgui_widgets.cpp", "imgui_demo.cpp",
                  "imgui_impl_sdl3.cpp", "imgui_impl_sdlgpu3.cpp"]
@@ -124,7 +124,7 @@ IOS_ICONS = {"AppIcon60x60@2x.png": 120, "AppIcon60x60@3x.png": 180, "AppIcon76x
              "AppIcon83.5x83.5@2x~ipad.png": 167}
 WINDOWS_MANIFEST = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity type="win32" name="DC2Toolkit.DarkChronicle" version="1.0.0.0"/>
+  <assemblyIdentity type="win32" name="DC2Toolkit.DC2" version="1.0.0.0"/>
   <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
     <application>
       <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
@@ -566,12 +566,12 @@ def windows_resources():
     png = (PORT / "launcher" / "icon.png").read_bytes()
     # an .ico of one PNG image; 0 by 0 stands for 256 pixels or more
     write_bytes_if_changed(folder / "icon.ico", struct.pack("<HHHBBBBHHII", 0, 1, 1, 0, 0, 0, 0, 1, 32, len(png), 22) + png)
-    write_if_changed(folder / "darkchronicle.manifest", WINDOWS_MANIFEST)
-    write_if_changed(folder / "darkchronicle.rc", '1 ICON "icon.ico"\n1 24 "darkchronicle.manifest"\n')
+    write_if_changed(folder / "dc2.manifest", WINDOWS_MANIFEST)
+    write_if_changed(folder / "dc2.rc", '1 ICON "icon.ico"\n1 24 "dc2.manifest"\n')
     target = OBJ / "resources.o"
-    sources = [folder / name for name in ("icon.ico", "darkchronicle.manifest", "darkchronicle.rc")]
+    sources = [folder / name for name in ("icon.ico", "dc2.manifest", "dc2.rc")]
     if not target.exists() or any(source.stat().st_mtime > target.stat().st_mtime for source in sources):
-        subprocess.run(["llvm-windres", "-I", str(folder), str(folder / "darkchronicle.rc"), "-o", str(target)], check=True)
+        subprocess.run(["llvm-windres", "-I", str(folder), str(folder / "dc2.rc"), "-o", str(target)], check=True)
     return target
 
 
@@ -613,13 +613,13 @@ def app_info(kind, identifier):
     return {
         "CADisableMinimumFrameDurationOnPhone": True,
         "CFBundleDevelopmentRegion": "en",
-        "CFBundleDisplayName": "Dark Chronicle",
-        "CFBundleExecutable": "DarkChronicle",
+        "CFBundleDisplayName": "DC2",
+        "CFBundleExecutable": "DC2",
         "CFBundleIdentifier": identifier,
         "CFBundleIcons": {"CFBundlePrimaryIcon": {"CFBundleIconFiles": ["AppIcon60x60"]}},
         "CFBundleIcons~ipad": {"CFBundlePrimaryIcon": {"CFBundleIconFiles": ["AppIcon60x60", "AppIcon76x76", "AppIcon83.5x83.5"]}},
         "CFBundleInfoDictionaryVersion": "6.0",
-        "CFBundleName": "DarkChronicle",
+        "CFBundleName": "DC2",
         "CFBundlePackageType": "APPL",
         "CFBundleShortVersionString": "1.0",
         "CFBundleVersion": "1",
@@ -638,10 +638,10 @@ def app_info(kind, identifier):
 
 
 def bundle(kind, executable, identifier):
-    app = OUT / "DarkChronicle.app"
+    app = OUT / "DC2.app"
     shutil.rmtree(app, ignore_errors=True)
     app.mkdir(parents=True)
-    shutil.copy2(executable, app / "DarkChronicle")
+    shutil.copy2(executable, app / "DC2")
     (app / "Info.plist").write_bytes(plistlib.dumps(app_info(kind, identifier), fmt=plistlib.FMT_BINARY))
     for name, pixels in IOS_ICONS.items():
         subprocess.run(["sips", "-z", str(pixels), str(pixels), str(PORT / "launcher" / "icon-ios.png"), "--out", str(app / name)],
@@ -712,8 +712,8 @@ def main():
     parser.add_argument("--mod", type=Path, action="append", default=[], help="a mod folder whose port code goes into the binaries")
     parser.add_argument("--sdk", type=Path, default=OUT / ("windows-sdk" if WINDOWS else "sdk"),
                         help="the prefix tools/port_sdk.py installed SDL3 and FFmpeg in")
-    parser.add_argument("--ios", choices=sorted(IOS), help="build DarkChronicle.app for the iOS simulator or an iPhone")
-    parser.add_argument("--bundle-id", default="dc2toolkit.darkchronicle", help="the iOS app's bundle identifier")
+    parser.add_argument("--ios", choices=sorted(IOS), help="build DC2.app for the iOS simulator or an iPhone")
+    parser.add_argument("--bundle-id", default="dc2toolkit.dc2", help="the iOS app's bundle identifier")
     parser.add_argument("--android", action="store_true", help="build libmain.so for arm64 Android")
     parser.add_argument("--team", help="the Apple development team that signs the iPhone app, as Xcode lists it; without it the app is unsigned")
     parser.add_argument("arguments", nargs="*", help="arguments for the port, with --run")
@@ -721,8 +721,8 @@ def main():
     if options.ios:
         OUT = ROOT / "build" / "port" / f"ios-{options.ios}"
         OBJ = OUT / "obj"
-        BINARY = OUT / "darkchronicle"
-        DEBUG_BINARY = OUT / "darkchronicle-debug"
+        BINARY = OUT / "dc2"
+        DEBUG_BINARY = OUT / "dc2-debug"
         LINKER = subprocess.check_output(["xcrun", "--find", "clang++"], text=True).strip()
         cflags, libraries = ios_flags(options.ios)
         PLATFORM_SOURCES.extend(sorted((PORT / "src").glob("*.m")))
@@ -743,7 +743,7 @@ def main():
         WINDOWS_NAMES.update(windows_names())
         OUT = ROOT / "build" / "port" / "windows"
         OBJ = OUT / "obj"
-        BINARY = OUT / "darkchronicle.exe"
+        BINARY = OUT / "dc2.exe"
         PLATFORM_SOURCES.extend(sorted((PORT / "windows").glob("*.c")))
         if options.movies:
             FLAGS.append("-DPORT_MOVIES")

@@ -742,7 +742,7 @@ static int command_profile(const DebugArgs *args, DebugReply *reply) {
     long seconds = debug_arg_int(args, "seconds", 3);
     if (profiler) return debug_fail(reply, "a profile is already running");
     if (seconds < 1 || seconds > 60) return debug_fail(reply, "seconds must be 1 to 60");
-    snprintf(profiler_path, sizeof profiler_path, "/tmp/darkchronicle-sample-%d.txt", (int)getpid());
+    snprintf(profiler_path, sizeof profiler_path, "/tmp/dc2-sample-%d.txt", (int)getpid());
     char pid_text[32], seconds_text[32];
     snprintf(pid_text, sizeof pid_text, "%d", (int)getpid());
     snprintf(seconds_text, sizeof seconds_text, "%ld", seconds);

@@ -515,7 +515,7 @@ class DC2TK_OT_import_gltf(bpy.types.Operator, ImportHelper):
     """Import a map scene that dc2tk map-export wrote (keeps every extras.c2, hides collision)"""
 
     bl_idname = "dc2tk.import_map_gltf"
-    bl_label = "Import Dark Chronicle Map (.gltf)"
+    bl_label = "Import DC2 Map (.gltf)"
     bl_options = {"REGISTER", "UNDO"}
 
     filename_ext = ".gltf"
@@ -541,7 +541,7 @@ class DC2TK_OT_import_map(bpy.types.Operator):
     """Export a map with dc2tk map-export, then import it"""
 
     bl_idname = "dc2tk.import_map"
-    bl_label = "Import Dark Chronicle Map (dc2tk)"
+    bl_label = "Import DC2 Map (dc2tk)"
     bl_options = {"REGISTER", "UNDO"}
 
     map_name: StringProperty(name="Map", description="The map to export and import (s17, d01f01, ...)")
@@ -652,8 +652,8 @@ def load_map_list_once():
 
 
 def menu_import(self, context):
-    self.layout.operator(DC2TK_OT_import_gltf.bl_idname, text="Dark Chronicle map (.gltf)")
-    self.layout.operator(DC2TK_OT_import_map.bl_idname, text="Dark Chronicle map (dc2tk map-export)")
+    self.layout.operator(DC2TK_OT_import_gltf.bl_idname, text="DC2 map (.gltf)")
+    self.layout.operator(DC2TK_OT_import_map.bl_idname, text="DC2 map (dc2tk map-export)")
 
 
 classes = (DC2TK_OT_import_gltf, DC2TK_OT_import_map, DC2TK_OT_load_maps)

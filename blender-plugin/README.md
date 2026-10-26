@@ -1,4 +1,4 @@
-# dc2tk_maps: a Blender add-on for Dark Chronicle maps
+# dc2tk_maps: a Blender add-on for DC2 maps
 
 `dc2tk_maps` imports a map that `dc2tk map-export NAME` wrote as a glTF scene, shows
 it as the game draws it, lets you edit its placements, trigger points,
@@ -22,7 +22,7 @@ native port (Play in Game, below).
 ## Install
 
 Either way, then set the repository folder in the add-on's preferences
-(Edit, Preferences, Add-ons, "Dark Chronicle Maps (dc2tk)"). When the add-on is
+(Edit, Preferences, Add-ons, "DC2 Maps (dc2tk)"). When the add-on is
 linked from this repository, the repository is found by itself.
 
 - **Install a release:** download `dc2tk-VERSION-blender.zip` from the repository's GitHub
@@ -49,11 +49,11 @@ Preferences:
 | map export arguments | `map-export {name} -o {out}` |
 | exported maps | `extracted/maps` in the repository |
 | mod folder, source tree, retail disc, output disc image | for Export and Build; the source tree defaults to `extracted/scripts`; the retail disc is the ISO or an untouched extracted disc folder |
-| debug port, override folder, API port | for Play in Game: `build/port/darkchronicle-debug`, `overrides` beside it, 7777 (the port's `DC2TK_DEBUG_PORT`) |
+| debug port, override folder, API port | for Play in Game: `build/port/dc2-debug`, `overrides` beside it, 7777 (the port's `DC2TK_DEBUG_PORT`) |
 
 ## Use
 
-Everything is in the 3D viewport's sidebar (N), tab **Dark Chronicle**, and
+Everything is in the 3D viewport's sidebar (N), tab **DC2**, and
 in File, Import.
 
 **Import.** Pick the map from the list (it searches as you type: `palm`, `s17`)
@@ -61,7 +61,7 @@ or type its name, and press Import: the add-on runs
 `dc2tk map-export s17 -o extracted/maps/s17` and imports the result. The list
 is every map on the disc with its title ("m01  Palm Brinks"), read from
 `dc2tk map-export --list` when the panel first shows; the refresh button reads
-it again. File, Import, "Dark Chronicle map (.gltf)" imports a scene exported
+it again. File, Import, "DC2 map (.gltf)" imports a scene exported
 before.
 
 An import replaces the map already in the scene: the old map's objects, its

@@ -6,7 +6,7 @@
     python3 -I tools/golden_port.py --update             write the screenshots as the new baselines
     python3 -I tools/golden_port.py --tolerance 4        pass pixels whose channels differ by at most 4
 
-A scenario is a JSON list of steps, run against build/port/darkchronicle-debug through its localhost API:
+A scenario is a JSON list of steps, run against build/port/dc2-debug through its localhost API:
 
     {"launch": {"speed": 0, "env": {}}}
                                       first step; the game starts paused at frame 1, speed 0 is unlimited
@@ -63,7 +63,7 @@ def frame():
 
 
 def launch(options):
-    binary = ROOT / "build" / "port" / "darkchronicle-debug"
+    binary = ROOT / "build" / "port" / "dc2-debug"
     if not binary.exists():
         sys.exit("build it first: python3 -I tools/port.py --movies --debug")
     saves = ROOT / "build" / "port" / "golden" / "saves"

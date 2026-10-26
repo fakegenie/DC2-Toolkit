@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Copies Dark Chronicle saves from a PCSX2 memory card into the native port's save folder.
+"""Copies DC2 saves from a PCSX2 memory card into the native port's save folder.
 
     python3 -I tools/saves.py list Mcd001.ps2             the saves on a PCSX2 card
-    python3 -I tools/saves.py import Mcd001.ps2           copy its Dark Chronicle saves to the port
+    python3 -I tools/saves.py import Mcd001.ps2           copy its DC2 saves to the port
     python3 -I tools/saves.py import saves                copy a port save folder (its card0) the same way
     python3 -I tools/saves.py import Mcd001.ps2 --into DIR --card 1 --replace
 
-The port keeps saves in iCloud Drive/Dark Chronicle/saves when that folder exists, else in ./saves.
+The port keeps saves in iCloud Drive/DC2/saves when that folder exists, else in ./saves.
 The card is only read. Saves already in the port are kept unless --replace is given.
 """
 
@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-ICLOUD = Path.home() / "Library/Mobile Documents/com~apple~CloudDocs/Dark Chronicle"
+ICLOUD = Path.home() / "Library/Mobile Documents/com~apple~CloudDocs/DC2"
 GAME = "BESCES-51190"
 MAGIC = b"Sony PS2 Memory Card Format "
 EXISTS = 0x8000
@@ -151,7 +151,7 @@ def read_saves(path):
 def describe(save):
     when = datetime.datetime.fromtimestamp(save["modified"]).strftime("%Y-%m-%d %H:%M") if save["modified"] else "unknown time"
     size = sum(len(item["data"]) for item in save["files"])
-    game = "Dark Chronicle" if save["name"].startswith(GAME) else "other game or region"
+    game = "DC2" if save["name"].startswith(GAME) else "other game or region"
     return f"{save['name']:<34} {size:>9} bytes  {when}  {game}"
 
 
@@ -186,7 +186,7 @@ def import_saves(source, into, card, replace):
     if skipped:
         print(f"skipped {skipped} saves from other games or regions; the port reads PAL saves ({GAME}) only")
     if not ours:
-        print("no Dark Chronicle saves found")
+        print("no DC2 saves found")
 
 
 def main():
@@ -194,7 +194,7 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     listing = commands.add_parser("list", help="list the saves on a PCSX2 card or in a port save folder")
     listing.add_argument("source", type=Path)
-    importing = commands.add_parser("import", help="copy Dark Chronicle saves into the port's save folder")
+    importing = commands.add_parser("import", help="copy DC2 saves into the port's save folder")
     importing.add_argument("source", type=Path, help="a PCSX2 .ps2 card or a port save folder")
     importing.add_argument("--into", type=Path, default=default_saves(), help="the port's save folder")
     importing.add_argument("--card", type=int, choices=(0, 1), default=0, help="the port's card slot")

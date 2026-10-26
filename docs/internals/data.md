@@ -1,6 +1,6 @@
 # Game data: items, shops, monsters and the rest
 
-This page documents where Dark Chronicle stores its gameplay data tables: item and weapon stats, shop inventories, monster attributes, invention recipes, Georama parts and requests, fishing parameters, dungeon floor medals, character stats, and townspeople.
+This page documents where DC2 stores its gameplay data tables: item and weapon stats, shop inventories, monster attributes, invention recipes, Georama parts and requests, fishing parameters, dungeon floor medals, character stats, and townspeople.
 - For exporting and editing these tables from your disc, see [editing game data](../guide/data.md).
 - For runtime memory budgets of each data loader, see [memory](memory.md).
 - For dungeon floor layouts, room parts, and treasure chests, see [dungeons](dungeons.md).

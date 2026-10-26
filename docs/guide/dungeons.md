@@ -1,6 +1,6 @@
 # Dungeons
 
-Random dungeon floors in *Dark Chronicle* are built at runtime from room layouts and 3D parts. Mods change them through five data tables and the floors' maps.
+Random dungeon floors in DC2 are built at runtime from room layouts and 3D parts. Mods change them through five data tables and the floors' maps.
 
 ## Quick steps
 

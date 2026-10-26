@@ -5,7 +5,7 @@
 #   pip install -r tools/docs-requirements.txt && mkdocs serve
 
 site_name: DC2-Toolkit
-site_description: Extract, edit and mod Dark Chronicle (Dark Cloud 2), and rebuild a playable disc.
+site_description: Extract, edit and mod DC2, and rebuild a playable disc.
 site_url: https://fakegenie.github.io/DC2-Toolkit/
 repo_url: https://github.com/fakegenie/DC2-Toolkit
 repo_name: fakegenie/DC2-Toolkit

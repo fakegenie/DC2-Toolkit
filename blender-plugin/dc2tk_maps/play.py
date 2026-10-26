@@ -31,7 +31,7 @@ def port_binary(settings):
     if settings.port_binary:
         return prefs.absolute(settings.port_binary)
     root = prefs.repo(settings)
-    name = "darkchronicle-debug.exe" if sys.platform.startswith("win") else "darkchronicle-debug"
+    name = "dc2-debug.exe" if sys.platform.startswith("win") else "dc2-debug"
     return os.path.join(root, "build", "port", name) if root else ""
 
 

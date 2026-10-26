@@ -16,7 +16,7 @@ pools, and reports how full each pool got.
     python3 -I tools/memory_tour.py record NAME town map=m03
                                                         the same from any debug API warp
 
-It runs its own copy of build/port/darkchronicle-debug on DC2TK_DEBUG_PORT 7793 with throwaway saves, no
+It runs its own copy of build/port/dc2-debug on DC2TK_DEBUG_PORT 7793 with throwaway saves, no
 overrides and DC2TK_MEMORY_STRICT=1, so the first pool overflow stops the game, and with the fault watch
 logging NaN or far-off camera and player values without pausing. Every visit starts from the
 cap8 preset with the unlock command. Results go to build/port/memory-tour: report.json, the pools seen so far in
@@ -36,7 +36,7 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-BINARY = ROOT / "build" / "port" / "darkchronicle-debug"
+BINARY = ROOT / "build" / "port" / "dc2-debug"
 OUT = ROOT / "build" / "port" / "memory-tour"
 RECORDINGS = [ROOT / "port" / "tests" / "recordings", ROOT / "build" / "port" / "recordings"]
 SOURCES = [ROOT / "build" / "port" / "copy" / "ps2" / "src", ROOT / "port" / "src"]

@@ -1,4 +1,4 @@
-//! dc2tk, the DC2-Toolkit command line: extract, decompile, compile, mod and rebuild Dark Chronicle.
+//! dc2tk, the DC2-Toolkit command line: extract, decompile, compile, mod and rebuild DC2.
 
 mod asset_tree;
 mod defs;
@@ -34,7 +34,7 @@ use options::{Common, NativesArg};
 #[derive(Parser)]
 #[command(
     name = "dc2tk",
-    about = "Extract every Dark Chronicle (Dark Cloud 2) asset into formats you can edit, and rebuild a playable disc"
+    about = "Extract every DC2 asset into formats you can edit, and rebuild a playable disc"
 )]
 struct Cli {
     /// Print how long the command took.

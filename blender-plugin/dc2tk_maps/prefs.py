@@ -59,7 +59,7 @@ class Dc2tkPreferences(bpy.types.AddonPreferences):
     )
     port_binary: StringProperty(
         name="Debug port",
-        description="The native port's debug build Play in Game runs; empty for build/port/darkchronicle-debug in the repository",
+        description="The native port's debug build Play in Game runs; empty for build/port/dc2-debug in the repository",
         subtype="FILE_PATH",
         default="",
     )

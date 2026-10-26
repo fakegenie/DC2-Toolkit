@@ -3,7 +3,7 @@ name = "dc2tk-disc"
 version = "0.3.0"
 edition.workspace = true
 license.workspace = true
-description = "Dark Chronicle's disc: the ISO 9660 image, DATA.HD4/DATA.DAT and the game's packs"
+description = "DC2's disc: the ISO 9660 image, DATA.HD4/DATA.DAT and the game's packs"
 
 [features]
 # samples: small discs, indexes and packs built in memory, for other crates' tests
