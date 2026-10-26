@@ -140,7 +140,7 @@ jobs:
       - run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: recursive
 
       - uses: actions/setup-python@v5
         with:
@@ -193,7 +193,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: recursive
 
       - uses: actions/setup-python@v5
         with:
@@ -232,13 +232,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: recursive
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -253,7 +253,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends clang-23 llvm-23 cmake
           echo /usr/lib/llvm-23/bin >> "$GITHUB_PATH"
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK_VERSION" > /dev/null
+          # yes ends on SIGPIPE when sdkmanager stops reading, which pipefail would take for a failure
+          (yes || true) | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK_VERSION" > /dev/null
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
 
       - uses: actions/cache@v4
