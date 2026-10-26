@@ -1,5 +1,6 @@
 #include "port_mod.h"
 #include "render.h"
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include "input.h"
@@ -14,6 +15,14 @@ unsigned char port_input_axis(int value) {
     if (value < INT16_MIN) value = INT16_MIN;
     if (value > INT16_MAX) value = INT16_MAX;
     return (unsigned char)((value - INT16_MIN) / AXIS_STEP);
+}
+
+int port_input_square(int value, int other) {
+    float along = value / (float)INT16_MAX, across = other / (float)INT16_MAX;
+    float longest = fmaxf(fabsf(along), fabsf(across));
+    if (longest == 0) return 0;
+    float radius = fminf(hypotf(along, across), 1);
+    return (int)lroundf(along * radius / longest * INT16_MAX);
 }
 
 static int trigger_depth(int value) {
@@ -112,10 +121,14 @@ static void read_devices(void) {
         for (int i = 2; i < 16; ++i) {
             if (SDL_GetGamepadButton(gamepad, buttons[i])) input.buttons |= (uint16_t)(1u << i);
         }
-        input.left_x = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX);
-        input.left_y = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTY);
-        input.right_x = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHTX);
-        input.right_y = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHTY);
+        int left_x = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX);
+        int left_y = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTY);
+        int right_x = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHTX);
+        int right_y = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHTY);
+        input.left_x = port_input_square(left_x, left_y);
+        input.left_y = port_input_square(left_y, left_x);
+        input.right_x = port_input_square(right_x, right_y);
+        input.right_y = port_input_square(right_y, right_x);
         input.left_trigger = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER);
         input.right_trigger = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER);
     }

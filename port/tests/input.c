@@ -1,11 +1,14 @@
 #include <assert.h>
+#include <math.h>
 #include <string.h>
 #include "input.h"
 #include "port_graphics.h"
 
 uint64_t port_fields;
 
-enum { NO_PRESSURE = -1, ALL_BUTTONS = UINT16_MAX, REPORT_FILL = 73 };
+enum { NO_PRESSURE = -1, ALL_BUTTONS = UINT16_MAX, REPORT_FILL = 73, ENGINE_DEAD_ZONE = 50, ENGINE_SPAN = 78, ANGLES = 64 };
+
+#define TOWN_RUN 0.8f
 
 struct button_pressure {
     uint16_t button;
@@ -30,6 +33,18 @@ static const struct button_pressure buttons[] = {
     {PORT_INPUT_DOWN, PORT_INPUT_PRESSURE_DOWN},
     {PORT_INPUT_LEFT, PORT_INPUT_PRESSURE_LEFT},
 };
+
+static float deflection(int value) {
+    int offset = port_input_axis(value) - PORT_INPUT_AXIS_CENTER;
+    if (offset > -ENGINE_DEAD_ZONE && offset < ENGINE_DEAD_ZONE) return 0;
+    int outside = offset > 0 ? offset - (ENGINE_DEAD_ZONE - 1) : offset + ENGINE_DEAD_ZONE;
+    return (float)(outside * 128 / ENGINE_SPAN) / 128;
+}
+
+static float stick_strength(float radius, float angle) {
+    int x = (int)(radius * cosf(angle) * INT16_MAX), y = (int)(radius * sinf(angle) * INT16_MAX);
+    return hypotf(deflection(port_input_square(x, y)), deflection(port_input_square(y, x)));
+}
 
 static unsigned int pressed(const struct pad_dualshock2_report *report) {
     return ((report->released_high << 8) | report->released_low) ^ ALL_BUTTONS;
@@ -80,6 +95,18 @@ int main(void) {
     assert(port_input_axis(32767) == 255);
     assert(port_input_axis(40000) == 255);
     for (int i = INT16_MIN; i < INT16_MAX; ++i) assert(port_input_axis(i) <= port_input_axis(i + 1));
+    assert(port_input_square(0, 0) == 0);
+    assert(port_input_square(INT16_MAX, 0) == INT16_MAX && port_input_square(0, INT16_MAX) == 0);
+    assert(port_input_square(INT16_MIN, 0) == -INT16_MAX);
+    assert(port_input_square(23170, 23170) == INT16_MAX && port_input_square(-23170, 23170) == -INT16_MAX);
+    assert(port_input_square(INT16_MAX, INT16_MAX) == INT16_MAX);
+    assert(port_input_square(16384, 0) == 16384);
+    for (int i = 0; i < ANGLES; ++i) {
+        float angle = 2 * (float)M_PI * i / ANGLES;
+        assert(stick_strength(1, angle) >= 1);
+        assert(stick_strength(0.9f, angle) >= TOWN_RUN);
+        assert(stick_strength(0.25f, angle) == 0);
+    }
     state = (struct port_input_state){
         .left_x = INT16_MIN,
         .left_y = INT16_MAX,

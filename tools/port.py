@@ -10,6 +10,9 @@ nothing defines yet becomes a stub that names itself and aborts, and build/port/
     python3 -I tools/port.py --run      build, then run it
     python3 -I tools/port.py --debug    also link build/port/dc2-debug with the debug tools mod (port/debug) and Dear ImGui
     python3 -I tools/port.py --mod DIR  link a mod's port code (its mod.json's "port" sources) into the binaries
+    python3 -I tools/port.py --engine-mods COPY --engine-sources DIR --executable-sha256 HEX --output FILE
+                                        what `dc2tk build --native` runs: the engine mods dc2tk prepared in COPY,
+                                        engine files from DIR in place of engine/'s, the disc executable's hash
     python3 -I tools/port.py --ios simulator
                                         build build/port/ios-simulator/DC2.app
     python3 -I tools/port.py --ios device [--team TEAM]
@@ -33,6 +36,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,6 +51,7 @@ IMGUI = OUT / "imgui-sdk"
 IMGUI_SOURCES = ["imgui.cpp", "imgui_draw.cpp", "imgui_tables.cpp", "imgui_widgets.cpp", "imgui_demo.cpp",
                  "imgui_impl_sdl3.cpp", "imgui_impl_sdlgpu3.cpp"]
 SDL_CFLAGS = []
+EXECUTABLE_FLAGS = []
 TARGET = []
 LINKER = "clang++"
 DARWIN = sys.platform == "darwin"
@@ -213,7 +218,7 @@ def write_if_changed(path, text):
     if path.exists() and path.read_text(encoding="utf-8") == text:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8", newline="\n")
+    path.write_bytes(text.encode("utf-8"))
 
 
 def write_bytes_if_changed(path, data):
@@ -223,7 +228,14 @@ def write_bytes_if_changed(path, data):
     path.write_bytes(data)
 
 
-def copy_engine():
+def native_prepare():
+    spec = importlib.util.spec_from_file_location("native_prepare", Path(__file__).with_name("native_prepare.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def copy_engine(replaced=None, mods=None):
     override_path = ENGINE / "tools" / "kazarov" / "scripts" / "build" / "port_override.py"
     spec = importlib.util.spec_from_file_location("port_override", override_path)
     overrides = importlib.util.module_from_spec(spec)
@@ -241,8 +253,11 @@ def copy_engine():
     for patch in patches:
         if patch["file"] not in relatives:
             sys.exit(f"tools/engine-patches/port.json changes {patch['file']}, which the engine does not have")
+    written = set()
     for path in sources:
         relative = path.relative_to(ENGINE).as_posix()
+        if replaced and (replaced / relative).is_file():
+            path = replaced / relative
         text = patched(relative, path.read_text(encoding="utf-8"), patches)
         if relative in replacements:
             text = overrides.strip(text, replacements[relative], defined=("PORT", "PAL"), long_is_64=True)
@@ -250,6 +265,14 @@ def copy_engine():
             text = overrides.strip(text, UNUSED_DEFINITIONS[relative], defined=("PORT", "PAL"), long_is_64=True,
                                    private_variables=True, private_functions=True)
         write_if_changed(COPY / relative, text)
+        written.add(COPY / relative)
+    if mods:
+        manifest = json.loads((mods / "build" / "mod-inputs" / "manifest.json").read_text(encoding="utf-8"))
+        native_prepare().prepare(mods, COPY, PORT, manifest)
+        written |= {COPY / "ps2" / ("include" if entry["unit"].endswith((".hpp", ".h")) else "src") / entry["unit"]
+                    for entry in manifest}
+    for path in [path for path in (COPY / "ps2").rglob("*") if path.is_file() and path not in written]:
+        path.unlink()
     return sorted(path for path in (COPY / "ps2" / "src").glob("*.cpp") if path.name not in UNUSED_UNITS)
 
 
@@ -274,6 +297,7 @@ def compile_one(source, name):
     compiler = LINKER.replace("clang++", "clang") if source.suffix == ".m" else "clang" if c else "clang++"
     objc = ["-fobjc-arc"] if source.suffix == ".m" else []
     command = [compiler, *TARGET, *objc, "-std=c11" if c else "-std=c++26", "-c", *FLAGS, *POSITION, *debug,
+               *(EXECUTABLE_FLAGS if source == PORT / "src" / "executable.c" else []),
                *(["-O2"] if not source.is_relative_to(COPY) and source.name not in ("memory.c", "kernel.c") else []),
                "-MMD", "-MF", str(depfile),
                *([] if c else ["-include", str(PORT / "include" / "port.h")]),
@@ -817,6 +841,33 @@ def sign_for_device(app, team, identifier):
     return contents["ExpirationDate"]
 
 
+def lock_builds():
+    """Holds build/port/build.lock until the process ends or the file is closed: every build shares build/port/copy."""
+    path = ROOT / "build" / "port" / "build.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(path, "a+b")
+    if WINDOWS:
+        import msvcrt
+        while True:
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                return handle
+            except OSError:
+                print("waiting for another build of the port to finish", file=sys.stderr, flush=True)
+                time.sleep(1)
+    import fcntl
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("waiting for another build of the port to finish", file=sys.stderr, flush=True)
+        fcntl.flock(handle, fcntl.LOCK_EX)
+    return handle
+
+
+def shown(path):
+    return path.relative_to(ROOT) if path.is_relative_to(ROOT) else path
+
+
 def main():
     global OUT, OBJ, BINARY, DEBUG_BINARY, LINKER
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -825,6 +876,10 @@ def main():
     parser.add_argument("--movies", action="store_true", help="enable MPEG-2 movies with the local FFmpeg SDK")
     parser.add_argument("--debug", action="store_true", help="also link the debug build with its window and API")
     parser.add_argument("--mod", type=Path, action="append", default=[], help="a mod folder whose port code goes into the binaries")
+    parser.add_argument("--engine-mods", type=Path, help="an engine copy dc2tk prepared with mods' engine files")
+    parser.add_argument("--engine-sources", type=Path, help="a folder of engine files used in place of engine/'s")
+    parser.add_argument("--executable-sha256", help="the hash of the disc executable the binary is built for")
+    parser.add_argument("--output", type=Path, help="where to link the binary")
     parser.add_argument("--sdk", type=Path, default=OUT / ("windows-sdk" if WINDOWS else "sdk"),
                         help="the prefix tools/port_sdk.py installed SDL3 and FFmpeg in")
     parser.add_argument("--ios", choices=sorted(IOS), help="build DC2.app for the iOS simulator or an iPhone")
@@ -833,6 +888,7 @@ def main():
     parser.add_argument("--team", help="the Apple development team that signs the iPhone app, as Xcode lists it; without it the app is unsigned")
     parser.add_argument("arguments", nargs="*", help="arguments for the port, with --run")
     options = parser.parse_args()
+    lock = lock_builds()
     if options.ios:
         OUT = ROOT / "build" / "port" / f"ios-{options.ios}"
         OBJ = OUT / "obj"
@@ -871,6 +927,12 @@ def main():
         cflags, libraries = sdk_flags(options.sdk.resolve(), options.movies)
         if (options.sdk / "lib").is_dir():
             copy_libraries(options.sdk.resolve())
+    if options.output:
+        BINARY = options.output.resolve()
+        if BINARY.parent != OUT and not WINDOWS:
+            LINK_FLAGS.append(f"-Wl,-rpath,{OUT / 'lib'}")
+    if options.executable_sha256:
+        EXECUTABLE_FLAGS.append(f'-DPORT_EXECUTABLE_SHA256="{options.executable_sha256}"')
     SDL_CFLAGS.extend(cflags)
     FLAGS.extend(["-DPORT_GRAPHICS", *cflags])
     LINK_FLAGS.extend(libraries)
@@ -878,7 +940,9 @@ def main():
         sys.exit("no engine source in engine/: run `dc2tk engine fetch`")
     if options.debug and not (IMGUI / "imgui.h").exists():
         sys.exit("Dear ImGui missing: run python3 -I tools/imgui_sdk.py")
-    every, units, others = compile_all(copy_engine(), options.debug, [mod.resolve() for mod in options.mod])
+    engine_units = copy_engine(options.engine_sources and options.engine_sources.resolve(),
+                               options.engine_mods and options.engine_mods.resolve())
+    every, units, others = compile_all(engine_units, options.debug, [mod.resolve() for mod in options.mod])
     debug_objects = [path for path in every if path.stem.startswith(("mod_dc2tk_debug_tools_", "imgui_"))]
     objects = [path for path in every if path not in debug_objects]
     if WINDOWS:
@@ -893,6 +957,9 @@ def main():
     final = link(objects, extra, BINARY)
     if final.returncode != 0:
         sys.exit(final.stderr)
+    if WINDOWS and BINARY.parent != OUT:
+        for library in sorted(OUT.glob("*.dll")):
+            shutil.copy2(library, BINARY.parent / library.name)
     manifest = [*objects, *extra, OBJ / f"build_id_{BINARY.name}.o"]
     write_if_changed(OUT / "objects.json", json.dumps([str(path) for path in manifest], indent=2) + "\n")
     if options.debug:
@@ -904,9 +971,10 @@ def main():
     if groups:
         summary += f" ({', '.join(f'{group} {len(items)}' for group, items in sorted(groups.items(), key=lambda g: -len(g[1])))})"
     print(summary)
-    print(f"linked {BINARY.relative_to(ROOT)}; what is missing is in {(OUT / 'missing.txt').relative_to(ROOT)}")
+    print(f"linked {shown(BINARY)}; what is missing is in {shown(OUT / 'missing.txt')}")
     if options.debug:
-        print(f"linked {DEBUG_BINARY.relative_to(ROOT)}")
+        print(f"linked {shown(DEBUG_BINARY)}")
+    lock.close()
     if options.ios:
         app = bundle(options.ios, DEBUG_BINARY if options.debug else BINARY, options.bundle_id)
         print(f"bundled {app.relative_to(ROOT)}")

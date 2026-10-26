@@ -72,9 +72,11 @@ pub struct BuildArgs {
     /// build` wrote.
     #[arg(long, value_name = "FILE")]
     executable: Option<PathBuf>,
-    #[arg(long, num_args = 0..=1, default_missing_value = "build/port/dc2", value_name = "FILE", help = "Build the SDL3 native port, optionally writing it to FILE")]
-    native: Option<PathBuf>,
-    #[arg(long, requires = "native", help = "Enable MPEG2 playback in the native port using the local movie SDK")]
+    /// Build the SDL3 native port with tools/port.py, into FILE or where tools/port.py links it.
+    #[arg(long, num_args = 0..=1, value_name = "FILE")]
+    native: Option<Option<PathBuf>>,
+    /// Play the disc's MPEG-2 movies in the native port, with the FFmpeg of tools/port_sdk.py.
+    #[arg(long, requires = "native")]
     movies: bool,
     #[command(flatten)]
     common: Common,
@@ -110,7 +112,10 @@ pub fn run_build(args: &BuildArgs) -> Result<ExitCode> {
     if args.native.is_some() && args.executable.is_some() {
         bail!("--native cannot be combined with --executable: native code must come from engine source");
     }
-    if let Some(output) = &args.native {
+    if let Some(Some(output)) = &args.native {
+        if args.dry_run {
+            bail!("--dry-run links the native port only to check it: drop FILE from --native");
+        }
         crate::native::validate_output(output, &args.disc, args.output.as_deref(), &args.source)?;
     }
     let mut tools = args.common.tools()?;
@@ -121,7 +126,7 @@ pub fn run_build(args: &BuildArgs) -> Result<ExitCode> {
     if args.output.is_some() || args.native.is_none() {
         require_target(&mod_dirs, Target::Iso)?;
     }
-    if let Some(output) = &args.native {
+    if let Some(Some(output)) = &args.native {
         for directory in &mod_dirs {
             crate::native::validate_output(output, &args.disc, args.output.as_deref(), directory)?;
         }
@@ -161,6 +166,7 @@ pub fn run_build(args: &BuildArgs) -> Result<ExitCode> {
         made.data.executable = executable.clone();
     }
     if let Some(output) = &args.native {
+        let output = if args.dry_run { Some(crate::native::checked_output()) } else { output.clone() };
         let expected = match &executable {
             Some(bytes) => bytes.clone(),
             None => crate::engine::retail_executable(&args.disc)?,
@@ -170,7 +176,7 @@ pub fn run_build(args: &BuildArgs) -> Result<ExitCode> {
             &args.disc,
             native_tables.as_deref(),
             &expected,
-            (!args.dry_run).then_some(output.as_path()),
+            output.as_deref(),
             args.movies,
             &mod_dirs,
         )?;
@@ -244,7 +250,7 @@ pub fn build_native_binary(
         pcsx2: None,
         full: false,
         executable: None,
-        native: Some(output.to_path_buf()),
+        native: Some(Some(output.to_path_buf())),
         movies: true,
         common: common.clone(),
     };
@@ -644,13 +650,13 @@ mod tests {
     fn native_build_accepts_a_default_path_and_an_optional_iso_output() {
         let parsed = crate::Cli::try_parse_from(["dc2tk", "build", "scripts", "disc.iso", "--native"]).unwrap();
         let crate::Command::Build(args) = parsed.command else { panic!("expected build") };
-        assert_eq!(args.native.unwrap(), std::path::PathBuf::from("build/port/dc2"));
+        assert_eq!(args.native.unwrap(), None);
         assert!(args.output.is_none());
         let parsed =
             crate::Cli::try_parse_from(["dc2tk", "build", "scripts", "disc.iso", "--native", "game", "-o", "mod.iso"])
                 .unwrap();
         let crate::Command::Build(args) = parsed.command else { panic!("expected build") };
-        assert_eq!(args.native.unwrap(), std::path::PathBuf::from("game"));
+        assert_eq!(args.native.unwrap(), Some(std::path::PathBuf::from("game")));
         assert_eq!(args.output.unwrap(), std::path::PathBuf::from("mod.iso"));
         assert!(crate::Cli::try_parse_from(["dc2tk", "build", "scripts", "disc.iso"]).is_err());
     }

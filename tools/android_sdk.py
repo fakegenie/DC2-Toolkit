@@ -13,6 +13,7 @@ import tarfile
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
+JOBS = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count() or 1
 PREFIX = ROOT / "build" / "port" / "android-sdk"
 WORK = ROOT / "build" / "port" / "android-sdk-work"
 API = 29
@@ -83,7 +84,7 @@ def build_sdl():
          f"-DCMAKE_TOOLCHAIN_FILE={ndk() / 'build/cmake/android.toolchain.cmake'}", f"-DANDROID_ABI={ABI}",
          f"-DANDROID_PLATFORM=android-{API}", "-DCMAKE_INSTALL_LIBDIR=lib", "-DSDL_SHARED=ON", "-DSDL_STATIC=OFF",
          "-DSDL_TEST_LIBRARY=OFF", "-DSDL_TESTS=OFF", "-DSDL_EXAMPLES=OFF", "-DSDL_INSTALL_TESTS=OFF"], log)
-    run(["cmake", "--build", str(build), "--parallel", str(os.cpu_count())], log)
+    run(["cmake", "--build", str(build), "--parallel", str(JOBS)], log)
     run(["cmake", "--install", str(build), "--strip"], log)
     shutil.rmtree(PREFIX / "java", ignore_errors=True)
     shutil.copytree(source / "android-project/app/src/main/java", PREFIX / "java")
@@ -103,7 +104,7 @@ def build_ffmpeg():
     run([str(source / "configure"), "--prefix=/", *FFMPEG_CONFIGURE,
          f"--cc={tools / f'aarch64-linux-android{API}-clang'}", f"--ar={tools / 'llvm-ar'}", f"--nm={tools / 'llvm-nm'}",
          f"--ranlib={tools / 'llvm-ranlib'}", f"--strip={tools / 'llvm-strip'}"], log, build)
-    run(["make", f"-j{os.cpu_count()}"], log, build)
+    run(["make", f"-j{JOBS}"], log, build)
     run(["make", "install", f"DESTDIR={PREFIX}"], log, build)
     shutil.rmtree(PREFIX / "share" / "ffmpeg", ignore_errors=True)
     shutil.rmtree(PREFIX / "lib" / "pkgconfig", ignore_errors=True)

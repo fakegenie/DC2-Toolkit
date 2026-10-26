@@ -3,10 +3,6 @@
 #include "cdvd.h"
 #include "executable.h"
 
-#if __has_include("port_build.h")
-#include "port_build.h"
-#endif
-
 #ifndef PORT_EXECUTABLE_SHA256
 #define PORT_EXECUTABLE_SHA256 "41dec16868ec5ccc74f8927dad347a810828ae87ecd021ef7cc8a9568abb856c"
 #endif

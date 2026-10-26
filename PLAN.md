@@ -34,7 +34,7 @@ under `build/` (not in git).
 | E4 executable tables and natives from source | yes, every table but `data:parts` | Rust tests | `data:parts`; fixes 4, 5, 14 |
 | P0 compile spike | yes | | |
 | P1 headless boot | yes | boots `dc2.iso` to the language selector | |
-| P2 graphics | the engine draws through SDL_GPU (replaced the emulated DMA, VIF, VU1 and GS) | `tools/port.py --movies` builds clean (149 units, 40 files, no stubs); `port/tests/run.py` passes on macOS; 50 Hz in a window | PCSX2 comparison; water on screen; lens flare, depth of field and texture animation on screen |
+| P2 graphics | the engine draws through SDL_GPU (replaced the emulated DMA, VIF, VU1 and GS) | `tools/port.py --movies` builds clean (149 units, 40 files, no stubs); `port/tests/run.py` passes on macOS; 50 Hz in a window | PCSX2 comparison (water, lens flare, depth of field and texture animation have since been seen on screen) |
 | P3 input | SDL keyboard and gamepad as a DualShock 2 | | a human playing it |
 | P4 sound | SPU2 voices, ADSR, reverb, the MIDI sequencer; `CSound` calls them directly | the port suite's sound and MIDI checks | listening against retail; a real audio device |
 | P5 saves and movies | memory cards as folders; MPEG-2 movies | the port suite's card checks; the retail logo (150 frames) and tutorial (1,275) movies decode | console-made saves |
@@ -97,22 +97,29 @@ written fresh. These are what it found to fix:
 3. **Done: `mod check --native`.** `mod check` always built the native port for engine mods (`modding/check.rs:57-66`),
    which fails on Windows, macOS and any Linux without SDL3, and costs a full native compile.
    Make the native check `--native`, as `build` has it.
-4. **Units whose tables are written as source lose Satan's Fiddle's profile**
-   (`engine.rs:526-547`), so a `data:monsters` edit beside any engine mod recompiles all of
-   `monster.cpp` without retail's codegen. Keep the profile for units whose only change is
-   tables, and after the link compare each edited table's bytes in the built ELF (found through
-   the `.xMAP`) with the bytes the byte-patch path would have written.
-5. **`data:parts` has no source path** (`engine_tables.rs:35-196`): `PartsInfoData`, the part
-   names at `0x36C708` and `MiniMapInfoData`. It is refused loudly today; implement it, with a
-   test that pins it.
-6. **`--native`'s default path** (`modding/build.rs:63`) is relative to the current folder, not
-   the repository's `build/`; and `--native FILE --dry-run` ignores FILE.
-7. **One native build.** `tools/port.py` and `src/crates/dc2tk/src/native.rs` each carry the
-   flags, aliases, localised symbols, the GS bundle and Kazarov's `libvu0.cpp`. Keep them in
-   dc2tk and make `tools/port.py` a thin call to `dc2tk build --native` (or drop it), so they
-   cannot drift.
-8. **CPU use.** `tools/port_sdk.py` builds with `os.cpu_count()` jobs; it should follow the affinity. (The GS
-   workers this also named are gone.)
+4. **Built, not yet run on a real engine build: table units keep their profile.** `compile_mods`
+   no longer strips Satan's Fiddle's profile from units whose tables are written as source, and
+   after the link `engine_tables::check_built` compares every field of each edited table at its
+   symbol's address (read from the `.xMAP` by `map_symbols`) with what the edit wrote, refusing
+   the build on any difference. `the_built_engine_must_hold_every_edited_field` and
+   `the_link_map_gives_each_symbol_its_first_address` pin it. Still to do on a machine where
+   Kazarov builds: a mod with a `data:monsters` edit and an engine mod, to confirm the `.xMAP`
+   lines are `ADDRESS NAME...` as `map_symbols` reads them and that `check_built` passes.
+5. **Done: `data:parts` from source.** `PartsInfoData` and `MiniMapInfoData` are tables in
+   `engine_tables.rs`; a part's name is a `Named` field, whose bytes are where the record's pointer
+   points and whose source is the string literal, so a name edit rewrites the literal and a changed
+   pointer is refused. `part_names_change_their_strings_and_never_their_pointers` pins it.
+6. **Done: `--native` without FILE** links where `tools/port.py` puts the binary (`build/port/dc2`,
+   `build/port/windows/dc2.exe`), wherever dc2tk runs from; `--native FILE --dry-run` is refused,
+   and `--dry-run` alone links `build/port/checked-native` to check it.
+7. **Done: one native build.** `tools/port.py` is the only one. `dc2tk build --native` and
+   `mod check --native` run it with `--engine-mods` (the copy `prepare_mods` made; its mods' files
+   go through `native_prepare.py`), `--engine-sources` (`build/port/tables`, the table units with
+   the edited tables written in), `--mod` for each mod with port code, `--executable-sha256` (for
+   `executable.c`) and `--output`. A binary linked outside `build/port` gets an rpath to
+   `build/port/lib` (Windows: the DLLs are copied beside it). `port.py` removes files from
+   `build/port/copy` that no longer come from the engine or a mod.
+8. **Done:** the SDK scripts build with as many jobs as the process's CPU affinity allows.
 9. **Done: debugging in the shipping binary.** `DC2TK_SCREENSHOT` and `DC2TK_PRESS` are gone (the
    debug API's `screenshot` and `press` replace them); the sound dump is the debug build's
    (`debug_audio`, `DC2TK_SOUND_DUMP`); `cdvd.c` logs opened files and archive members, and loads
@@ -121,36 +128,28 @@ written fresh. These are what it found to fix:
 11. **Done:** `port/tests/run.py` writes its patched sources and objects under `build/port/tests/`,
     and `-DPORT_SOUND` and its conditionals are gone. Every unit keeps `-I engine/port/src`:
     `mg_drawprim.cpp` and others include `vu0_lanes.hpp` from there.
-12. **The effect-heap substitutions** (`port.json` #132-136): with PS2 sizes the new formula gives
-    166 quadwords against retail's 161; #135 adds an unexplained `+ 3` no test covers; #136
-    changes nothing on x86-64. Make the formula give retail's count with PS2 sizes, test the
-    `+ 3` or drop it, and drop #136.
-13. **Build copies** have no lock (two builds of one mod set share `build/engine/mods-<hash>`, and
-    every native build shares `build/port/native-*`), and old `mods-*` copies are never removed.
-    Header mods without a fetched engine fail with a confusing message instead of "run
+12. **Done: the effect-heap substitutions.** `EFF_SPT_RUNTIME_QUADWORDS` is the script, the
+    character and the stack, as retail counts them, plus the call frames beyond the quadword retail
+    leaves to the fit's slack (`2 * sizeof(RS_CALLDATA) / 16 - 1`): 161 with PS2 sizes, retail's
+    `0x7D + 0x24`. `AssignCharacter`'s `+ 3` and the call data's round-up (no change on 64-bit)
+    are dropped; `port/tests/effect_heap.cpp` passes.
+13. **Done: build copies.** `tools/port.py` holds `build/port/build.lock` while it builds;
+    `prepare_mods` holds `build/engine/mods-<hash>.lock` while its copy is in use and removes all
+    but the four copies used last; a mod's engine files without a fetched engine say "run
     `dc2tk engine fetch`".
-14. **The native tables' parser now masks strings and comments** (a fix: Shift-JIS bytes in
-    `_SHOT`'s strings ran it into later functions), which changes `_SHOT`'s accessors from the
-    committed 42 to one. Regenerate `definitions/natives/` with `dc2tk natives engine` and say so
-    in the commit; script bytes do not change.
-15. **Style:** `native.rs` lacks its `//!` line; `build.rs:63-66` uses `help = "..."` where the
-    crate uses `///`; `python_in_container` runs Python without `-I`; `tools/native_prepare.py`,
-    `tools/test_native_prepare.py` and `port/tests/native_save.py` lack the usage docstring.
-16. **Disk:** `build/` is 33 GB, 22 GB of it `build/validation` (traces and captures). Once the
-    work is committed, keep the save checkpoints and delete the traces.
+14. **Done:** `definitions/natives/` regenerated: `_SHOT` has one accessor, and `_CHECK_PAUSE` and
+    `_GET_BTN` take int then out, as the engine reads them.
+15. **Done:** the style items, and `python_in_container` and `export_override` run `python3 -I`.
+16. **Done:** `build/validation` is gone.
 17. **Savestates on Linux.** Done with the redesign (savestate entry 2 below): states keep the
     `game_data`/`game_bss` sections, and a non-PIE binary never needs relocation.
 18. **`profile` off macOS.** `port/debug/core.cpp` runs macOS's `/usr/bin/sample`; on Linux and
     Windows it only says to use `perf` or the Windows Performance Recorder.
-19. **Golden baselines are per GPU.** Lavapipe's pictures differ from Metal's by 1 to 3 per
-    channel on about half the title's pixels, and up to 44 on seven edge pixels; the `capture`
-    draw lists at the same frame are identical, so the CPU side matches. Keep baselines per
-    platform (for example `build/port/golden/baseline-<platform>/`), or compare across GPUs
-    with a tolerance and an outlier count.
-20. **The default save folder** on Linux is `./saves` (macOS uses iCloud Drive when it exists).
-    Use `$XDG_DATA_HOME/DC2/saves`, falling back to `~/.local/share`.
-21. **The costume screen draws white patches over Max** (face, hands, a block over the body),
-    on macOS and Linux alike, in the release build after New Game.
+19. **Done: golden baselines per platform**, in `build/port/golden/baseline-macos`, `-linux` and
+    `-windows` (Lavapipe's pictures differ from Metal's by 1 to 3 per channel).
+20. **Done:** saves default to `SDL_GetPrefPath("DC2 Toolkit", "DC2")/saves` on every platform.
+21. **Done: the costume screen** draws Max without white patches on macOS (release and debug, 4:3
+    and 16:9, checked 2026-10-26); Linux not rechecked.
 22. **Done: debug warps from the title during the attract demo.** The warp's Start+Select press
     only ended the demo; a warp from the title now presses again every 30 frames until the title
     is left (`port/debug/scenario.cpp`).
@@ -163,6 +162,18 @@ written fresh. These are what it found to fix:
     with a rod and bait 317 (Carrots draw nothing there) and records the user's catch; the user
     still has to record it (the old input file did not survive the move to recordings). Then add
     starts for Finny Frenzy, Spheda, photos and Georama.
+25. **Done: diagonal running on a gamepad.** A round-gated pad gives about 0.71 per axis at a full
+    diagonal, which the engine's per-axis dead zone turned into 0.74, below the town's run at 0.8.
+    `port_input_square` (`port/src/input.c`) stretches SDL's sticks from circle to square, as the
+    touch stick already did; `port/tests/input.c` checks every direction runs at 90% push and the
+    dead zone stays. Not tried on a real phone controller.
+26. **Done: Sindain's sides at 16:9.** `CEditMap::DrawRiverMask` drew its whole-screen mask only
+    `mgScreenWidth` wide, so the river's sky reflection showed in the side areas. `port.json`
+    widens it like the clears.
+27. **Done: Max's eyes closed at rest in the item menu** with `render.smooth` on. Between frames
+    replay GPU copies but not uploads, so replaying the frame that filled a texture's untouched
+    copy filled it mid-blink. `gs_texture_for` (`port/src/draw.cpp`) now uploads the decoded
+    picture into the untouched copy and copies it to the texture. Seen only with smoothing on.
 
 ### Next: debugging and states that last
 
@@ -396,7 +407,7 @@ by how far `port_build_id` has moved since the link. The macOS path of this is n
 
 Open on Windows:
 
-- `dc2tk build --native` (`native.rs`) has none of this; item 7 (one native build) would bring it.
+- `dc2tk build --native` runs `tools/port.py` (item 7), so it builds on Windows too; not yet run there.
 - `memory.c`'s ASLR respawn is macOS only and not needed with the fixed base.
 
 ### Gates only the user can run
@@ -451,6 +462,11 @@ Open on Windows:
 - **macOS arm64** (the machine the native rewrite was done on), with Homebrew's `sdl3`,
   `ffmpeg`, `llvm` (for `llvm-objcopy` and `llvm-nm`), `pkg-config`, `glslang` and
   `spirv-cross`, and Rust from rustup. The retail disc is `dc2.iso` in the repository root.
+  Put `/opt/homebrew/opt/llvm/bin:/opt/homebrew/bin` first on PATH: `/usr/bin/python3` is 3.9,
+  too old for the tools, and Apple clang's libc++ clashes with the engine's `abs` and `random`.
+- **Kazarov's container on this Mac:** needs the colima x86-64 VM Kazarov asks for, which is not
+  installed. OrbStack (`BUILDER=docker DOCKER_CONTEXT=orbstack`) builds the image but the
+  compile stops: `wibo` gets SIGSTOP before loading MWCC, as Rosetta runs no 32-bit x86 code.
 - **Building the port:** `python3 -I tools/port.py --movies`, then `build/port/dc2
   dc2.iso`. Running it needs the window server. Keys: WASD move, F/H/T/G camera, arrows the
   D-pad, I/J/K/L triangle/square/cross/circle, Q/E L1/R1, 1/3 L2/R2, C/V L3/R3, Enter Start,
@@ -772,7 +788,7 @@ Each has a gate. A gate that needs PCSX2, a PS2, a display or a listener is the 
 2. **E2 Modding build mode.** Built. Gate, the user's: the 50,000-money edit boots in PCSX2.
 3. **E3 Engine mods for the ISO.** Built. Gate, the user's: a mod replacing a dungeon function
    plays in PCSX2. Fixes 3, 4, 13 first.
-4. **E4 Tables and natives.** Built but `data:parts` (fix 5) and the table byte check (fix 4).
+4. **E4 Tables and natives.** Built; the table byte check (fix 4) still needs one real engine build.
    Gate, the user's: a shop edit and a mod's native work in PCSX2.
 5. **P0 Compile spike.** Done.
 6. **P1 Headless boot.** Done: the ISO boots to the language selector.
