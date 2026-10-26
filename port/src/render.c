@@ -2006,7 +2006,14 @@ void render_shadow(const RenderState *state, const RenderVertex *vertices, const
     shadow_points = NULL;
 }
 
-static int extends_last(const Command *command, const MeshUniforms *uniforms, const RenderBone *bones) {
+static int bone_set(const RenderBone *bones) {
+    if (!bones) return 0;
+    if (bone_count > 1 && !memcmp(bones, bone_sets[bone_count - 1], sizeof bone_sets[0])) return bone_count - 1;
+    memcpy(bone_sets[bone_count], bones, sizeof bone_sets[0]);
+    return bone_count++;
+}
+
+static int extends_last(const Command *command, const MeshUniforms *uniforms) {
     const Command *last = pending_count ? &pending[pending_count - 1] : NULL;
     if (!last || last->target != command->target || last->model < 0 || !command->resident || !last->resident) return 0;
     if (last->offset + (uint32_t)last->count * sizeof(MeshVertex) != command->offset) return 0;
@@ -2016,8 +2023,7 @@ static int extends_last(const Command *command, const MeshUniforms *uniforms, co
         memcmp(&last->scissor, &command->scissor, sizeof last->scissor))
         return 0;
     if (memcmp(uniforms, &models[last->model], offsetof(MeshUniforms, flags) + offsetof(RenderMeshFlags, bone_set))) return 0;
-    if (!bones != !last->bones) return 0;
-    return !bones || !memcmp(bones, bone_sets[last->bones], sizeof bone_sets[0]);
+    return last->bones == command->bones;
 }
 
 void render_mesh(const RenderState *state, int cull, const MeshUniforms *uniforms, const RenderBone *bones,
@@ -2048,18 +2054,14 @@ void render_mesh(const RenderState *state, int cull, const MeshUniforms *uniform
         if (capturing) record(RENDER_SOURCE_MESH, state, RENDER_TRIANGLES, cull, count, NULL, -1, 0, uniforms);
         return;
     }
-    if (extends_last(&command, uniforms, bones)) {
+    command.bones = bone_set(bones);
+    if (extends_last(&command, uniforms)) {
         pending[pending_count - 1].count += count;
         if (capturing) record(RENDER_SOURCE_MESH, state, RENDER_TRIANGLES, cull, count, NULL, command_serial - 1, 1, uniforms);
         return;
     }
     command.model = model_count;
     models[model_count] = *uniforms;
-    command.bones = 0;
-    if (bones) {
-        command.bones = bone_count;
-        memcpy(bone_sets[bone_count++], bones, sizeof bone_sets[0]);
-    }
     models[model_count++].flags.bone_set = (uint32_t)command.bones;
     append(&command);
     if (capturing) record(RENDER_SOURCE_MESH, state, RENDER_TRIANGLES, cull, count, NULL, command_serial - 1, 0, uniforms);

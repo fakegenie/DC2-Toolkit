@@ -24,6 +24,13 @@ struct FaceMesh {
 enum { MESH_IDLE_FRAMES = 600, MESH_CACHE_LIMIT = 30000 };
 enum { PROGRAM_REAL = 1, PROGRAM_REF_SPHERE = 2, SPECULAR_PASSES = 3 };
 
+struct FaceRun {
+    const MeshVertex *vertices;
+    int resident;
+    int count;
+    u_short type;
+};
+
 struct VisualDraw {
     mgCVisualMDT *visual;
     MeshUniforms uniforms;
@@ -117,6 +124,19 @@ static void copy_matrix(float *out, float (*matrix)[4]) {
     memcpy(out, matrix, 16 * sizeof(float));
 }
 
+static void draw_run(const VisualDraw &draw, const FaceRun &run, const RenderState &textured, MeshUniforms &uniforms,
+                     u_int tint, int edge) {
+    if (!run.count) return;
+    RenderState state = (run.type & MG_FACE_NO_TEXTURE) ? draw.state : textured;
+    if (tint) {
+        state.blending = {RENDER_BLEND_SOURCE, RENDER_BLEND_DESTINATION, RENDER_BLEND_SOURCE, RENDER_BLEND_DESTINATION, 0};
+        state.tint = tint;
+    }
+    if (edge) state.depth_write = 0;
+    uniforms.flags.face_type = run.type;
+    render_mesh(&state, draw.cull, &uniforms, draw.skinned ? draw.bones : NULL, run.vertices, run.count, run.resident);
+}
+
 static void draw_group(const VisualDraw &draw, const mgFACE_GROUP *group, u_int tint, int edge) {
     if (group->vu_program == 1) {
         if (!edge) shadow_draw(draw.visual, draw.shadow, group);
@@ -133,21 +153,23 @@ static void draw_group(const VisualDraw &draw, const mgFACE_GROUP *group, u_int 
     RenderState textured = draw.state;
     gs_texture_state(&textured, material->texture, &uniforms.texture_scale_u, &uniforms.texture_scale_v);
     gs_sample_limits(&textured, uniforms.texture_scale_u, uniforms.texture_scale_v, &uniforms.limits);
+    FaceRun run = {};
     for (const mgCFace *face = group->face; face != NULL; face = face->next) {
         auto found = face_meshes.find(face);
         if (found == face_meshes.end()) continue;
-        found->second.used = mesh_frame;
-        if (found->second.vertices.empty()) continue;
-        RenderState state = (found->second.type & MG_FACE_NO_TEXTURE) ? draw.state : textured;
-        if (tint) {
-            state.blending = {RENDER_BLEND_SOURCE, RENDER_BLEND_DESTINATION, RENDER_BLEND_SOURCE, RENDER_BLEND_DESTINATION, 0};
-            state.tint = tint;
+        FaceMesh &mesh = found->second;
+        mesh.used = mesh_frame;
+        if (mesh.vertices.empty()) continue;
+        int count = (int)mesh.vertices.size();
+        if (run.count && mesh.resident >= 0 && run.resident >= 0 && mesh.type == run.type &&
+            run.resident + run.count == mesh.resident) {
+            run.count += count;
+            continue;
         }
-        if (edge) state.depth_write = 0;
-        uniforms.flags.face_type = found->second.type;
-        render_mesh(&state, draw.cull, &uniforms, draw.skinned ? draw.bones : NULL, found->second.vertices.data(),
-                    (int)found->second.vertices.size(), found->second.resident);
+        draw_run(draw, run, textured, uniforms, tint, edge);
+        run = {mesh.vertices.data(), mesh.resident, count, mesh.type};
     }
+    draw_run(draw, run, textured, uniforms, tint, edge);
 }
 
 static void draw_visual(const VisualDraw &draw, u_int tint, int edge) {

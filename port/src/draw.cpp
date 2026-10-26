@@ -104,6 +104,8 @@ struct CachedTexture {
     char name[32];
     int hd;
     int drawn;
+    int reloaded;
+    int pristine;
 };
 
 struct TargetCopy {
@@ -129,6 +131,8 @@ PORT_GAME_END
 
 static int frame_target;
 static CachedTexture cache[CACHE_LIMIT];
+static std::unordered_map<const void *, std::vector<CachedTexture *>> by_image;
+static std::unordered_map<int, CachedTexture *> by_render;
 static TargetCopy copies[COPY_LIMIT];
 static u_int frame_number = 1;
 static std::unordered_map<const void *, std::vector<u_int>> palettes;
@@ -364,18 +368,15 @@ static int hd_picture(const char *name, int width, int height, std::vector<u_int
 }
 
 static CachedTexture *cached(const mgCTexture *texture) {
+    std::vector<CachedTexture *> &entries = by_image[texture->image[0]];
+    for (CachedTexture *entry : entries)
+        if (entry->clut == texture->clut && entry->psm == texture->bpp && entry->width == texture->width &&
+            entry->height == texture->height)
+            return entry;
     size_t start = ((size_t)texture->image[0] >> 4) % CACHE_LIMIT;
     CachedTexture *empty = NULL;
-    for (size_t step = 0; step < CACHE_LIMIT; ++step) {
-        CachedTexture *entry = &cache[(start + step) % CACHE_LIMIT];
-        if (!entry->render) {
-            if (!empty) empty = entry;
-            continue;
-        }
-        if (entry->image == texture->image[0] && entry->clut == texture->clut && entry->psm == texture->bpp &&
-            entry->width == texture->width && entry->height == texture->height)
-            return entry;
-    }
+    for (size_t step = 0; step < CACHE_LIMIT && !empty; ++step)
+        if (!cache[(start + step) % CACHE_LIMIT].render) empty = &cache[(start + step) % CACHE_LIMIT];
     if (!empty) {
         fputs("draw: the texture cache is full\n", stderr);
         return NULL;
@@ -394,6 +395,8 @@ static CachedTexture *cached(const mgCTexture *texture) {
     empty->render = scale > 0 ? render_texture_at_scale(texture->width, texture->height, scale)
                               : render_texture(texture->width, texture->height);
     if (scale > 0) render_upload_full(empty->render, (const uint32_t *)hd.data());
+    entries.push_back(empty);
+    by_render[empty->render] = empty;
     port_stats.cached_textures++;
     return empty;
 }
@@ -467,13 +470,14 @@ void gs_copy_image(u_int source_base, int source_x, int source_y, u_int destinat
     width = smaller(width, smaller(render_width(source) - source_x, render_width(destination) - destination_x));
     height = smaller(height, smaller(render_height(source) - source_y, render_height(destination) - destination_y));
     render_copy(source, source_x, source_y, destination, destination_x, destination_y, width, height);
-    for (int i = 0; i < CACHE_LIMIT; ++i)
-        if (cache[i].render == destination) cache[i].drawn = 1;
+    auto drawn = by_render.find(destination);
+    if (drawn != by_render.end()) drawn->second->drawn = 1;
     const mgCTexture *texture = resident_texture(source_base, 0);
     if (source_base != destination_base || !texture) return;
-    for (int i = 0; i < CACHE_LIMIT; ++i) {
-        CachedTexture *palette = &cache[i];
-        if (!palette->render || palette->render == destination || palette->image != texture->image[0]) continue;
+    auto variants = by_image.find(texture->image[0]);
+    if (variants == by_image.end()) return;
+    for (CachedTexture *palette : variants->second) {
+        if (palette->render == destination) continue;
         mgCTexture variant = *texture;
         variant.clut = (decltype(variant.clut))palette->clut;
         gs_texture_for(&variant);
@@ -483,11 +487,12 @@ void gs_copy_image(u_int source_base, int source_x, int source_y, u_int destinat
 }
 
 extern "C" void port_texture_loaded(const void *image) {
-    for (int i = 0; i < CACHE_LIMIT; ++i) {
-        CachedTexture *entry = &cache[i];
-        if (!entry->render || !entry->drawn || entry->image != image) continue;
+    auto found = by_image.find(image);
+    if (found == by_image.end()) return;
+    for (CachedTexture *entry : found->second) {
+        if (!entry->drawn) continue;
         entry->drawn = 0;
-        entry->checksum = 0;
+        entry->reloaded = 1;
         entry->checked = 0;
     }
 }
@@ -508,12 +513,21 @@ int gs_texture_for(const mgCTexture *texture) {
     if (entry->checked == frame_number) return entry->render;
     entry->checked = frame_number;
     u_long hash = texture_checksum(texture);
-    if (hash == entry->checksum) return entry->render;
+    int reloaded = entry->reloaded;
+    entry->reloaded = 0;
+    if (hash == entry->checksum && !reloaded) return entry->render;
+    if (hash == entry->checksum && entry->pristine) {
+        render_copy(entry->pristine, 0, 0, entry->render, 0, 0, texture->width, texture->height);
+        return entry->render;
+    }
     entry->checksum = hash;
     std::vector<u_int> pixels;
     decode(texture, pixels);
     port_stats.texture_decodes++;
     render_upload(entry->render, 0, 0, texture->width, texture->height, pixels.data());
+    if (!reloaded && !entry->pristine) return entry->render;
+    if (!entry->pristine) entry->pristine = render_texture(texture->width, texture->height);
+    render_copy(entry->render, 0, 0, entry->pristine, 0, 0, texture->width, texture->height);
     return entry->render;
 }
 
@@ -529,7 +543,13 @@ void gs_next_frame() {
     for (int i = 0; i < CACHE_LIMIT; ++i) {
         CachedTexture *entry = &cache[i];
         if (!entry->render || frame_number - entry->used < CACHE_IDLE_FRAMES) continue;
+        std::vector<CachedTexture *> &entries = by_image[entry->image];
+        for (size_t at = 0; at < entries.size(); ++at)
+            if (entries[at] == entry) entries.erase(entries.begin() + (long)at);
+        if (entries.empty()) by_image.erase(entry->image);
+        by_render.erase(entry->render);
         render_release(entry->render);
+        if (entry->pristine) render_release(entry->pristine);
         memset(entry, 0, sizeof *entry);
         port_stats.cached_textures--;
     }
@@ -867,15 +887,13 @@ void gs_packed(int reg, const void *qword) {
     }
 }
 int gs_cache_info(int slot, CacheInfo *info) {
-    for (int i = 0; i < CACHE_LIMIT; ++i) {
-        const CachedTexture *entry = &cache[i];
-        if (!entry->render || entry->render != slot) continue;
-        snprintf(info->name, sizeof info->name, "%s", entry->name);
-        info->image = entry->image;
-        info->clut = entry->clut;
-        info->psm = entry->psm;
-        info->age = frame_number - entry->used;
-        return 1;
-    }
-    return 0;
+    auto found = by_render.find(slot);
+    if (found == by_render.end()) return 0;
+    const CachedTexture *entry = found->second;
+    snprintf(info->name, sizeof info->name, "%s", entry->name);
+    info->image = entry->image;
+    info->clut = entry->clut;
+    info->psm = entry->psm;
+    info->age = frame_number - entry->used;
+    return 1;
 }
