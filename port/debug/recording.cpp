@@ -9,6 +9,7 @@
 #include "port_graphics.h"
 #include "port_state.h"
 #include "mglib.hpp"
+#include "render.h"
 #include "savedata.hpp"
 #include "scenesnd.hpp"
 #include "subgame.hpp"
@@ -20,11 +21,13 @@
 #include <cstring>
 #include <ctime>
 #include <dirent.h>
-#include <fcntl.h>
 #include <string>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
+extern "C" {
+#include "audio.h"
+}
 #ifdef __APPLE__
 #include <TargetConditionals.h>
 #endif
@@ -170,17 +173,7 @@ static void file_of(const char *name, const char *file, char *path, size_t size)
     snprintf(path, size, "%s/%s", folder, file);
 }
 
-static void make_folders(const char *path) {
-    char partial[PATH_SIZE];
-    snprintf(partial, sizeof partial, "%s", path);
-    for (char *at = partial + 1; *at; ++at) {
-        if (*at != '/') continue;
-        *at = 0;
-        mkdir(partial, 0755);
-        *at = '/';
-    }
-    mkdir(partial, 0755);
-}
+static void make_folders(const char *path) { SDL_CreateDirectory(path); }
 
 static CScene *playing_scene(void) {
     int loop = GetNowLoopNo();
@@ -531,7 +524,7 @@ static void finish_play(void) {
          played.frames, worst_player, worst_camera, first_apart);
     char path[PATH_SIZE], line[LINE_SIZE];
     file_of(played_name, "play.jsonl", path, sizeof path);
-    FILE *file = fopen(path, "w");
+    FILE *file = fopen(path, "wb");
     for (size_t i = 0; file && i < live.trace.size(); ++i) {
         format_trace(line, sizeof line, (uint32_t)i, &live.trace[i]);
         fputs(line, file);
@@ -567,11 +560,39 @@ static void collect_fields(void) {
     }
 }
 
+static void hide_window(void *unused) {
+    (void)unused;
+    SDL_HideWindow(render_window());
+}
+
+// A new process with the same arguments and environment, as exec would give, which Windows has not got. This one lets
+// go of the debug port first, hides its window and stops its sound, then waits for the new one and leaves with its
+// status, so whoever started the game still waits on the process it started.
+static void restart(void) {
+    SDL_PropertiesID properties = SDL_CreateProperties();
+    SDL_SetPointerProperty(properties, SDL_PROP_PROCESS_CREATE_ARGS_POINTER, (void *)port_arguments);
+    SDL_SetNumberProperty(properties, SDL_PROP_PROCESS_CREATE_STDIN_NUMBER, SDL_PROCESS_STDIO_INHERITED);
+    SDL_SetNumberProperty(properties, SDL_PROP_PROCESS_CREATE_STDOUT_NUMBER, SDL_PROCESS_STDIO_INHERITED);
+    SDL_SetNumberProperty(properties, SDL_PROP_PROCESS_CREATE_STDERR_NUMBER, SDL_PROCESS_STDIO_INHERITED);
+    debug_server_stop();
+    SDL_Process *game = SDL_CreateProcessWithProperties(properties);
+    SDL_DestroyProperties(properties);
+    if (!game) {
+        debug_server_resume();
+        note("the game could not restart itself: %s", SDL_GetError());
+        return;
+    }
+    SDL_RunOnMainThread(hide_window, NULL, false);
+    audio_shutdown();
+    int status = 0;
+    SDL_WaitProcess(game, true, &status);
+    exit(status);
+}
+
 void debug_recording_frame(void) {
     if (relaunching) {
         relaunching = 0;
-        execv(port_arguments[0], port_arguments);
-        note("the game could not restart itself");
+        restart();
     }
     if (load_step == LOAD_NONE && !live_lost[0] && debug_frame_total > live_base) {
         live.trace.push_back(sample_trace());
@@ -583,20 +604,10 @@ void debug_recording_frame(void) {
 }
 
 static int write_file(const char *path, const void *data, size_t size) {
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) return 0;
-    const unsigned char *at = (const unsigned char *)data;
-    int ok = 1;
-    while (ok && size) {
-        ssize_t written = write(fd, at, size);
-        if (written < 0 && errno == EINTR) continue;
-        ok = written > 0;
-        if (ok) {
-            at += written;
-            size -= (size_t)written;
-        }
-    }
-    return !close(fd) && ok;
+    FILE *file = fopen(path, "wb");
+    if (!file) return 0;
+    int ok = fwrite(data, 1, size, file) == size;
+    return !fclose(file) && ok;
 }
 
 static std::string recording_text(const Recording *recording) {
@@ -663,12 +674,11 @@ static const char *write_recording(const char *name, const Recording *recording)
 }
 
 static void time_name(const char *prefix, char *name, size_t size) {
-    time_t now = time(NULL);
-    struct tm local;
-    localtime_r(&now, &local);
-    char when[32];
-    strftime(when, sizeof when, "%Y%m%d-%H%M%S", &local);
-    snprintf(name, size, "%s-%s", prefix, when);
+    SDL_Time now = 0;
+    SDL_DateTime local;
+    if (!SDL_GetCurrentTime(&now) || !SDL_TimeToDateTime(now, &local, true)) memset(&local, 0, sizeof local);
+    snprintf(name, size, "%s-%04d%02d%02d-%02d%02d%02d", prefix, local.year, local.month, local.day, local.hour,
+             local.minute, local.second);
 }
 
 static const char *save_live(const char *name) {
@@ -790,9 +800,9 @@ static const char *relaunch(const char *name, long pause) {
     char folder[PATH_SIZE], frame[32];
     folder_of(name, folder, sizeof folder);
     snprintf(frame, sizeof frame, "%ld", pause >= 0 ? pause : (long)played.frames);
-    setenv("DC2TK_RECORDING", folder, 1);
-    setenv("DC2TK_RECORDING_PAUSE", frame, 1);
-    setenv("DC2TK_DEBUG_SPEED", "0", 1);
+    SDL_setenv_unsafe("DC2TK_RECORDING", folder, 1);
+    SDL_setenv_unsafe("DC2TK_RECORDING_PAUSE", frame, 1);
+    SDL_setenv_unsafe("DC2TK_DEBUG_SPEED", "0", 1);
     relaunching = 1;
     if (debug_paused && debug_steps == 0) debug_steps = 1;
     note("restarting the game to play %s from launch", name);
@@ -821,18 +831,29 @@ static void stop_play(void) {
     note("playback of %s stopped", played_name);
 }
 
+// A new folder in the system's temporary folder (TMPDIR, or TEMP on Windows)
+static std::string temporary_folder(const char *prefix) {
+    const char *temporary = SDL_getenv("TMPDIR");
+    if (!temporary || !*temporary) temporary = SDL_getenv("TEMP");
+    std::string parent = temporary && *temporary ? temporary : "/tmp";
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        char name[64];
+        snprintf(name, sizeof name, "/%s-%llx-%d", prefix, (unsigned long long)SDL_GetTicksNS(), attempt);
+        std::string path = parent + name;
+        if (!SDL_GetPathInfo(path.c_str(), NULL) && SDL_CreateDirectory(path.c_str())) return path;
+    }
+    return "";
+}
+
 static void restore_card(const std::vector<CardFile> &card) {
-    const char *temporary = getenv("TMPDIR");
-    std::string pattern = std::string(temporary && *temporary ? temporary : "/tmp") + "/dc2tk-card-XXXXXX";
-    std::vector<char> path(pattern.begin(), pattern.end());
-    path.push_back(0);
-    if (!mkdtemp(path.data())) return;
+    std::string path = temporary_folder("dc2tk-card");
+    if (path.empty()) return;
     for (const CardFile &file : card) {
-        std::string target = std::string(path.data()) + "/" + file.path;
+        std::string target = path + "/" + file.path;
         make_folders(target.substr(0, target.rfind('/')).c_str());
         write_file(target.c_str(), file.bytes.data(), file.bytes.size());
     }
-    setenv("DC2_SAVE_ROOT", path.data(), 1);
+    SDL_setenv_unsafe("DC2_SAVE_ROOT", path.c_str(), 1);
 }
 
 static void apply_launch_environment(void) {

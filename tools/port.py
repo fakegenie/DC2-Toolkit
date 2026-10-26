@@ -77,7 +77,8 @@ FLAGS = [
 ]
 LINK_FLAGS = ["-pthread", *(["-lobjc"] if DARWIN
                             # a fixed image base, as the non-PIE Linux build has; -mwindows opens no console
-                            else ["-static", "-mwindows", "-Wl,--disable-dynamicbase", "-Wl,--disable-high-entropy-va"]
+                            else ["-static", "-mwindows", "-Wl,--disable-dynamicbase", "-Wl,--disable-high-entropy-va",
+                                  "-lws2_32"]
                             if WINDOWS else ["-no-pie", "-static-libstdc++", "-static-libgcc"])]
 RPATHS = ["@executable_path/lib", "@executable_path/../Frameworks"] if DARWIN else [] if WINDOWS else ["$ORIGIN/lib"]
 IOS = {
@@ -289,7 +290,8 @@ def compile_one(source, name):
         changes.append(f"--redefine-sym={PREFIX}main={PREFIX}port_game_main")
     return compile_command(source, target, depfile, command_file, command, changes,
                            operators=not c and not name.startswith(("mod_", "port_")),
-                           game=not name.startswith(("mod_", "port_")))
+                           game=not name.startswith(("mod_", "port_")),
+                           ps2_names=WINDOWS and not name.startswith("mod_") and not source.is_relative_to(PORT / "windows"))
 
 
 def move_mach_data(target):
@@ -383,7 +385,7 @@ def move_data(target):
         move_elf_data(target)
 
 
-def compile_command(source, target, depfile, command_file, command, changes, operators=False, game=False):
+def compile_command(source, target, depfile, command_file, command, changes, operators=False, game=False, ps2_names=False):
     name = target.stem
     signature = json.dumps([command, changes, operators, game])
     if up_to_date(source, target, depfile) and command_file.exists() and command_file.read_text() == signature:
@@ -398,9 +400,10 @@ def compile_command(source, target, depfile, command_file, command, changes, ope
         for old, new in OPERATORS.items():
             if f"{PREFIX}{old}" in used:
                 subprocess.run([OBJCOPY, f"--redefine-sym={PREFIX}{old}={PREFIX}{new}", str(target)], check=True)
-    if WINDOWS and not source.is_relative_to(PORT / "windows"):
-        # the PS2 kernel's CreateThread, GetThreadId and TerminateThread are Windows functions too: in our objects they
-        # are renamed, so they never meet Windows' and the static runtime never calls the port's
+    if ps2_names:
+        # the PS2 kernel's CreateThread, GetThreadId and TerminateThread are Windows functions too: in the engine's and
+        # port/src's objects they are renamed, so they never meet Windows' and the static runtime never calls the port's
+        # (port/windows, ImGui and mods call Windows' own)
         names = set(subprocess.run([NM, "-j", str(target)], capture_output=True, text=True, check=True).stdout.split())
         clashes = sorted(names & WINDOWS_NAMES)
         if clashes:
@@ -460,6 +463,116 @@ def windows_names():
     return {name for name in listing.split() if not name.endswith(":") and not name.startswith(("@", "__imp_"))}
 
 
+def link_order(inputs):
+    # on Windows the upstream objects come last, where the first definition wins, as if they were weak
+    return sorted(inputs, key=lambda path: path.stem.startswith("upstream_")) if WINDOWS else list(inputs)
+
+
+def binary_sections(binary):
+    """The binary's sections as they are mapped: (name, address, size, code, writable)."""
+    data = binary.read_bytes()
+    sections = []
+    if data[:4] == b"\xcf\xfa\xed\xfe":
+        commands = struct.unpack_from("<I", data, 16)[0]
+        at = 32
+        for _ in range(commands):
+            kind, size = struct.unpack_from("<II", data, at)
+            if kind == 0x19:
+                writable = struct.unpack_from("<I", data, at + 60)[0] & 2
+                for index in range(struct.unpack_from("<I", data, at + 64)[0]):
+                    header = at + 72 + index * 80
+                    name = data[header:header + 16].rstrip(b"\0").decode()
+                    segment = data[header + 16:header + 32].rstrip(b"\0").decode()
+                    address, length = struct.unpack_from("<QQ", data, header + 32)
+                    flags = struct.unpack_from("<I", data, header + 64)[0]
+                    sections.append((f"{segment},{name}", address, length, bool(flags & 0x80000400), bool(writable)))
+            at += size
+    elif data[:4] == b"\x7fELF":
+        table = struct.unpack_from("<Q", data, 40)[0]
+        size, count, names = struct.unpack_from("<HHH", data, 58)
+        strings = struct.unpack_from("<Q", data, table + names * size + 24)[0]
+        for index in range(count):
+            name, _kind, flags, address, _offset, length = struct.unpack_from("<IIQQQQ", data, table + index * size)
+            # allocated, and not thread-local, whose addresses are a template's
+            if flags & 2 and not flags & 0x400 and address:
+                text = data[strings + name:data.index(b"\0", strings + name)].decode()
+                sections.append((text, address, length, bool(flags & 4), bool(flags & 1)))
+    else:
+        header = struct.unpack_from("<I", data, 0x3C)[0] + 4
+        count, symbols, symbol_count, optional = struct.unpack_from("<H4xIIH", data, header + 2)
+        base = struct.unpack_from("<Q", data, header + 20 + 24)[0]
+        strings = symbols + symbol_count * 18
+        for index in range(count):
+            at = header + 20 + optional + index * 40
+            name, length, address = struct.unpack_from("<8sII", data, at)
+            flags = struct.unpack_from("<I", data, at + 36)[0]
+            if flags & 0x02000000:
+                continue
+            text = coff_name(data, at, strings)[1].decode()
+            sections.append((text, base + address, length, bool(flags & 0x20000000), bool(flags & 0x80000000)))
+    return sections
+
+
+def nm_names(name):
+    return name[len(PREFIX):] if PREFIX and name.startswith(PREFIX) else name
+
+
+def write_symbol_table(binary, inputs):
+    """BINARY.symbols, which the debug build's watches and crash reports read: the sections, and every symbol with its
+    size and the object it comes from. A name defined in several objects (statics) is given to them in link order, the
+    order the linker lays them out in."""
+    sections = sorted(binary_sections(binary), key=lambda section: section[1])
+    listing = subprocess.run([NM, "--defined-only", "--print-size", "--numeric-sort", str(binary)],
+                             capture_output=True, text=True, check=True).stdout.splitlines()
+    owners = {}
+    objects = [path for path in link_order(inputs)]
+    names = subprocess.run([NM, "--defined-only", *map(str, objects)], capture_output=True, text=True, check=True).stdout
+    current = None
+    by_path = {str(path): path.name for path in objects}
+    for line in names.splitlines():
+        if line.endswith(":") and line[:-1] in by_path:
+            current = by_path[line[:-1]]
+        elif current and line.strip():
+            owners.setdefault(nm_names(line.split()[-1]), []).append(current)
+    taken = {}
+    symbols = []
+    anchor = None
+    for line in listing:
+        words = line.split()
+        if len(words) < 3 or words[-2] in "AaNUuwv":
+            continue
+        name = nm_names(words[-1])
+        address = int(words[0], 16)
+        size = int(words[1], 16) if len(words) == 4 else 0
+        if name == "port_build_id":
+            anchor = address
+        mine = owners.get(name, [])
+        object_name = mine[taken.get(name, 0)] if taken.get(name, 0) < len(mine) else "-"
+        taken[name] = taken.get(name, 0) + 1
+        symbols.append([address, size, name, object_name])
+    if anchor is None:
+        sys.exit(f"{binary.name} has no port_build_id for its symbol table")
+    lines = ["dc2 symbols 1", f"anchor {anchor:x}"]
+    for name, address, size, code, writable in sections:
+        lines.append(f"section {address:x} {size:x} {'x' if code else ''}{'w' if writable else ''}- {name}")
+    following = [None] * len(symbols)
+    for index in range(len(symbols) - 2, -1, -1):
+        later = symbols[index + 1][0]
+        following[index] = later if later > symbols[index][0] else following[index + 1]
+    at = 0
+    for index, (address, size, name, object_name) in enumerate(symbols):
+        while at < len(sections) and sections[at][1] + sections[at][2] <= address:
+            at += 1
+        section = sections[at] if at < len(sections) and sections[at][1] <= address else None
+        if not size and section:
+            end = section[1] + section[2]
+            size = min(following[index] or end, end) - address
+        lines.append(f"symbol {address:x} {size:x} {int(bool(section and section[3]))} {object_name} {name}")
+    table = binary.with_suffix(".symbols")
+    write_if_changed(table, "\n".join(lines) + "\n")
+    return table
+
+
 def link(objects, extra, binary):
     inputs = [*objects, *extra]
     if DARWIN:
@@ -470,7 +583,7 @@ def link(objects, extra, binary):
         # ELF lets win: duplicates are allowed, the first wins, and the upstream objects come last, as if they were weak.
         platform = ["-Wl,--no-demangle", "-Wl,--allow-multiple-definition",
                     *(f"-Wl,-Xlink=/alternatename:{alias}={target}" for alias, target in ALIASES.items())]
-        inputs.sort(key=lambda path: path.stem.startswith("upstream_"))
+        inputs = link_order(inputs)
     else:
         platform = ["-Wl,--no-demangle", *(f"-Wl,--defsym={alias}={target}" for alias, target in ALIASES.items())]
     fresh = binary.with_name(binary.name + ".linking")
@@ -642,6 +755,8 @@ def bundle(kind, executable, identifier):
     shutil.rmtree(app, ignore_errors=True)
     app.mkdir(parents=True)
     shutil.copy2(executable, app / "DC2")
+    if executable.with_suffix(".symbols").exists() and executable == DEBUG_BINARY:
+        shutil.copy2(executable.with_suffix(".symbols"), app / "DC2.symbols")
     (app / "Info.plist").write_bytes(plistlib.dumps(app_info(kind, identifier), fmt=plistlib.FMT_BINARY))
     for name, pixels in IOS_ICONS.items():
         subprocess.run(["sips", "-z", str(pixels), str(pixels), str(PORT / "launcher" / "icon-ios.png"), "--out", str(app / name)],
@@ -737,13 +852,12 @@ def main():
     elif WINDOWS:
         if not (TOOLCHAIN / "bin" / "clang.exe").exists():
             sys.exit("llvm-mingw missing: run python -I tools/port_sdk.py")
-        if options.debug:
-            sys.exit("the debug build does not run on Windows yet")
         os.environ["PATH"] = f"{TOOLCHAIN / 'bin'}{os.pathsep}{os.environ['PATH']}"
         WINDOWS_NAMES.update(windows_names())
         OUT = ROOT / "build" / "port" / "windows"
         OBJ = OUT / "obj"
         BINARY = OUT / "dc2.exe"
+        DEBUG_BINARY = OUT / "dc2-debug.exe"
         PLATFORM_SOURCES.extend(sorted((PORT / "windows").glob("*.c")))
         if options.movies:
             FLAGS.append("-DPORT_MOVIES")
@@ -785,6 +899,7 @@ def main():
         debugged = link([*objects, *debug_objects], extra, DEBUG_BINARY)
         if debugged.returncode != 0:
             sys.exit(debugged.stderr)
+        write_symbol_table(DEBUG_BINARY, [*objects, *debug_objects, *extra, OBJ / f"build_id_{DEBUG_BINARY.name}.o"])
     summary = f"{units} engine units and {others} other files compiled; {len(names)} symbols stubbed"
     if groups:
         summary += f" ({', '.join(f'{group} {len(items)}' for group, items in sorted(groups.items(), key=lambda g: -len(g[1])))})"

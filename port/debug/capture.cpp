@@ -1,3 +1,4 @@
+#include <SDL3/SDL.h>
 #include "debug.h"
 #include "draw.hpp"
 #include "imgui.h"
@@ -8,7 +9,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <sys/stat.h>
 #include <vector>
 
 struct Draw {
@@ -359,7 +359,7 @@ static int present_width;
 static int present_height;
 
 static void write_presents() {
-    mkdir("build/port/presents", 0755);
+    SDL_CreateDirectory("build/port/presents");
     for (size_t i = 0; i < presents.size(); ++i) {
         char path[96];
         snprintf(path, sizeof path, "build/port/presents/%03zu_%.3f.png", i, present_alphas[i]);

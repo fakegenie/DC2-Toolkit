@@ -42,7 +42,7 @@ def request(command, arguments, timeout=120):
 
 
 def launch(extra):
-    binary = ROOT / "build" / "port" / "dc2-debug"
+    binary = ROOT / "build" / "port" / ("windows/dc2-debug.exe" if sys.platform == "win32" else "dc2-debug")
     if not binary.exists():
         sys.exit("build it first: python3 -I tools/port.py --movies --debug")
     log = open(ROOT / "build" / "port" / "debug-run.log", "w")

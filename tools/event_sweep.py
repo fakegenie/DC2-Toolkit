@@ -18,6 +18,7 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
@@ -26,7 +27,7 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-BINARY = ROOT / "build" / "port" / "dc2-debug"
+BINARY = ROOT / "build" / "port" / ("windows/dc2-debug.exe" if sys.platform == "win32" else "dc2-debug")
 REPORTS = Path.home() / "Library" / "Logs" / "DiagnosticReports"
 EVENTS = ROOT / "extracted" / "disc" / "event" / "view_pal.txt"
 PORT = 7791

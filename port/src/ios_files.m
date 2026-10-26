@@ -199,6 +199,6 @@ void port_ios_saves(void) {
             download_saves(saves);
         }
         [NSFileManager.defaultManager createDirectoryAtURL:saves withIntermediateDirectories:YES attributes:nil error:nil];
-        setenv("DC2_SAVE_ROOT", saves.fileSystemRepresentation, 1);
+        SDL_setenv_unsafe("DC2_SAVE_ROOT", saves.fileSystemRepresentation, 1);
     }
 }

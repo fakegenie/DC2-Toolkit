@@ -69,8 +69,11 @@ in Git for Windows' bash, so it needs Git, cmake and Python. `python -I tools/po
 `tools/port_package.py` packs it as `DC2.exe` in `dc2-<version>-windows-x64.zip`. It draws with
 Vulkan, its manifest makes the C runtime's file names UTF-8, and it opens no console of its own but writes to the one it
 is started from. `launcher.cfg` and `saves` are in `%APPDATA%\DC2 Toolkit\DC2`, built mods in `mods` beside
-the exe. `python -I port/tests/run.py` runs the boundary checks there too. The debug build (`--debug`) and
-`dc2tk build --native` do not run on Windows yet.
+the exe. `python -I port/tests/run.py` runs the boundary checks there too. `--debug` links
+`build/port/windows/dc2-debug.exe` (after `python -I tools/imgui_sdk.py`), with the same debug window, localhost API,
+recordings, watches and crash reports as on macOS and Linux, which `tools/golden_port.py`, `tools/debug.py` and the
+other tools find there; only `profile`, which runs macOS's `sample`, is missing. `dc2tk build --native` does not run
+on Windows yet.
 
 A chosen mod's `"port"` sources are compiled into the binary too (see [Native port mods](mods.md#native-port-mods)); `python3 -I tools/port.py --mod mods/<name>` does the same for the port's own build.
 

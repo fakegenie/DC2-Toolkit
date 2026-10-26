@@ -1,166 +1,77 @@
 #include "port_symbols.h"
+#include <SDL3/SDL.h>
 #include <algorithm>
+#include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <cxxabi.h>
-#include <map>
-#include <utility>
-#ifdef __APPLE__
-#include <mach-o/dyld.h>
-#include <mach-o/loader.h>
-#include <mach-o/nlist.h>
-#include <mach-o/stab.h>
-#endif
+
+extern "C" {
+extern char **port_arguments;
+extern const char port_build_id[];
+}
+
+enum { TABLE_VERSION = 1, LINE_SIZE = 4096 };
 
 static PortSymbols self;
 static int self_state;
-static char self_error[600];
+static char self_error[700];
 
-static int read_file(const char *path, std::vector<unsigned char> *bytes) {
-    FILE *file = fopen(path, "rb");
-    if (!file) return 0;
-    fseek(file, 0, SEEK_END);
-    long size = ftell(file);
-    fseek(file, 0, SEEK_SET);
-    bytes->resize(size > 0 ? (size_t)size : 0);
-    size_t read = size > 0 ? fread(bytes->data(), 1, (size_t)size, file) : 0;
-    fclose(file);
-    return size > 0 && read == (size_t)size;
-}
+static bool earlier(const PortSymbol &a, const PortSymbol &b) { return a.address < b.address; }
 
-const char *port_symbols_executable(void) {
+// NAME.symbols in the program's folder, NAME being the program's file name without .exe
+const char *port_symbols_path(void) {
     static char path[1024];
-#ifdef __APPLE__
-    uint32_t length = sizeof path;
-    if (!path[0] && _NSGetExecutablePath(path, &length)) path[0] = 0;
-#endif
+    if (path[0] || !port_arguments || !port_arguments[0]) return path;
+    const char *program = port_arguments[0];
+    for (const char *at = program; *at; ++at)
+        if (*at == '/' || *at == '\\') program = at + 1;
+    size_t length = strlen(program);
+    if (length > 4 && !SDL_strcasecmp(program + length - 4, ".exe")) length -= 4;
+    const char *base = SDL_GetBasePath();
+    snprintf(path, sizeof path, "%s%.*s.symbols", base ? base : "", (int)length, program);
     return path;
 }
 
-#ifdef __APPLE__
-static bool earlier(const PortSymbol &a, const PortSymbol &b) { return a.address < b.address; }
-
-static int section_end(const PortSymbols *symbols, int section, uint64_t *end) {
-    if (section < 1 || section > (int)symbols->sections.size()) return 0;
-    const PortSection *found = &symbols->sections[(size_t)section - 1];
-    *end = found->address + found->size;
-    return 1;
-}
-
-static void read_sections(const unsigned char *file, PortSymbols *symbols, const symtab_command **symtab) {
-    const mach_header_64 *header = (const mach_header_64 *)file;
-    const load_command *command = (const load_command *)(header + 1);
-    for (uint32_t i = 0; i < header->ncmds; ++i) {
-        if (command->cmd == LC_SYMTAB) *symtab = (const symtab_command *)command;
-        if (command->cmd == LC_SEGMENT_64) {
-            const segment_command_64 *segment = (const segment_command_64 *)command;
-            const section_64 *section = (const section_64 *)(segment + 1);
-            for (uint32_t s = 0; s < segment->nsects; ++s) {
-                PortSection entry;
-                memset(&entry, 0, sizeof entry);
-                memcpy(entry.segment, section[s].segname, 16);
-                memcpy(entry.name, section[s].sectname, 16);
-                entry.address = section[s].addr;
-                entry.size = section[s].size;
-                entry.offset = section[s].offset;
-                symbols->sections.push_back(entry);
-            }
-        }
-        command = (const load_command *)((const unsigned char *)command + command->cmdsize);
-    }
-}
-
-static void read_names(const unsigned char *file, const symtab_command *symtab, PortSymbols *symbols) {
-    const nlist_64 *entries = (const nlist_64 *)(file + symtab->symoff);
-    const char *strings = (const char *)(file + symtab->stroff);
-    std::map<std::pair<uint64_t, std::string>, std::string> objects;
-    std::map<std::string, std::string> global_objects;
-    std::map<uint64_t, uint64_t> function_sizes;
-    std::string object;
-    uint64_t function = 0;
-    for (uint32_t i = 0; i < symtab->nsyms; ++i) {
-        const char *name = strings + entries[i].n_un.n_strx;
-        uint8_t type = entries[i].n_type;
-        if (type == N_OSO) {
-            const char *slash = strrchr(name, '/');
-            object = slash ? slash + 1 : name;
-        } else if (type == N_FUN && name[0]) {
-            function = entries[i].n_value;
-            objects[{function, name}] = object;
-        } else if (type == N_FUN) {
-            function_sizes[function] = entries[i].n_value;
-        } else if (type == N_STSYM) {
-            objects[{entries[i].n_value, name}] = object;
-        } else if (type == N_GSYM) {
-            global_objects[name] = object;
-        }
-    }
-    for (uint32_t i = 0; i < symtab->nsyms; ++i) {
-        const nlist_64 *entry = &entries[i];
-        if ((entry->n_type & N_STAB) || (entry->n_type & N_TYPE) != N_SECT) continue;
-        PortSymbol symbol;
-        symbol.address = entry->n_value;
-        symbol.size = 0;
-        symbol.name = strings + entry->n_un.n_strx;
-        symbol.section = entry->n_sect;
-        const PortSection *section = entry->n_sect >= 1 && entry->n_sect <= symbols->sections.size()
-                                         ? &symbols->sections[entry->n_sect - 1u]
-                                         : NULL;
-        symbol.code = section && !strcmp(section->name, "__text");
-        auto local = objects.find({symbol.address, symbol.name});
-        auto global = global_objects.find(symbol.name);
-        symbol.object = local != objects.end() ? local->second : global != global_objects.end() ? global->second : "";
-        auto size = function_sizes.find(symbol.address);
-        if (symbol.code && size != function_sizes.end()) symbol.size = size->second;
-        symbols->symbols.push_back(symbol);
-    }
-    std::stable_sort(symbols->symbols.begin(), symbols->symbols.end(), earlier);
-    std::vector<PortSymbol> &list = symbols->symbols;
-    size_t next = 0;
-    for (size_t i = 0; i < list.size(); ++i) {
-        if (next <= i) next = i + 1;
-        while (next < list.size() && list[next].address == list[i].address) next++;
-        uint64_t end = 0;
-        int bounded = section_end(symbols, list[i].section, &end);
-        uint64_t limit = next < list.size() && (!bounded || list[next].address < end) ? list[next].address : end;
-        if (!list[i].size && limit > list[i].address) list[i].size = limit - list[i].address;
-    }
-}
-#endif
-
+// The table's addresses are the link's: anchor is where port_build_id was, and the difference to where it is now
+// moves them to this launch.
 const char *port_symbols_load(const char *path, PortSymbols *symbols) {
     static char error[700];
     symbols->symbols.clear();
     symbols->sections.clear();
     symbols->path = path;
-    if (!read_file(path, &symbols->file)) {
-        snprintf(error, sizeof error, "cannot read %s", path);
+    FILE *file = fopen(path, "r");
+    if (!file) {
+        snprintf(error, sizeof error, "cannot read %s; tools/port.py --debug writes it beside the debug build", path);
         return error;
     }
-#ifdef __APPLE__
-    const unsigned char *file = symbols->file.data();
-    if (symbols->file.size() < sizeof(mach_header_64) || ((const mach_header_64 *)file)->magic != MH_MAGIC_64) {
-        snprintf(error, sizeof error, "%s is not a 64-bit Mach-O executable", path);
+    char line[LINE_SIZE], name[LINE_SIZE], object[LINE_SIZE], flags[8];
+    int version = 0;
+    uint64_t anchor = 0, address, size;
+    int code;
+    if (!fgets(line, sizeof line, file) || sscanf(line, "dc2 symbols %d", &version) != 1 || version != TABLE_VERSION ||
+        !fgets(line, sizeof line, file) || sscanf(line, "anchor %" SCNx64, &anchor) != 1) {
+        fclose(file);
+        snprintf(error, sizeof error, "%s is not a version %d symbol table", path, TABLE_VERSION);
         return error;
     }
-    const symtab_command *symtab = NULL;
-    read_sections(file, symbols, &symtab);
-    if (!symtab) {
-        snprintf(error, sizeof error, "%s has no symbol table", path);
-        return error;
+    uint64_t slide = (uint64_t)(uintptr_t)port_build_id - anchor;
+    while (fgets(line, sizeof line, file)) {
+        if (sscanf(line, "section %" SCNx64 " %" SCNx64 " %7s %4095s", &address, &size, flags, name) == 4) {
+            symbols->sections.push_back({address + slide, size, strchr(flags, 'x') != NULL, strchr(flags, 'w') != NULL, name});
+        } else if (sscanf(line, "symbol %" SCNx64 " %" SCNx64 " %d %4095s %4095s", &address, &size, &code, object, name) == 5) {
+            symbols->symbols.push_back({address + slide, size, name, object, code});
+        }
     }
-    read_names(file, symtab, symbols);
+    fclose(file);
+    std::stable_sort(symbols->symbols.begin(), symbols->symbols.end(), earlier);
     return NULL;
-#else
-    snprintf(error, sizeof error, "symbols are read from macOS executables only");
-    return error;
-#endif
 }
 
 const PortSymbols *port_symbols_self(const char **error) {
     if (!self_state) {
-        const char *failed = port_symbols_load(port_symbols_executable(), &self);
+        const char *failed = port_symbols_load(port_symbols_path(), &self);
         if (failed) snprintf(self_error, sizeof self_error, "%s", failed);
         self_state = failed ? -1 : 1;
     }
@@ -191,11 +102,18 @@ const PortSection *port_section_at(const PortSymbols *symbols, uint64_t address)
 }
 
 std::string port_symbol_pretty(const std::string &name) {
-    const char *mangled = name.c_str();
-    if (mangled[0] == '_') mangled++;
     int status = 0;
-    char *demangled = abi::__cxa_demangle(mangled, NULL, NULL, &status);
-    std::string pretty = status == 0 && demangled ? demangled : mangled;
+    char *demangled = abi::__cxa_demangle(name.c_str(), NULL, NULL, &status);
+    std::string pretty = status == 0 && demangled ? demangled : name;
     free(demangled);
     return pretty;
+}
+
+extern "C" int port_symbol_describe(uint64_t address, char *text, size_t size) {
+    const PortSymbols *symbols = port_symbols_self(NULL);
+    const PortSymbol *symbol = symbols ? port_symbol_at(symbols, address) : NULL;
+    if (!symbol) return 0;
+    snprintf(text, size, "%s+0x%" PRIx64 " (%s)", port_symbol_pretty(symbol->name).c_str(), address - symbol->address,
+             symbol->object.c_str());
+    return 1;
 }

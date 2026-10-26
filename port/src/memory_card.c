@@ -119,7 +119,8 @@ static const char *default_root(void) {
 }
 
 const char *port_memory_card_root(void) {
-    const char *root = getenv("DC2_SAVE_ROOT");
+    // SDL's copy of the environment, which the debug build's recordings set it in
+    const char *root = SDL_getenv("DC2_SAVE_ROOT");
     return root && root[0] ? root : default_root();
 }
 

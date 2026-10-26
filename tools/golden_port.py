@@ -63,7 +63,7 @@ def frame():
 
 
 def launch(options):
-    binary = ROOT / "build" / "port" / "dc2-debug"
+    binary = ROOT / "build" / "port" / ("windows/dc2-debug.exe" if sys.platform == "win32" else "dc2-debug")
     if not binary.exists():
         sys.exit("build it first: python3 -I tools/port.py --movies --debug")
     saves = ROOT / "build" / "port" / "golden" / "saves"

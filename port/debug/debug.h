@@ -78,6 +78,8 @@ void debug_run_queued(void);
 unsigned char *debug_png(const uint32_t *rgba, int width, int height, size_t *length);
 
 void debug_server_start(int port);
+void debug_server_stop(void);
+void debug_server_resume(void);
 void debug_server_poll(void);
 void debug_server_send(int client, int status, const char *content_type, const void *data, size_t length);
 

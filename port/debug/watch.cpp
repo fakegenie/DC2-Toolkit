@@ -1,13 +1,11 @@
 #include "debug.h"
 #include "imgui.h"
+#include "port_arena.h"
 #include "port_symbols.h"
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#ifdef __APPLE__
-#include <mach/mach.h>
-#endif
 
 enum { WATCH_LIMIT = 32, MATCH_LIMIT = 40, VALUE_LIMIT = 64 };
 
@@ -62,22 +60,26 @@ static void name_symbols(const PortSymbols *found) {
 static int named(size_t index, const PortSymbol &symbol, const char *name) {
     const std::string &pretty = pretty_names[index];
     size_t length = strlen(name);
-    if (pretty == name || symbol.name == name || symbol.name.compare(1, std::string::npos, name) == 0) return 1;
+    if (pretty == name || symbol.name == name) return 1;
     return pretty.size() > length + 2 && !pretty.compare(pretty.size() - length, length, name) &&
            !pretty.compare(pretty.size() - length - 2, 2, "::");
 }
 
+// Memory the port knows is there: the program's sections, from the symbol table, and the engine's arena. Writes go only
+// to sections that can be written and to the arena.
+static int within(uint64_t address, size_t size, int writing) {
+    uint64_t start, length;
+    port_arena_bounds(&start, &length);
+    if (address >= start && address - start <= length && size <= length - (address - start)) return 1;
+    const PortSymbols *found = symbols();
+    const PortSection *section = found ? port_section_at(found, address) : NULL;
+    return section && (section->writable || !writing) && size <= section->size - (address - section->address);
+}
+
 static int readable(uint64_t address, void *out, size_t size) {
-#ifdef __APPLE__
-    vm_size_t read = 0;
-    return vm_read_overwrite(mach_task_self(), (vm_address_t)address, size, (vm_address_t)(uintptr_t)out, &read) == KERN_SUCCESS &&
-           read == size;
-#else
-    (void)address;
-    (void)out;
-    (void)size;
-    return 0;
-#endif
+    if (!within(address, size, 0)) return 0;
+    memcpy(out, (const void *)(uintptr_t)address, size);
+    return 1;
 }
 
 static int missing_target(const DebugArgs *args, DebugReply *reply, Target *target) {
@@ -230,6 +232,7 @@ static int command_poke(const DebugArgs *args, DebugReply *reply) {
     int size = types[type].size;
     if ((uint64_t)size > target.room) return debug_fail(reply, "%s has %llu bytes from there", target.label, (unsigned long long)target.room);
     unsigned char before[8];
+    if (!within(target.address, (size_t)size, 1)) return debug_fail(reply, "0x%llx cannot be written", (unsigned long long)target.address);
     if (!readable(target.address, before, (size_t)size)) return debug_fail(reply, "0x%llx cannot be read", (unsigned long long)target.address);
     unsigned char bytes[8];
     float f32 = strtof(value, NULL);

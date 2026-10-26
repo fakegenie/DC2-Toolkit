@@ -15,14 +15,10 @@ extern "C" {
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
-#include <fcntl.h>
-#include <signal.h>
-#include <spawn.h>
-#include <sys/stat.h>
-#include <sys/wait.h>
+#ifdef __APPLE__
 #include <unistd.h>
+#endif
 
-extern char **environ;
 extern int DebugFlag;
 
 enum { QUEUE_LIMIT = 64, WAITER_LIMIT = 32 };
@@ -69,7 +65,7 @@ static uint64_t wait_enter;
 static uint64_t wait_drawn;
 static uint64_t previous_enter;
 static uint64_t previous_tail_wait;
-static pid_t profiler;
+static SDL_Process *profiler;
 static int profiler_client = DEBUG_CLIENT_NONE;
 static char profiler_path[256];
 static int at_frame_boundary;
@@ -480,8 +476,9 @@ static void send_screenshots(int target, int width, int height) {
 static void finish_profile(void) {
     if (!profiler) return;
     int status = 0;
-    if (waitpid(profiler, &status, WNOHANG) != profiler) return;
-    profiler = 0;
+    if (!SDL_WaitProcess(profiler, false, &status)) return;
+    SDL_DestroyProcess(profiler);
+    profiler = NULL;
     DebugReply reply;
     memset(&reply, 0, sizeof reply);
     reply.client = profiler_client;
@@ -746,24 +743,20 @@ static int command_profile(const DebugArgs *args, DebugReply *reply) {
     char pid_text[32], seconds_text[32];
     snprintf(pid_text, sizeof pid_text, "%d", (int)getpid());
     snprintf(seconds_text, sizeof seconds_text, "%ld", seconds);
-    char *argv[] = {(char *)"/usr/bin/sample", pid_text, seconds_text, (char *)"-mayDie", (char *)"-file",
-                    profiler_path, NULL};
-    posix_spawn_file_actions_t actions;
-    posix_spawn_file_actions_init(&actions);
-    posix_spawn_file_actions_addopen(&actions, 1, "/dev/null", O_WRONLY, 0);
-    posix_spawn_file_actions_addopen(&actions, 2, "/dev/null", O_WRONLY, 0);
-    int failed = posix_spawn(&profiler, "/usr/bin/sample", &actions, NULL, argv, environ);
-    posix_spawn_file_actions_destroy(&actions);
-    if (failed) {
-        profiler = 0;
-        return debug_fail(reply, "cannot run /usr/bin/sample");
-    }
+    const char *argv[] = {"/usr/bin/sample", pid_text, seconds_text, "-mayDie", "-file", profiler_path, NULL};
+    SDL_PropertiesID properties = SDL_CreateProperties();
+    SDL_SetPointerProperty(properties, SDL_PROP_PROCESS_CREATE_ARGS_POINTER, (void *)argv);
+    SDL_SetNumberProperty(properties, SDL_PROP_PROCESS_CREATE_STDOUT_NUMBER, SDL_PROCESS_STDIO_NULL);
+    SDL_SetNumberProperty(properties, SDL_PROP_PROCESS_CREATE_STDERR_NUMBER, SDL_PROCESS_STDIO_NULL);
+    profiler = SDL_CreateProcessWithProperties(properties);
+    SDL_DestroyProperties(properties);
+    if (!profiler) return debug_fail(reply, "cannot run /usr/bin/sample");
     profiler_client = reply->client;
     reply->deferred = 1;
     return 0;
 #else
     (void)args;
-    return debug_fail(reply, "the profiler uses macOS sample; run perf record on Linux");
+    return debug_fail(reply, "the profiler uses macOS sample; run perf record on Linux or the Windows Performance Recorder");
 #endif
 }
 
@@ -824,8 +817,7 @@ extern "C" void debug_audio(const short *samples, int frames) {
 }
 
 extern "C" void debug_start(void) {
-    mkdir("build", 0755);
-    mkdir("build/port", 0755);
+    SDL_CreateDirectory("build/port");
     debug_log_start();
     port_cdvd_log_files(1);
     const char *dump_path = getenv("DC2TK_SOUND_DUMP");

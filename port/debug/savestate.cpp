@@ -1,3 +1,4 @@
+#include <SDL3/SDL.h>
 #include "debug.h"
 #include "imgui.h"
 #include "port_state.h"
@@ -6,7 +7,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
-#include <sys/stat.h>
 
 enum { WAIT_LIMIT = 300, SLOT_LIMIT = 8, THUMB_WIDTH = STATE_THUMB_WIDTH, THUMB_HEIGHT = STATE_THUMB_HEIGHT, SAVE = STATE_SAVE,
        LOAD = STATE_LOAD };
@@ -61,7 +61,7 @@ static void state_path(const char *name, char *path, size_t size) {
 static const char *write_state(const Slot *slot, const char *name) {
     char path[512];
     state_path(name, path, sizeof path);
-    mkdir("build/port/savestates", 0755);
+    SDL_CreateDirectory("build/port/savestates");
     return port_state_write(&slot->state, path);
 }
 

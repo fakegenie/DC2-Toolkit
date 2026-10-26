@@ -36,7 +36,7 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-BINARY = ROOT / "build" / "port" / "dc2-debug"
+BINARY = ROOT / "build" / "port" / ("windows/dc2-debug.exe" if sys.platform == "win32" else "dc2-debug")
 OUT = ROOT / "build" / "port" / "memory-tour"
 RECORDINGS = [ROOT / "port" / "tests" / "recordings", ROOT / "build" / "port" / "recordings"]
 SOURCES = [ROOT / "build" / "port" / "copy" / "ps2" / "src", ROOT / "port" / "src"]

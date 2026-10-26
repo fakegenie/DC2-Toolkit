@@ -140,8 +140,8 @@ written fresh. These are what it found to fix:
     work is committed, keep the save checkpoints and delete the traces.
 17. **Savestates on Linux.** Done with the redesign (savestate entry 2 below): states keep the
     `game_data`/`game_bss` sections, and a non-PIE binary never needs relocation.
-18. **`profile` on Linux.** `port/debug/core.cpp` runs macOS's `/usr/bin/sample`; use `perf`, or
-    say it is missing.
+18. **`profile` off macOS.** `port/debug/core.cpp` runs macOS's `/usr/bin/sample`; on Linux and
+    Windows it only says to use `perf` or the Windows Performance Recorder.
 19. **Golden baselines are per GPU.** Lavapipe's pictures differ from Metal's by 1 to 3 per
     channel on about half the title's pixels, and up to 44 on seven edge pixels; the `capture`
     draw lists at the same frame are identical, so the CPU side matches. Keep baselines per
@@ -170,8 +170,9 @@ What the fishing work kept needing, in the order to build it:
 
 1. **Engine variables by name.** Done: `peek name=CastDist [type=f32|i32|u8|ptr|str|hex] [count=N]`,
    `poke`, `symbols match=` and `watch` (a Watch tab in the debug window) read and write any global
-   or file static through the executable's own symbol table. `status` also reports the player's
-   and the camera's position.
+   or file static through the symbol table `tools/port.py` writes beside the debug build
+   (`dc2-debug.symbols`), on every platform. `status` also reports the player's and the camera's
+   position.
 2. **Savestates on every platform.** Done. A state loads only in the build that made it (the
    header carries a build id hashed from every linked object), and that build can load it in any
    later launch on macOS, Linux and iOS. What keeps it simple:
@@ -367,12 +368,36 @@ How it is built:
   undefined symbols that only discarded sections name, which ELF's lets go; the collision objects are not weakened but
   come after the engine's.
 
+The debug build is one implementation on every platform (2026-10-26): `port.py --movies --debug` links
+`build/port/windows/dc2-debug.exe`, `tools/golden_port.py` passes there against Windows baselines (written with
+`--update`, twice in a row identical), and on Linux (WSL, clang 23) it links and its API, watches and restart work too.
+What is still per platform is small:
+
+- **Sockets** (`server.c`): Winsock and BSD differ in a few helpers (closing, non-blocking, not inherited, SIGPIPE).
+- **Crashes** (`log.c`): signals with `sigaltstack` on macOS and Linux, an unhandled-exception filter on Windows. The
+  stack is walked by libunwind's `_Unwind_Backtrace` there, through the signal frame, and by Windows' own
+  `RtlVirtualUnwind` from the exception's registers here, as libunwind stops at a leaf function without unwind
+  info. The report (addresses, then each named from the symbol table, then the crash recording) is shared.
+- **Log capture**: `_pipe` on Windows, and there the standard handles are pointed at the pipe as well, since `dup2`
+  moves them only in a console program and child processes get the handles.
+- **`profile`** stays macOS's `sample` (started through `SDL_Process`); elsewhere it says what to use instead.
+
+The rest is SDL3 or the port's own data: threads and the log lock, folders (`SDL_CreateDirectory`), the time,
+the environment (`SDL_setenv_unsafe`, and `memory_card.c` reads `DC2_SAVE_ROOT` with `SDL_getenv`, which a restart
+hands on), and the restart for a recording from launch: a new process with the same arguments (`SDL_CreateProcess`,
+standard I/O inherited), after this one lets go of the debug port; it hides its window, stops its sound, waits and
+exits with the new one's status, so a tool waiting on the process it started still waits on the right one. Watches
+read only inside the program's sections or the engine's arena and write only to writable ones, so `poke` into code
+is refused rather than a crash. Symbols come from `BINARY.symbols`, which `tools/port.py` writes beside the debug
+binary from the binary's section headers (Mach-O, ELF or PE, read in Python), `nm` of the binary, and `nm` of each
+linked object for which object a symbol is from (a static name in several objects goes to them in link order);
+symbols without a size (Mach-O, COFF) run to the next symbol or the section's end, and the loader moves every address
+by how far `port_build_id` has moved since the link. The macOS path of this is not yet checked on a Mac.
+
 Open on Windows:
 
-- The debug build (`port/debug`: sockets, signals, `/usr/bin/sample`, Mach-O symbols) and so `tools/golden_port.py`;
-  `port.py --debug` refuses on Windows.
 - `dc2tk build --native` (`native.rs`) has none of this; item 7 (one native build) would bring it.
-- `symbols.cpp` reads Mach-O only; `memory.c`'s ASLR respawn is macOS only and not needed with the fixed base.
+- `memory.c`'s ASLR respawn is macOS only and not needed with the fixed base.
 
 ### Gates only the user can run
 
@@ -442,7 +467,9 @@ Open on Windows:
   (JSON after the first line), with the faulting thread's frames.
 - **The debug build:** `python3 -I tools/imgui_sdk.py` once (Dear ImGui 1.92.9b into
   `build/port/imgui-sdk`), then `python3 -I tools/port.py --movies --debug` also links
-  `build/port/dc2-debug`. It opens a second window (F1 shows or hides it, F5 pauses, F6
+  `build/port/dc2-debug` (`build/port/windows/dc2-debug.exe` on Windows) and its symbol table
+  `dc2-debug.symbols`; a crash prints its stack, named from that table, and saves a recording up
+  to it. It opens a second window (F1 shows or hides it, F5 pauses, F6
   steps) and serves the same commands on `http://127.0.0.1:7777/` (`DC2TK_DEBUG_PORT`).
   `python3 -I tools/debug.py launch`, then `help`, `status`, `stats frames=200 --summary`,
   `press buttons=cross frames=6`, `step frames=10`, `speed value=0`, `screenshot out.png`,
