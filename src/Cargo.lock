@@ -199,7 +199,7 @@ dependencies = [
 
 [[package]]
 name = "dc2tk"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -216,7 +216,7 @@ dependencies = [
 
 [[package]]
 name = "dc2tk-assets"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "dc2tk-disc",
  "flate2",
@@ -230,7 +230,7 @@ dependencies = [
 
 [[package]]
 name = "dc2tk-disc"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "encoding_rs",
  "memmap2",
@@ -242,7 +242,7 @@ dependencies = [
 
 [[package]]
 name = "dc2tk-script"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "crc32fast",
  "dc2tk-assets",

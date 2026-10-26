@@ -1,6 +1,6 @@
 [package]
 name = "dc2tk-assets"
-version = "0.2.0"
+version = "0.3.0"
 edition.workspace = true
 license.workspace = true
 description = "Dark Chronicle's assets: textures to PNG, sound banks to WAV, character packs to glTF, and back"
