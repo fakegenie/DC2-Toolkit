@@ -9,8 +9,8 @@
 #include <strings.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <SDL3/SDL.h>
 #ifdef __APPLE__
-#include <mach-o/dyld.h>
 #include <TargetConditionals.h>
 #endif
 
@@ -102,44 +102,43 @@ static int pak_count;
 static int paks_listed;
 static int settings_applied;
 
-static void binary_folder(char *out, uint32_t size) {
-#ifdef __APPLE__
-    if (_NSGetExecutablePath(out, &size)) out[0] = 0;
-#else
-    ssize_t length = readlink("/proc/self/exe", out, size - 1);
-    out[length > 0 ? length : 0] = 0;
-#endif
-    char *slash = strrchr(out, '/');
-    if (slash) slash[1] = 0;
-    else out[0] = 0;
+static const char *const bundle_resources = ".app/Contents/Resources/";
+
+const char *port_data_folder(void) {
+    static char data[1024];
+    if (data[0]) return data;
+    const char *base = SDL_GetBasePath();
+    size_t length = base ? strlen(base) : 0;
+    size_t suffix = strlen(bundle_resources);
+    int bundled = length > suffix && !strcmp(base + length - suffix, bundle_resources);
+    char *preferred = bundled ? SDL_GetPrefPath("DC2 Toolkit", "Dark Chronicle") : NULL;
+    snprintf(data, sizeof data, "%s", preferred ? preferred : base ? base : "");
+    SDL_free(preferred);
+    return data;
 }
 
 const char *port_overrides_folder(void) {
     if (folder[0]) return folder;
     const char *chosen = getenv("DC2TK_OVERRIDES");
-    char binary[1024];
-    binary_folder(binary, sizeof binary);
     if (chosen && *chosen) snprintf(folder, sizeof folder, "%s", chosen);
-    else snprintf(folder, sizeof folder, "%soverrides", binary);
+    else snprintf(folder, sizeof folder, "%soverrides", port_data_folder());
     return folder;
 }
 
 #if TARGET_OS_IPHONE
 #include "ios_files.h"
+static const char *mods_parent(void) { return port_ios_documents(); }
+#elif defined(__ANDROID__)
+#include "android_files.h"
+static const char *mods_parent(void) { return port_android_documents(); }
+#else
+static const char *mods_parent(void) { return port_data_folder(); }
+#endif
 
 const char *port_paks_folder(void) {
-    if (!paks_folder[0]) snprintf(paks_folder, sizeof paks_folder, "%smods", port_ios_documents());
+    if (!paks_folder[0]) snprintf(paks_folder, sizeof paks_folder, "%smods", mods_parent());
     return paks_folder;
 }
-#else
-const char *port_paks_folder(void) {
-    if (paks_folder[0]) return paks_folder;
-    char binary[1024];
-    binary_folder(binary, sizeof binary);
-    snprintf(paks_folder, sizeof paks_folder, "%smods", binary);
-    return paks_folder;
-}
-#endif
 
 static int read_at(int file, uint64_t offset, void *buffer, size_t size) {
     unsigned char *out = buffer;

@@ -17,6 +17,9 @@
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
+#else
+#include <dlfcn.h>
+#include <link.h>
 #endif
 
 extern "C" {
@@ -103,12 +106,46 @@ static int game_regions(Region *regions) {
 }
 
 static uint64_t image_base(void) {
+    Dl_info info;
+    return dladdr((void *)&image_base, &info) ? (uint64_t)(uintptr_t)info.dli_fbase : 0;
+}
+
+typedef struct {
+    Target *targets;
+    int count;
+} Found;
+
+static int holds_image(const struct dl_phdr_info *info) {
+    uint64_t self = (uint64_t)(uintptr_t)&image_base;
+    for (int i = 0; i < info->dlpi_phnum; ++i) {
+        const ElfW(Phdr) *segment = &info->dlpi_phdr[i];
+        if (segment->p_type == PT_LOAD && self - (info->dlpi_addr + segment->p_vaddr) < segment->p_memsz) return 1;
+    }
     return 0;
 }
 
+static int segment_targets(struct dl_phdr_info *info, size_t size, void *data) {
+    (void)size;
+    Found *found = (Found *)data;
+    if (!holds_image(info)) return 0;
+    for (int i = 0; i < info->dlpi_phnum && found->count < TARGET_LIMIT; ++i) {
+        const ElfW(Phdr) *segment = &info->dlpi_phdr[i];
+        uint64_t start = info->dlpi_addr + segment->p_vaddr;
+        if (segment->p_type == PT_LOAD && !(segment->p_flags & PF_W))
+            found->targets[found->count++] = {start, segment->p_memsz, (segment->p_flags & PF_X) != 0};
+        if (segment->p_type == PT_GNU_RELRO) found->targets[found->count++] = {start, segment->p_memsz, 1};
+    }
+    return 1;
+}
+
 static int image_targets(Target *targets) {
-    (void)targets;
-    return 0;
+    Found found = {targets, 0};
+    dl_iterate_phdr(segment_targets, &found);
+    Region regions[REGION_LIMIT];
+    int region_count = game_regions(regions);
+    for (int i = 0; i < region_count && found.count < TARGET_LIMIT; ++i)
+        targets[found.count++] = {regions[i].start, regions[i].size, 0};
+    return found.count;
 }
 #endif
 

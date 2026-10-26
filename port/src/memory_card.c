@@ -17,6 +17,7 @@
 #include <sys/statvfs.h>
 #include <time.h>
 #include <unistd.h>
+#include <SDL3/SDL.h>
 
 enum {
     MC_PORTS = 2,
@@ -99,12 +100,17 @@ int port_memory_card_init(const char *root) {
 
 static const char *default_root(void) {
     static char path[MC_PATH_SIZE];
+    if (path[0]) return path;
     const char *home = getenv("HOME");
     struct stat info;
-    if (!home) return "saves";
-    snprintf(path, sizeof path, "%s/Library/Mobile Documents/com~apple~CloudDocs/Dark Chronicle", home);
-    if (stat(path, &info) || !S_ISDIR(info.st_mode)) return "saves";
-    snprintf(path, sizeof path, "%s/Library/Mobile Documents/com~apple~CloudDocs/Dark Chronicle/saves", home);
+    snprintf(path, sizeof path, "%s/Library/Mobile Documents/com~apple~CloudDocs/Dark Chronicle", home ? home : "");
+    if (home && !stat(path, &info) && S_ISDIR(info.st_mode)) {
+        snprintf(path, sizeof path, "%s/Library/Mobile Documents/com~apple~CloudDocs/Dark Chronicle/saves", home);
+        return path;
+    }
+    char *preferred = SDL_GetPrefPath("DC2 Toolkit", "Dark Chronicle");
+    snprintf(path, sizeof path, "%ssaves", preferred ? preferred : "");
+    SDL_free(preferred);
     return path;
 }
 

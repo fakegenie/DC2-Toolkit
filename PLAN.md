@@ -111,7 +111,7 @@ written fresh. These are what it found to fix:
    flags, aliases, localised symbols, the GS bundle and Kazarov's `libvu0.cpp`. Keep them in
    dc2tk and make `tools/port.py` a thin call to `dc2tk build --native` (or drop it), so they
    cannot drift.
-8. **CPU use.** `tools/movie_sdk.py:76` runs `make -j8`; it should follow the affinity. (The GS
+8. **CPU use.** `tools/port_sdk.py` builds with `os.cpu_count()` jobs; it should follow the affinity. (The GS
    workers this also named are gone.)
 9. **Done: debugging in the shipping binary.** `DC2TK_SCREENSHOT` and `DC2TK_PRESS` are gone (the
    debug API's `screenshot` and `press` replace them); the sound dump is the debug build's
@@ -303,6 +303,78 @@ one fits per tick on the iPhone (50 shown a second at 120 Hz), and in the swamp 
    hundreds of timers, animations and events step once a tick, so a faster tick would mean auditing
    every one of them.
 
+### Android
+
+`tools/android_sdk.py` builds shared SDL3 and static FFmpeg for arm64-v8a with the NDK (27.1.12297006 locally and on
+CI); `tools/port.py --android` compiles the engine with clang 23 against the NDK sysroot (`-fPIC`) and links
+`libmain.so` with the NDK's clang++; `tools/port_package.py --android` makes the APK without Gradle and signs it with
+`port/android/dark-chronicle.keystore` (CN=Fake Genie, password `dark-chronicle`, public on purpose). The `android`
+release job uploads it. Checked on the Marathon7_API36 emulator (arm64, API 36): launcher, disc and mod picking
+through `content://` URIs, the game with movies under SDL_GPU on Vulkan, touch controls, a save state loaded in a later
+launch at another `libmain.so` address, and leaving and returning to the app. Not yet tried on a phone. On the
+emulator its keyboard has a D-pad, so SDL counts a gamepad and Smart hides the touch controls; SDL's OpenGL ES renderer
+drew no launcher backdrop there, so the launcher asks for SDL's Vulkan renderer (`SDL_RENDER_DRIVER` in the manifest),
+which resets its textures when the app comes back from another activity (the launcher remakes them on
+`SDL_EVENT_RENDER_DEVICE_RESET`). Save states do not survive an app update: unlike iOS, nothing keeps the old build.
+
+### Next: Windows
+
+The port's macOS and Linux packages ship from `.github/workflows/release.yml` (`port` job: `tools/port_sdk.py` then
+`tools/port_package.py`). Windows was left for a session on a Windows box. Nothing below is built or tested yet.
+
+## Toolchain
+
+- Use a MinGW target (llvm-mingw or MSYS2 CLANG64), not MSVC: it keeps Itanium mangling, which `tools/port.py`'s
+  ALIASES, OPERATORS and stubs depend on, and gives `--defsym`, `objcopy`, `nm`.
+- llvm-mingw 20261020 is LLVM 23.1.4. Release asset sha256s: macos-universal
+  `e9c13e4ede38e715003ffc674d4d00a1088df8235439d1f0c16188ff0704c17e`, ubuntu-22.04-x86_64
+  `55064b60b991a1e1e8090b8c2f84e82b22cfe5903d12c159d65064cf5e8ae335`.
+- Link with `-static` (libc++, libunwind, winpthreads) and `-mwindows` for the release binary.
+- `tools/port_sdk.py` would need a Windows path: SDL cmake with `-DCMAKE_SYSTEM_NAME=Windows` and the mingw compilers;
+  FFmpeg configure with `--target-os=mingw32 --arch=x86_64 --cross-prefix=x86_64-w64-mingw32-` (or native in MSYS2).
+  Output: `bin/SDL3.dll`, `bin/avcodec-62.dll`, `bin/avutil-60.dll`, import libs `lib/*.dll.a`. DLLs go beside the exe.
+
+## Code that is LP64 or POSIX only
+
+- **`long` is 32-bit (LLP64).** `u_long` is already `u64` in C++ (`port/include/port.h`). Engine sites that need 64 bits,
+  to patch with `tools/engine-patches/port.json` (u64/s64 on every platform):
+  - `ps2/src/nd_meswin.cpp` 3906-3907 and 3957-3958: `(unsigned long) x << 32/48` for SCE_GS_SCISSOR_1.
+  - `ps2/src/inventmn.cpp` 5776: `0x80UL << 32`.
+  - `ps2/include/mg_drawprim.hpp` 606 `Direct(unsigned long reg, unsigned long data)`, and the override in
+    `port/src/mg_drawprim.cpp` 138 to match.
+  - Costume bits (34 costumes): `ps2/include/userdata.hpp` 1181 `costume_bit`, 2147, 2157; `ps2/src/userdata.cpp`
+    4678, 4682; `ps2/include/menuchr.hpp` 822; `ps2/src/menuchr.cpp` 331, 6552; `ps2/src/memcard.cpp` 997. The struct
+    layout is part of the save data.
+  - `ps2/src/password.cpp`: 8-byte groups packed in `unsigned long` (ConvLongToTxt, ConvTxtToLong, both unions).
+  - Harmless at 32 bits: `dbg_font.cpp` (debug font), `snd_mngr.cpp` 1912, `nameregi.cpp` 698; movie pts/dts in
+    `movie.hpp`/`libmpeg.h` (engine `movie.cpp` is not built; check the port's own movie code).
+  - The port's C files include no `u_long`/`long` SDK headers.
+- **OPERATORS** in `tools/port.py`: `size_t` mangles as `y`, not `m` (`_Znwy`, `_ZdlPvy`, ...).
+- **Fibers** (`port/src/fiber.c`): arm64 asm, else ucontext, which MinGW lacks. The stacks are the static
+  `stacks[][]` in `kernel.c`, and savestates use `port_kernel_main_stack_top()`, so keep caller-given stacks: a Win64
+  asm switch saving rbx, rbp, rdi, rsi, r12-r15, xmm6-xmm15, rsp, a resume address, and the TIB's StackBase
+  (`gs:[0x08]`) and StackLimit (`gs:[0x10]`). New fiber: rsp 16-aligned, start stub does `sub rsp, 32; call rbx`.
+- **Files**: `cdvd.c` and `overrides.c` use `pread` (ReadFile with an OVERLAPPED offset); `memory_card.c` is built on
+  `openat`/`mkdirat`/`fstatat`/`unlinkat`/`renameat`/`fdopendir`/`fstatvfs` with `O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC`.
+  MinGW has `opendir`/`readdir`/`stat`/`strcasecmp`/`clock_gettime`/`nanosleep`. SDL3's filesystem calls
+  (`SDL_EnumerateDirectory`, `SDL_GetPathInfo`, `SDL_CreateDirectory`, `SDL_RenamePath`, `SDL_RemovePath`) could serve
+  every platform.
+- **Data folders** already go through SDL: `port_data_folder()` (`SDL_GetBasePath`) for mods/overrides, and
+  `SDL_GetPrefPath("DC2 Toolkit", "Dark Chronicle")` for saves and `launcher.cfg` (`%APPDATA%\DC2 Toolkit\Dark Chronicle`).
+- **Savestate sections**: `port/include/port_game.h` puts game data in `game_data`/`game_bss`; `move_data` in
+  `tools/port.py` renames sections per object (Mach-O `__GAME`, ELF objcopy). PE image section names are 8 characters
+  at most, so use short names (e.g. `gdata`/`gbss`, renaming `.data`, `.data$*`, `.bss`, `.bss$*`; clang may emit
+  bigobj COFF). `savestate.cpp` would read the PE section headers of `GetModuleHandleW(NULL)`. Link with
+  `--disable-dynamicbase` so the image sits at its fixed base like the non-PIE Linux build.
+- **ASLR respawn** in `memory.c` is macOS only.
+- **Linking**: `--defsym` aliases work with lld's MinGW driver; undefined symbols print as `undefined symbol: NAME`
+  (`--no-demangle` keeps them mangled for `undefined()`).
+- **Graphics**: `port/src/shaders.h` has MSL and SPIR-V only, so SDL_GPU must use Vulkan on Windows (D3D12 would need
+  DXIL).
+- **Debug build** (`port/debug`): sockets, `/usr/bin/sample`, Mach-O symbol reading; not needed for release.
+- `port/src/symbols.cpp`, `main.c`, `touch.c`, `savestate.cpp` include POSIX or Mach-O headers under `__APPLE__`
+  guards; check each `#else` branch.
+
 ### Gates only the user can run
 
 - E2, E3, E4: the modded images in PCSX2 or on a PS2.
@@ -414,8 +486,8 @@ one fits per tick on the iPhone (50 shown a second at 120 Hz), and in the swamp 
   targets 2 and 10.
 - **Linux** (the machine of the earlier work): clang 21, binutils, Python 3 and Docker; Rust in
   the `dc2tk-rust` image (`printf 'FROM rust:1-trixie\nRUN rustup component add rustfmt clippy\n' |
-  docker build -t dc2tk-rust -`); `python3 -I tools/port_sdk.py` copies SDL3 out of Kazarov's
-  image and `python3 -I tools/movie_sdk.py` builds FFmpeg 8.0.1's MPEG-2 decoder.
+  docker build -t dc2tk-rust -`); `python3 -I tools/port_sdk.py` builds SDL3 3.4.18 and FFmpeg
+  8.0.1's MPEG-2 decoder from source into `build/port/sdk`.
 - **Linux x86-64 from this Mac:** OrbStack's Docker runs `--platform linux/amd64` containers
   under Rosetta on a real Linux kernel. A Debian trixie image with `clang lld llvm binutils
   python3 pkg-config libsdl3-dev libavcodec-dev libavutil-dev mesa-vulkan-drivers` (clang 19,

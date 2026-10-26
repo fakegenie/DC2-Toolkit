@@ -190,66 +190,28 @@ fn operators() -> Vec<(String, &'static str)> {
     found
 }
 
-fn graphics() -> Result<(Vec<String>, Vec<String>)> {
-    let prefix = files::root().join("build/port/sdk");
-    let mut include = prefix.join("usr/include");
-    if !include.join("SDL3/SDL.h").is_file() {
-        include = prefix.join("include");
+fn sdk_flags(movies: bool) -> Result<(Vec<String>, Vec<String>)> {
+    let sdk = files::root().join("build/port/sdk");
+    let movie_cflags: Vec<String> = if movies { vec!["-DPORT_MOVIES".into()] } else { Vec::new() };
+    let movie_libraries: &[&str] = if movies { &["-lavcodec", "-lavutil"] } else { &[] };
+    if sdk.join("include/SDL3/SDL.h").is_file() {
+        let mut cflags = movie_cflags;
+        cflags.push(format!("-I{}", sdk.join("include").display()));
+        let mut libraries =
+            vec![format!("-L{}", sdk.join("lib").display()), format!("-Wl,-rpath,{}", sdk.join("lib").display())];
+        libraries.push("-lSDL3".into());
+        libraries.extend(movie_libraries.iter().map(|value| value.to_string()));
+        return Ok((cflags, libraries));
     }
-    if include.join("SDL3/SDL.h").is_file() {
-        let mut libraries = Vec::new();
-        for relative in
-            ["usr/lib/x86_64-linux-gnu", "lib/x86_64-linux-gnu", "usr/lib/x86_64-linux-gnu/pulseaudio", "lib"]
-        {
-            let directory = prefix.join(relative);
-            if directory.is_dir() {
-                libraries.push(format!("-L{}", directory.display()));
-                libraries.push(format!("-Wl,-rpath,{}", directory.display()));
-            }
-        }
-        let pulse = prefix.join("usr/lib/x86_64-linux-gnu/pulseaudio");
-        if pulse.is_dir() {
-            for entry in fs::read_dir(pulse)? {
-                let path = entry?.path();
-                if path.extension().is_some_and(|value| value == "so") {
-                    libraries.extend([
-                        "-Wl,--no-as-needed".into(),
-                        path.display().to_string(),
-                        "-Wl,--as-needed".into(),
-                    ]);
-                }
-            }
-        }
-        libraries.extend(["-Wl,--disable-new-dtags".into(), "-lSDL3".into()]);
-        return Ok((vec![format!("-I{}", include.display())], libraries));
+    let mut packages = vec!["sdl3"];
+    if movies {
+        packages.extend(["libavcodec", "libavutil"]);
     }
-    let cflags = run(Command::new("pkg-config").args(["--cflags", "sdl3"]))
-        .context("SDL3 development files missing: run python3 -I tools/port_sdk.py")?;
-    let libraries = run(Command::new("pkg-config").args(["--libs", "sdl3"]))?;
-    Ok((
-        String::from_utf8(cflags.stdout)?.split_whitespace().map(str::to_string).collect(),
-        String::from_utf8(libraries.stdout)?.split_whitespace().map(str::to_string).collect(),
-    ))
-}
-
-fn movie_flags() -> Result<(Vec<String>, Vec<String>)> {
-    let sdk = files::root().join("build/port/movie-sdk");
-    if sdk.join("include/libavcodec/avcodec.h").is_file() {
-        return Ok((
-            vec!["-DPORT_MOVIES".into(), format!("-I{}", sdk.join("include").display())],
-            vec![
-                format!("-L{}", sdk.join("lib").display()),
-                format!("-Wl,-rpath,{}", sdk.join("lib").display()),
-                "-lavcodec".into(),
-                "-lavutil".into(),
-            ],
-        ));
-    }
-    let cflags = run(Command::new("pkg-config").args(["--cflags", "libavcodec", "libavutil"]))
-        .context("FFmpeg SDK missing: run python3 -I tools/movie_sdk.py")?;
-    let libraries = run(Command::new("pkg-config").args(["--libs", "libavcodec", "libavutil"]))?;
-    let mut cflags: Vec<String> = String::from_utf8(cflags.stdout)?.split_whitespace().map(str::to_string).collect();
-    cflags.insert(0, "-DPORT_MOVIES".into());
+    let found = run(Command::new("pkg-config").arg("--cflags").args(&packages))
+        .context("SDL3 or FFmpeg missing: run python3 -I tools/port_sdk.py")?;
+    let libraries = run(Command::new("pkg-config").arg("--libs").args(&packages))?;
+    let mut cflags = movie_cflags;
+    cflags.extend(String::from_utf8(found.stdout)?.split_whitespace().map(str::to_string));
     Ok((cflags, String::from_utf8(libraries.stdout)?.split_whitespace().map(str::to_string).collect()))
 }
 
@@ -572,10 +534,7 @@ pub fn build(
         &out.join("generated/port_build.h"),
         format!("#define PORT_EXECUTABLE_SHA256 \"{:x}\"\n", Sha256::digest(executable)).as_bytes(),
     )?;
-    let (mut cflags, mut libraries) = if movies { movie_flags()? } else { (Vec::new(), Vec::new()) };
-    let (graphics_cflags, graphics_libraries) = graphics()?;
-    cflags.extend(graphics_cflags);
-    libraries.extend(graphics_libraries);
+    let (cflags, libraries) = sdk_flags(movies)?;
     fs::create_dir_all(out.join("obj"))?;
     let mut jobs = Vec::new();
     for path in units(&copy.join("ps2/src"))? {

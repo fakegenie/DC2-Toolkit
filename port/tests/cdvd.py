@@ -1,6 +1,7 @@
 """Check the disc boundary with a synthetic ISO 9660 image."""
 
 import ctypes
+import importlib.util
 import os
 import pathlib
 import struct
@@ -122,10 +123,15 @@ def image(archive=False):
 def main():
     root = pathlib.Path(__file__).resolve().parents[2]
     headers = pathlib.Path(sys.argv[1])
+    spec = importlib.util.spec_from_file_location('port_build', root / 'tools/port.py')
+    port = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(port)
     with tempfile.TemporaryDirectory() as temporary:
         folder = pathlib.Path(temporary)
         library = folder / 'cdvd.so'
-        subprocess.run(['clang', '-std=c11', '-Wall', '-Wextra', '-Werror', '-shared', '-fPIC', '-I' + str(root / 'port/include'), '-I' + str(headers), '-I' + str(headers / 'sce'), str(root / 'port/src/cdvd.c'), str(root / 'port/src/overrides.c'), str(root / 'port/src/mods.c'), str(root / 'port/src/split_data.c'), str(root / 'port/src/hooks.c'), '-o', str(library)], check=True)
+        sdk = root / 'build/port/sdk'
+        cflags, libraries = port.sdk_flags(sdk, False)
+        subprocess.run(['clang', '-std=c11', '-Wall', '-Wextra', '-Werror', '-shared', '-fPIC', '-I' + str(root / 'port/include'), '-I' + str(headers), '-I' + str(headers / 'sce'), *cflags, str(root / 'port/src/cdvd.c'), str(root / 'port/src/overrides.c'), str(root / 'port/src/mods.c'), str(root / 'port/src/split_data.c'), str(root / 'port/src/hooks.c'), *libraries, '-Wl,-rpath,' + str(sdk / 'lib'), '-o', str(library)], check=True)
         os.environ['DC2TK_OVERRIDES'] = str(folder / 'overrides')
         iso = folder / 'test.iso'
         iso.write_bytes(image())

@@ -25,19 +25,43 @@ Run `dc2tk help <command>` to see all options for any command.
 `dc2tk build extracted/scripts dc2.iso --native` builds the SDL3 port for Linux or macOS as
 `build/port/darkchronicle`. Pass `--native FILE` to choose its path. Add `-o modded.iso` to
 write the ISO too; both builds use the chosen mods, executable tables and native declarations.
-The native build needs clang 21, binutils (llvm-objcopy and llvm-nm on macOS), Python 3 and SDL3 development files. A local SDK in
-`build/port/sdk` takes precedence over `pkg-config sdl3`; `python3 -I tools/port_sdk.py`
-installs that SDK. Run the binary with a disc image, `build/port/darkchronicle modded.iso`, to start
+The native build needs clang 21, binutils (llvm-objcopy and llvm-nm on macOS), Python 3 and SDL3 development files.
+`python3 -I tools/port_sdk.py` builds SDL3 and FFmpeg's MPEG-2 decoder from pinned sources into `build/port/sdk` (it needs
+cmake, make and, on Linux, SDL's build dependencies), which takes precedence over `pkg-config`; `tools/port.py` copies
+their libraries into `build/port/lib` beside the binary. Run the binary with a disc image, `build/port/darkchronicle modded.iso`, to start
 the game straight away; it warns when the mounted disc's executable differs from the one used for
 the build. Run it without one to open the launcher, where the disc, window, widescreen, high frame
 rate, sound and, in the debug build, the debug panel are chosen, and built mods are turned on and
 off (see [Playing built mods](mods.md#playing-built-mods)). It keeps them in `launcher.cfg` in
 the user's settings folder (`~/Library/Application Support/DC2 Toolkit/Dark Chronicle/` on macOS,
-`~/.local/share/DC2 Toolkit/Dark Chronicle/` on Linux), and options given with it still win. For MPEG2 movies, run
-`python3 -I tools/movie_sdk.py` (or install FFmpeg for `pkg-config`) and add `--movies` to the native build. Engine mods are checked
-with clang as well as MWCC by `mod check --native`.
+`~/.local/share/DC2 Toolkit/Dark Chronicle/` on Linux), and options given with it still win. Saves go in `saves` in that
+folder (or `Dark Chronicle/saves` in iCloud Drive, when iCloud Drive has a `Dark Chronicle` folder), unless
+`DC2_SAVE_ROOT` names another. Built mods go in `mods` and overrides in `overrides` beside the binary, or in the settings
+folder for `Dark Chronicle.app`. For MPEG2 movies add `--movies` to the native build. Engine mods are checked with clang
+as well as MWCC by `mod check --native`.
 
-`python3 -I tools/port.py --ios simulator` (or `--ios device --team TEAM`, signed for an iPhone or iPad) builds `DarkChronicle.app` from SDKs `python3 -I tools/ios_sdk.py` installs. The app opens on the launcher. Its Disc row picks a disc image anywhere the Files app reaches; without one it uses the first `.iso` in the app's own folder (Files, On My iPhone, Dark Chronicle). Built mods go in that folder's `mods`, which the Mods page's Open mods folder shows in Files. The Saves row chooses where saves are kept: `saves` in that same folder by default, or a folder anywhere Files reaches, such as iCloud Drive, where they go in a `Dark Chronicle` folder. Picking the app's own folder goes back to the default. Its settings leave out the window, vsync and the debug panel, offer high frame rates up to 120 Hz and an aspect ratio of Fill screen (the screen's own shape, `--aspect fill`), and add On-screen controls: a touch D-pad, both sticks, the face and shoulder buttons, Select and Start, drawn over the game. They are Off, On, or Smart (the default), which shows them only while no controller is connected. The sticks float: a touch on the left half of the screen that misses every button becomes the movement stick where it lands, and one on the right half the camera stick. A pressed button glows in its colour and taps the phone (Haptics turns that off), and the controls dim after a few seconds without a touch. Save state buttons (on by default) put Save State and Load State between the shoulder buttons; with a controller connected, or the controls off, a tap anywhere shows them for a few seconds. There is one state, `quick.dc2state` in the saves folder, so it outlasts closing the app. The app keeps a private copy of the build that made it, so the state still loads after an update until the next save replaces it. A mod cannot override a function supplied by `port/src`. A chosen mod's `"port"` sources are compiled into the binary too (see [Native port mods](mods.md#native-port-mods)); `python3 -I tools/port.py --mod mods/<name>` does the same for the port's own build.
+`python3 -I tools/port_package.py` builds the port with movies and packs it for players in `build/port/package`:
+`Dark Chronicle.app` in a zip on macOS, or `darkchronicle` with its libraries in a tar.gz on Linux, each with
+`port/package/README.md`, `port/package/NOTICE.md`, the LICENCE and the licences of SDL3, FFmpeg, the launcher's font
+and the other code built in. `--ios` packs the unsigned `--ios device` app, with the notice and licences inside it, as
+`dark-chronicle-<version>-ios.ipa` for sideloading. `--android` packs `dark-chronicle-<version>-android-arm64.apk`,
+with the notice and licences in its assets, signed with the public key in `port/android` so each release installs over
+the last. The release workflow runs all of them for every tag.
+
+`python3 -I tools/port.py --ios simulator` (or `--ios device --team TEAM`, signed for an iPhone or iPad, or `--ios device` alone, unsigned) builds `DarkChronicle.app` from SDKs `python3 -I tools/ios_sdk.py` installs. The app opens on the launcher. Its Disc row picks a disc image anywhere the Files app reaches; without one it uses the first `.iso` in the app's own folder (Files, On My iPhone, Dark Chronicle). Built mods go in that folder's `mods`, which the Mods page's Open mods folder shows in Files. The Saves row chooses where saves are kept: `saves` in that same folder by default, or a folder anywhere Files reaches, such as iCloud Drive, where they go in a `Dark Chronicle` folder. Picking the app's own folder goes back to the default. Its settings leave out the window, vsync and the debug panel, offer high frame rates up to 120 Hz and an aspect ratio of Fill screen (the screen's own shape, `--aspect fill`), and add On-screen controls: a touch D-pad, both sticks, the face and shoulder buttons, Select and Start, drawn over the game. They are Off, On, or Smart (the default), which shows them only while no controller is connected. The sticks float: a touch on the left half of the screen that misses every button becomes the movement stick where it lands, and one on the right half the camera stick. A pressed button glows in its colour and taps the phone (Haptics turns that off), and the controls dim after a few seconds without a touch. Save state buttons (on by default) put Save State and Load State between the shoulder buttons; with a controller connected, or the controls off, a tap anywhere shows them for a few seconds. There is one state, `quick.dc2state` in the saves folder, so it outlasts closing the app. The app keeps a private copy of the build that made it, so the state still loads after an update until the next save replaces it. A mod cannot override a function supplied by `port/src`.
+
+`python3 -I tools/port.py --android` builds `build/port/android/libmain.so` for arm64 Android 10 or later from the SDKs
+`python3 -I tools/android_sdk.py` installs (SDL3 shared, FFmpeg static, both built with the NDK from `ANDROID_NDK_HOME`
+or the newest in `ANDROID_HOME/ndk`), and `tools/port_package.py --android` packs it with SDL's Java activity and
+`port/android` (the manifest, `DarkChronicle.java` and the key) into an APK, built with javac, d8, aapt2, zipalign and
+apksigner from the newest Android build tools, no Gradle. The engine compiles with clang 23 against the NDK's sysroot,
+as the NDK's own clang has no `#embed`, and the NDK's clang++ links. The app opens on the same launcher and settings as
+on iOS. Its Disc row opens Android's file picker and remembers the disc it picks, and the Mods page's Add a mod copies a
+picked `.dc2pak` into the mods folder. Saves, mods and `log.txt` (what the port prints) are in the app's folder,
+`Android/data/dc2toolkit.darkchronicle/files`; `launcher.cfg` is in its private storage. The launcher draws with SDL's
+Vulkan renderer, like the game. A state saved before an update does not load after it.
+
+A chosen mod's `"port"` sources are compiled into the binary too (see [Native port mods](mods.md#native-port-mods)); `python3 -I tools/port.py --mod mods/<name>` does the same for the port's own build.
 
 ## The engine
 

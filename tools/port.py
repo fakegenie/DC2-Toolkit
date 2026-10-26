@@ -2,8 +2,8 @@
 """Builds the native port for Linux x86-64 or macOS arm64: the engine's units with tools/engine-patches/port.json applied,
 ChronicleTwo's C++ for the MWCC asm (its symbols made weak, so where the engine still has a
 function its own definition is used), and port/src, compiled by clang and linked into
-build/port/darkchronicle. Every symbol nothing defines yet becomes a stub that names itself and
-aborts, and build/port/missing.txt lists them by library.
+build/port/darkchronicle, with the shared SDL3 and FFmpeg of tools/port_sdk.py copied into build/port/lib. Every symbol
+nothing defines yet becomes a stub that names itself and aborts, and build/port/missing.txt lists them by library.
 
     python3 -I tools/port.py            build
     python3 -I tools/port.py --run      build, then run it
@@ -11,8 +11,11 @@ aborts, and build/port/missing.txt lists them by library.
     python3 -I tools/port.py --mod DIR  link a mod's port code (its mod.json's "port" sources) into the binaries
     python3 -I tools/port.py --ios simulator
                                         build build/port/ios-simulator/DarkChronicle.app
-    python3 -I tools/port.py --ios device
-                                        build build/port/ios-device/DarkChronicle.app, signed for an iPhone
+    python3 -I tools/port.py --ios device [--team TEAM]
+                                        build build/port/ios-device/DarkChronicle.app, signed for an iPhone by TEAM
+                                        or left unsigned
+    python3 -I tools/port.py --android  build build/port/android/libmain.so for arm64 Android with the SDKs of
+                                        tools/android_sdk.py
 """
 
 import argparse
@@ -46,18 +49,23 @@ SDL_CFLAGS = []
 TARGET = []
 LINKER = "clang++"
 DARWIN = sys.platform == "darwin"
+MACOS_MINIMUM = "13.0"
+PLATFORM_SOURCES = []
 PREFIX = "_" if DARWIN else ""
 OBJCOPY = (shutil.which("llvm-objcopy") or "/opt/homebrew/opt/llvm/bin/llvm-objcopy") if DARWIN else "objcopy"
 NM = OBJCOPY.replace("objcopy", "nm")
+POSITION = [] if DARWIN else ["-fno-pie", "-fno-pic"]
+ANDROID_API = 29
 
 UPSTREAM_ASM = ["mg_math.cpp", "collision_asm.cpp", "gameutil_asm.cpp", "mg_drawprim_asm.cpp"]
 FLAGS = [
-    "-O0", "-g", "-pthread", *([] if DARWIN else ["-fno-pie", "-fno-pic"]), "-DPORT", "-DPAL",
+    "-O0", "-g", "-pthread", f"-ffile-prefix-map={ROOT}/=", "-DPORT", "-DPAL",
     "-fms-extensions", "-fno-strict-aliasing", "-fwrapv", "-ffp-contract=off",
     "-fno-strict-return", "-ftrivial-auto-var-init=zero",
     "-Wno-c++11-narrowing", "-Wno-register", "-Wno-return-mismatch", "-w",
 ]
-LINK_FLAGS = ["-pthread", *(["-lobjc"] if DARWIN else [])]
+LINK_FLAGS = ["-pthread", *(["-lobjc"] if DARWIN else ["-no-pie", "-static-libstdc++", "-static-libgcc"])]
+RPATHS = ["@executable_path/lib", "@executable_path/../Frameworks"] if DARWIN else ["$ORIGIN/lib"]
 IOS = {
     "simulator": {"sdk": "iphonesimulator", "target": "arm64-apple-ios17.0-simulator", "platform": "iPhoneSimulator"},
     "device": {"sdk": "iphoneos", "target": "arm64-apple-ios17.0", "platform": "iPhoneOS"},
@@ -217,12 +225,12 @@ def compile_one(source, name):
     c = source.suffix in (".c", ".m")
     if name.startswith("imgui_"):
         return compile_command(source, target, depfile, command_file,
-                               ["clang++", *TARGET, "-std=c++17", "-c", "-O2", "-g", "-w", "-MMD", "-MF", str(depfile),
+                               ["clang++", *TARGET, *POSITION, "-std=c++17", "-c", "-O2", "-g", "-w", "-MMD", "-MF", str(depfile),
                                 f"-I{IMGUI}", *SDL_CFLAGS, str(source), "-o", str(target)], [])
     debug = [f"-I{IMGUI}", f"-I{source.parent}"] if name.startswith("mod_") else []
     compiler = LINKER.replace("clang++", "clang") if source.suffix == ".m" else "clang" if c else "clang++"
     objc = ["-fobjc-arc"] if source.suffix == ".m" else []
-    command = [compiler, *TARGET, *objc, "-std=c11" if c else "-std=c++26", "-c", *FLAGS, *debug,
+    command = [compiler, *TARGET, *objc, "-std=c11" if c else "-std=c++26", "-c", *FLAGS, *POSITION, *debug,
                *(["-O2"] if not source.is_relative_to(COPY) and source.name not in ("memory.c", "kernel.c") else []),
                "-MMD", "-MF", str(depfile),
                *([] if c else ["-include", str(PORT / "include" / "port.h")]),
@@ -318,8 +326,7 @@ def compile_all(units, debug=False, mods=()):
     jobs += [(ENGINE / "port" / "src" / name, "upstream_" + Path(name).stem) for name in UPSTREAM_ASM]
     jobs.append((ENGINE / "tools" / "kazarov" / "src" / "cpp" / "sce" / "libvu0.cpp", "kazarov_vu0"))
     jobs += [(source, "port_" + source.stem) for source in sorted((PORT / "src").glob("*.c*"))]
-    if TARGET:
-        jobs += [(source, "port_" + source.stem) for source in sorted((PORT / "src").glob("*.m"))]
+    jobs += [(source, "port_" + source.stem) for source in PLATFORM_SOURCES]
     if debug:
         jobs += port_mod_jobs(PORT / "debug")
         jobs += [(IMGUI / name, "imgui_" + Path(name).stem) for name in IMGUI_SOURCES]
@@ -345,8 +352,7 @@ def build_id(inputs, binary):
     target = source.with_suffix(".o")
     write_if_changed(source, f'const char port_build_id[] = "{digest.hexdigest()[:32]}";\n')
     if not target.exists() or target.stat().st_mtime < source.stat().st_mtime:
-        subprocess.run(["clang", *TARGET, "-c", "-O0", *([] if DARWIN else ["-fno-pie"]), str(source), "-o", str(target)],
-                       check=True)
+        subprocess.run(["clang", *TARGET, "-c", "-O0", *POSITION, str(source), "-o", str(target)], check=True)
     return target
 
 
@@ -354,7 +360,7 @@ def link(objects, extra, binary):
     if DARWIN:
         platform = [f"-Wl,-alias,_{target},_{alias}" for alias, target in ALIASES.items()]
     else:
-        platform = ["-no-pie", "-Wl,--no-demangle", *(f"-Wl,--defsym={alias}={target}" for alias, target in ALIASES.items())]
+        platform = ["-Wl,--no-demangle", *(f"-Wl,--defsym={alias}={target}" for alias, target in ALIASES.items())]
     fresh = binary.with_name(binary.name + ".linking")
     inputs = [*objects, *extra]
     command = [LINKER, *TARGET, "-o", str(fresh), *map(str, inputs), str(build_id(inputs, binary)), *platform, *LINK_FLAGS]
@@ -366,7 +372,7 @@ def link(objects, extra, binary):
 
 def undefined(link_errors, objects):
     if not DARWIN:
-        return sorted(set(re.findall(r"undefined reference to `([^']+)'", link_errors)))
+        return sorted(set(re.findall(r"(?:undefined reference to `|undefined symbol: )([^'\s]+)", link_errors)))
     printed = set(re.findall(r'^\s+"(.+)", referenced from', link_errors, re.M))
     listing = subprocess.run([OBJCOPY.replace("objcopy", "nm"), "-u", "-j", *map(str, objects)],
                              capture_output=True, text=True, check=True).stdout.split()
@@ -393,7 +399,7 @@ def write_stubs(names, readable):
     source = OUT / "stubs.c"
     source.write_text("\n".join(lines) + "\n", encoding="utf-8")
     target = OUT / "stubs.o"
-    subprocess.run(["clang", *TARGET, "-c", "-O0", *([] if DARWIN else ["-fno-pie"]), "-w", str(source), "-o", str(target)], check=True)
+    subprocess.run(["clang", *TARGET, "-c", "-O0", *POSITION, "-w", str(source), "-o", str(target)], check=True)
     return target
 
 
@@ -411,37 +417,26 @@ def write_missing(names, readable):
     return groups
 
 
-def graphics_flags(prefix):
-    include = prefix / "usr/include"
-    if not (include / "SDL3/SDL.h").exists():
-        include = prefix / "include"
-    if (include / "SDL3/SDL.h").exists():
-        libraries = []
-        for relative in ("usr/lib/x86_64-linux-gnu", "lib/x86_64-linux-gnu",
-                         "usr/lib/x86_64-linux-gnu/pulseaudio", "lib"):
-            directory = prefix / relative
-            if directory.is_dir():
-                libraries.extend([f"-L{directory}", f"-Wl,-rpath,{directory}"])
-        for library in sorted(prefix.glob("usr/lib/x86_64-linux-gnu/pulseaudio/*.so")):
-            libraries.extend(["-Wl,--no-as-needed", str(library), "-Wl,--as-needed"])
-        return [f"-I{include}"], [*libraries, "-Wl,--disable-new-dtags", "-lSDL3"]
+def sdk_flags(prefix, movies):
+    packages = ["sdl3", *(["libavcodec", "libavutil"] if movies else [])]
+    if (prefix / "include/SDL3/SDL.h").exists():
+        libraries = ["-lSDL3", *(["-lavcodec", "-lavutil"] if movies else [])]
+        rpaths = [*(f"-Wl,-rpath,{path}" for path in RPATHS), *([] if DARWIN else ["-Wl,--disable-new-dtags"])]
+        return [f"-I{prefix / 'include'}"], [f"-L{prefix / 'lib'}", *rpaths, *libraries]
     try:
-        cflags = subprocess.check_output(["pkg-config", "--cflags", "sdl3"], text=True)
-        libraries = subprocess.check_output(["pkg-config", "--libs", "sdl3"], text=True)
+        cflags = subprocess.check_output(["pkg-config", "--cflags", *packages], text=True)
+        libraries = subprocess.check_output(["pkg-config", "--libs", *packages], text=True)
         return shlex.split(cflags), shlex.split(libraries)
     except (OSError, subprocess.CalledProcessError):
-        sys.exit("SDL3 development files missing: run python3 -I tools/port_sdk.py or pass --sdl PREFIX")
+        sys.exit("SDL3 or FFmpeg missing: run python3 -I tools/port_sdk.py or pass --sdk PREFIX")
 
 
-def movie_flags(prefix):
-    if (prefix / "include/libavcodec/avcodec.h").exists():
-        return [f"-I{prefix / 'include'}"], [f"-L{prefix / 'lib'}", f"-Wl,-rpath,{prefix / 'lib'}", "-lavcodec", "-lavutil"]
-    try:
-        cflags = subprocess.check_output(["pkg-config", "--cflags", "libavcodec", "libavutil"], text=True)
-        libraries = subprocess.check_output(["pkg-config", "--libs", "libavcodec", "libavutil"], text=True)
-        return shlex.split(cflags), shlex.split(libraries)
-    except (OSError, subprocess.CalledProcessError):
-        sys.exit("FFmpeg SDK missing: run python3 -I tools/movie_sdk.py")
+def copy_libraries(prefix):
+    folder = OUT / "lib"
+    shutil.rmtree(folder, ignore_errors=True)
+    folder.mkdir(parents=True)
+    for library in sorted((prefix / "lib").glob("*.dylib" if DARWIN else "*.so*")):
+        shutil.copy2(library, folder / library.name, follow_symlinks=False)
 
 
 def ios_flags(kind):
@@ -453,6 +448,28 @@ def ios_flags(kind):
     TARGET.extend(["-target", settings["target"], "-isysroot", sysroot])
     frameworks = [flag for name in IOS_FRAMEWORKS for flag in ("-framework", name)]
     return [f"-I{prefix / 'include'}"], [f"-L{prefix / 'lib'}", "-lSDL3", "-lavcodec", "-lavutil", *frameworks]
+
+
+def android_flags():
+    global DARWIN, PREFIX, OBJCOPY, NM, POSITION, LINKER
+    spec = importlib.util.spec_from_file_location("android_sdk", Path(__file__).with_name("android_sdk.py"))
+    android_sdk = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(android_sdk)
+    prefix = android_sdk.PREFIX
+    if not (prefix / "lib" / "libSDL3.so").exists():
+        sys.exit("Android SDL3 and FFmpeg missing: run python3 -I tools/android_sdk.py")
+    toolchain = android_sdk.toolchain()
+    DARWIN = False
+    PREFIX = ""
+    OBJCOPY = str(toolchain / "bin" / "llvm-objcopy")
+    NM = str(toolchain / "bin" / "llvm-nm")
+    POSITION = ["-fPIC"]
+    LINKER = str(toolchain / "bin" / "clang++")
+    TARGET.extend([f"--target=aarch64-linux-android{ANDROID_API}", f"--sysroot={toolchain / 'sysroot'}"])
+    LINK_FLAGS[:] = ["-shared", "-Wl,-soname,libmain.so", "-Wl,--no-undefined", "-Wl,--error-limit=0",
+                     "-Wl,-z,max-page-size=16384", "-static-libstdc++"]
+    return [f"-I{prefix / 'include'}"], [f"-L{prefix / 'lib'}", "-lSDL3", "-lavcodec", "-lavutil", "-landroid", "-llog",
+                                         "-lm"]
 
 
 def app_info(kind, identifier):
@@ -557,14 +574,13 @@ def main():
     parser.add_argument("--movies", action="store_true", help="enable MPEG-2 movies with the local FFmpeg SDK")
     parser.add_argument("--debug", action="store_true", help="also link the debug build with its window and API")
     parser.add_argument("--mod", type=Path, action="append", default=[], help="a mod folder whose port code goes into the binaries")
-    parser.add_argument("--sdl", type=Path, default=OUT / "sdk", help="local SDL3 installation prefix")
+    parser.add_argument("--sdk", type=Path, default=OUT / "sdk", help="the prefix tools/port_sdk.py installed SDL3 and FFmpeg in")
     parser.add_argument("--ios", choices=sorted(IOS), help="build DarkChronicle.app for the iOS simulator or an iPhone")
     parser.add_argument("--bundle-id", default="dc2toolkit.darkchronicle", help="the iOS app's bundle identifier")
-    parser.add_argument("--team", help="the Apple development team that signs the iPhone app, as Xcode lists it")
+    parser.add_argument("--android", action="store_true", help="build libmain.so for arm64 Android")
+    parser.add_argument("--team", help="the Apple development team that signs the iPhone app, as Xcode lists it; without it the app is unsigned")
     parser.add_argument("arguments", nargs="*", help="arguments for the port, with --run")
     options = parser.parse_args()
-    if options.ios == "device" and not options.team:
-        parser.error("--ios device needs --team: the team ID from Xcode's Signing & Capabilities")
     if options.ios:
         OUT = ROOT / "build" / "port" / f"ios-{options.ios}"
         OBJ = OUT / "obj"
@@ -572,13 +588,23 @@ def main():
         DEBUG_BINARY = OUT / "darkchronicle-debug"
         LINKER = subprocess.check_output(["xcrun", "--find", "clang++"], text=True).strip()
         cflags, libraries = ios_flags(options.ios)
+        PLATFORM_SOURCES.extend(sorted((PORT / "src").glob("*.m")))
+        FLAGS.append("-DPORT_MOVIES")
+    elif options.android:
+        OUT = ROOT / "build" / "port" / "android"
+        OBJ = OUT / "obj"
+        BINARY = OUT / "libmain.so"
+        cflags, libraries = android_flags()
+        PLATFORM_SOURCES.extend(sorted((PORT / "android").glob("*.c")))
         FLAGS.append("-DPORT_MOVIES")
     else:
+        if DARWIN:
+            TARGET.append(f"-mmacosx-version-min={MACOS_MINIMUM}")
         if options.movies:
-            movie_cflags, movie_libraries = movie_flags(OUT / "movie-sdk")
-            FLAGS.extend(["-DPORT_MOVIES", *movie_cflags])
-            LINK_FLAGS.extend(movie_libraries)
-        cflags, libraries = graphics_flags(options.sdl.resolve())
+            FLAGS.append("-DPORT_MOVIES")
+        cflags, libraries = sdk_flags(options.sdk.resolve(), options.movies)
+        if (options.sdk / "lib").is_dir():
+            copy_libraries(options.sdk.resolve())
     SDL_CFLAGS.extend(cflags)
     FLAGS.extend(["-DPORT_GRAPHICS", *cflags])
     LINK_FLAGS.extend(libraries)
@@ -615,7 +641,7 @@ def main():
     if options.ios:
         app = bundle(options.ios, DEBUG_BINARY if options.debug else BINARY, options.bundle_id)
         print(f"bundled {app.relative_to(ROOT)}")
-        if options.ios == "device":
+        if options.ios == "device" and options.team:
             print(f"signed for team {options.team}; the profile expires {sign_for_device(app, options.team, options.bundle_id)}")
         return
     if options.run:

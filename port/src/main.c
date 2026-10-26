@@ -23,6 +23,10 @@
 #include <SDL3/SDL_main.h>
 #include <unistd.h>
 #include "ios_files.h"
+#elif defined(__ANDROID__)
+#include <SDL3/SDL_main.h>
+#include <unistd.h>
+#include "android_files.h"
 #endif
 
 extern int port_game_main(void);
@@ -34,10 +38,21 @@ static void enter_documents(void) {
     if (chdir(port_ios_documents())) fprintf(stderr, "cannot enter %s\n", port_ios_documents());
 }
 
+static void find_saves(void) { port_ios_saves(); }
+static int touch_default(void) { return TOUCH_SMART; }
+#elif defined(__ANDROID__)
+static void enter_documents(void) {
+    if (chdir(port_android_documents())) fprintf(stderr, "cannot enter %s\n", port_android_documents());
+    if (!freopen("log.txt", "w", stderr)) return;
+    setvbuf(stderr, NULL, _IONBF, 0);
+    dup2(fileno(stderr), fileno(stdout));
+}
+
+static void find_saves(void) { port_android_saves(); }
 static int touch_default(void) { return TOUCH_SMART; }
 #else
 static void enter_documents(void) {}
-static void port_ios_saves(void) {}
+static void find_saves(void) {}
 static int touch_default(void) { return TOUCH_OFF; }
 #endif
 
@@ -154,7 +169,7 @@ int main(int argc, char **argv) {
     port_touch_set_states(setting_number("input.states", 1));
     if (!port_cdvd_init(disc) || !port_executable_check() || !port_split_data_init()) return 1;
     if (!port_present_init(1)) return 1;
-    port_ios_saves();
+    find_saves();
     atexit(port_present_close);
     if (!audio_init(!mute)) return 1;
     atexit(audio_shutdown);

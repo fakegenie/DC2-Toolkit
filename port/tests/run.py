@@ -18,11 +18,17 @@ def main():
     parser.add_argument("--iso", type=pathlib.Path, help="also decode the retail logo and tutorial movies")
     options = parser.parse_args()
     root = pathlib.Path(__file__).resolve().parents[2]
+    spec = importlib.util.spec_from_file_location("port_build", root / "tools/port.py")
+    port = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(port)
+    sdk = root / "build/port/sdk"
+    sdk_cflags, sdk_libraries = port.sdk_flags(sdk, bool(options.iso))
+    sdk_libraries.append(f"-Wl,-rpath,{sdk / 'lib'}")
     include = ["-Iport/include", "-Iengine/ps2/include", "-Iengine/ps2/include/sce"]
     temporary = root / "build" / "port" / "tests"
     headers = temporary / "include"
     c_include = ["-Iport/include", "-I" + str(headers), "-I" + str(headers / "sce")]
-    c_flags = ["clang", "-std=c11", "-pthread", "-Wall", "-Wextra", "-Werror", *(["-Wno-deprecated-declarations"] if DARWIN else []), *c_include]
+    c_flags = ["clang", "-std=c11", "-pthread", "-Wall", "-Wextra", "-Werror", *(["-Wno-deprecated-declarations"] if DARWIN else []), *c_include, *sdk_cflags]
     cpp_flags = ["clang++", "-std=c++26", "-pthread", "-O2", "-DPORT", "-DPAL", "-fms-extensions", "-w",
                  "-fno-strict-aliasing", "-fwrapv", "-ffp-contract=off", "-fno-strict-return",
                  "-ftrivial-auto-var-init=zero",
@@ -93,7 +99,7 @@ def main():
     for name, command in cases:
         binary = pathlib.Path(temporary) / name
         try:
-            subprocess.run([*command, "-o", str(binary)], cwd=root, check=True)
+            subprocess.run([*command, *sdk_libraries, "-o", str(binary)], cwd=root, check=True)
             subprocess.run([str(binary)], cwd=root, check=True, timeout=15)
             print(f"{name}: passed", flush=True)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
@@ -111,17 +117,9 @@ def main():
         raise RuntimeError("optimized matrix, clipping and collision results differ from the O0 build")
     print("math_bits: O0/O2 outputs match", flush=True)
     movie_test = pathlib.Path(temporary) / "movie_decode"
-    movie_flags = []
-    movie_libraries = []
-    if options.iso:
-        spec = importlib.util.spec_from_file_location("port_build", root / "tools/port.py")
-        port = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(port)
-        movie_cflags, movie_libraries = port.movie_flags(root / "build/port/movie-sdk")
-        movie_flags = ["-DPORT_MOVIES", *movie_cflags]
-    subprocess.run([*c_flags, "-Wno-unused-parameter", *movie_flags,
+    subprocess.run([*c_flags, "-Wno-unused-parameter", *(["-DPORT_MOVIES"] if options.iso else []),
                     "port/tests/movie_decode.c", "port/src/movie_decode.c", "port/src/cdvd.c", "port/src/overrides.c", "port/src/mods.c", "port/src/hooks.c",
-                    *movie_libraries, "-o", str(movie_test)], cwd=root, check=True)
+                    *sdk_libraries, "-o", str(movie_test)], cwd=root, check=True)
     subprocess.run([str(movie_test)], cwd=root, check=True, timeout=15)
     if options.iso:
         for name in ["L5LOGO.PSS", "TUTO/VTUTO6.PSS"]:

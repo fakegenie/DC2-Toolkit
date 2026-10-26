@@ -9,6 +9,7 @@ extern "C" {
 
 void port_overrides_scan(void);
 int port_overrides_count(void);
+const char *port_data_folder(void);
 const char *port_overrides_folder(void);
 const char *port_overrides_path(int index);
 int port_overrides_find(const char *path);

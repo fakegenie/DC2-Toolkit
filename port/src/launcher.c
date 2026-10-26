@@ -15,11 +15,24 @@
 
 #if TARGET_OS_IPHONE
 #include "ios_files.h"
-enum { DESKTOP = 0 };
+enum { DESKTOP = 0, SAVES_ITEM = 1 };
 #define WINDOW_FLAGS (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY)
+#define MODS_HINT_TOP "Put built mods (.dc2pak files) in the mods folder:"
+#define MODS_HINT_BOTTOM "Files, On My iPhone, Dark Chronicle, mods."
+#define MODS_ACTION "Open mods folder"
+#elif defined(__ANDROID__)
+#include "android_files.h"
+enum { DESKTOP = 0, SAVES_ITEM = 0 };
+#define WINDOW_FLAGS (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY)
+#define MODS_HINT_TOP "Add built mods (.dc2pak files) from your files,"
+#define MODS_HINT_BOTTOM "or copy them to Android/data/.../files/mods."
+#define MODS_ACTION "Add a mod"
 #else
-enum { DESKTOP = 1 };
+enum { DESKTOP = 1, SAVES_ITEM = 0 };
 #define WINDOW_FLAGS (SDL_WINDOW_BORDERLESS | SDL_WINDOW_TRANSPARENT | SDL_WINDOW_HIGH_PIXEL_DENSITY)
+#define MODS_HINT_TOP "Built mods (.dc2pak files) go in the mods folder"
+#define MODS_HINT_BOTTOM "next to the game. Drop one here to add it."
+#define MODS_ACTION "Open mods folder"
 #endif
 
 enum { CANVAS_WIDTH = 960, CANVAS_HEIGHT = 600, HERO_WIDTH = 520, PANEL_LEFT = 520, PANEL_WIDTH = 440, PAD = 48 };
@@ -62,7 +75,7 @@ typedef struct {
     int inverted;
 } ShapeKind;
 
-#if TARGET_OS_IPHONE
+#if TARGET_OS_IPHONE || defined(__ANDROID__)
 static Option options[] = {
     {"DISPLAY", "Aspect ratio", "render.aspect", 5, {"4:3", "16:10", "16:9", "21:9", "Fill screen"},
      {"4:3", "16:10", "16:9", "21:9", "fill"}, 0, 0, 0, 1},
@@ -154,6 +167,7 @@ static int playing;
 static float leaving_at = -1;
 static int disc_state;
 static char disc_path[PATH_SIZE];
+static char disc_name[PATH_SIZE];
 static char settings_path[PATH_SIZE];
 static char picked_path[PATH_SIZE];
 static SDL_AtomicInt picked;
@@ -214,6 +228,16 @@ static const char *base_name(const char *path) {
     return slash ? slash + 1 : path;
 }
 
+static void file_name(const char *path, char *name, size_t size) {
+#ifdef __ANDROID__
+    if (!strncmp(path, "content://", 10)) {
+        port_android_name(path, name, size);
+        return;
+    }
+#endif
+    snprintf(name, size, "%s", base_name(path));
+}
+
 static void read_options(void) {
     shown_count = 0;
     for (int index = 0; index < (int)SDL_arraysize(options); index++) {
@@ -256,6 +280,7 @@ static void save_options(void) {
 static void check_disc(const char *path) {
     struct sceCdlFILE boot;
     snprintf(disc_path, sizeof disc_path, "%s", path);
+    file_name(disc_path, disc_name, sizeof disc_name);
     disc_state = DISC_NONE;
     if (!*disc_path) return;
     disc_state = port_cdvd_init(disc_path) && port_cdvd_find(PORT_EXECUTABLE_PATH, &boot) ? DISC_GOOD : DISC_WRONG;
@@ -456,7 +481,7 @@ static const char *menu_name(int item) {
     if (item == MENU_MODS) return "Mods";
     if (item == MENU_SETTINGS) return "Settings";
     if (item == MENU_DISC) return "Disc";
-    return DESKTOP ? "Quit" : "Saves";
+    return SAVES_ITEM ? "Saves" : "Quit";
 }
 
 static SDL_FRect menu_box(int item) {
@@ -531,9 +556,9 @@ static void draw_main(float now) {
     char mods_value[32];
     snprintf(mods_value, sizeof mods_value, on ? "%d on" : "None", on);
     draw_value(MENU_MODS, mods_value, ink, alpha, shift);
-    draw_value(MENU_DISC, disc_state == DISC_NONE ? "None" : base_name(disc_path), disc_state == DISC_WRONG ? bad : ink,
+    draw_value(MENU_DISC, disc_state == DISC_NONE ? "None" : disc_name, disc_state == DISC_WRONG ? bad : ink,
                alpha, shift);
-    if (!DESKTOP) draw_value(MENU_LAST, saves_name, ink, alpha, shift);
+    if (SAVES_ITEM) draw_value(MENU_LAST, saves_name, ink, alpha, shift);
 }
 
 static void draw_switch(float mix, float right, float middle, float alpha, float focus) {
@@ -591,7 +616,7 @@ static void draw_mod_row(int row, float alpha, float shift) {
     float middle = box.y + box.h / 2, x = PANEL_LEFT + PAD + shift, right = control_right() + shift;
     float focus = mod_focus[row];
     if (row == mod_count) {
-        text_middle(STYLE_BODY, "Open mods folder", x, middle, faded(accent, (0.75f + 0.25f * focus) * alpha));
+        text_middle(STYLE_BODY, MODS_ACTION, x, middle, faded(accent, (0.75f + 0.25f * focus) * alpha));
         return;
     }
     char title[LINE_SIZE], detail[LINE_SIZE], line[LINE_SIZE];
@@ -616,10 +641,8 @@ static void draw_mods(void) {
     for (int row = mod_first; row <= mod_count && row < mod_first + MOD_ROWS; row++) draw_mod_row(row, alpha, shift);
     if (mod_count) return;
     float x = PANEL_LEFT + PAD + shift, top = MOD_TOP + MOD_HEIGHT + 6;
-    text_top(STYLE_SMALL, DESKTOP ? "Built mods (.dc2pak files) go in the mods folder" : "Put built mods (.dc2pak files) in the mods folder:",
-             x, top, faded(ink, 0.5f * alpha));
-    text_top(STYLE_SMALL, DESKTOP ? "next to the game. Drop one here to add it." : "Files, On My iPhone, Dark Chronicle, mods.", x,
-             top + 18, faded(ink, 0.5f * alpha));
+    text_top(STYLE_SMALL, MODS_HINT_TOP, x, top, faded(ink, 0.5f * alpha));
+    text_top(STYLE_SMALL, MODS_HINT_BOTTOM, x, top + 18, faded(ink, 0.5f * alpha));
 }
 
 static int at_defaults(void) {
@@ -776,11 +799,15 @@ static void picked_file(void *data, const char *const *files, int filter) {
     SDL_SetAtomicInt(&picked, 1);
 }
 
-static void choose_disc(void) {
-    static const SDL_DialogFileFilter filters[] = {{"Disc images", "iso;bin;img"}};
+static void choose_file(const SDL_DialogFileFilter *filter, const char *start) {
     if (choosing || SDL_GetWindowFlags(window) & SDL_WINDOW_HIDDEN) return;
     choosing = 1;
-    SDL_ShowOpenFileDialog(picked_file, NULL, window, filters, 1, disc_path[0] ? disc_path : NULL, false);
+    SDL_ShowOpenFileDialog(picked_file, NULL, window, filter, 1, start, false);
+}
+
+static void choose_disc(void) {
+    static const SDL_DialogFileFilter filter = {"Disc images", "iso;bin;img"};
+    choose_file(&filter, disc_path[0] ? disc_path : NULL);
 }
 #endif
 
@@ -811,12 +838,19 @@ static void select_mod(int row) {
     if (mod_selected >= mod_first + MOD_ROWS) mod_first = mod_selected - MOD_ROWS + 1;
 }
 
+#ifdef __ANDROID__
+static void open_mods_folder(void) {
+    static const SDL_DialogFileFilter filter = {"Mods", "dc2pak"};
+    choose_file(&filter, NULL);
+}
+#else
 static void open_mods_folder(void) {
     char url[PATH_SIZE + 16];
     SDL_CreateDirectory(port_paks_folder());
     snprintf(url, sizeof url, "%s%s", DESKTOP ? "file://" : "shareddocuments://", port_paks_folder());
     SDL_OpenURL(url);
 }
+#endif
 
 static void toggle_mod(int row) {
     char why[LINE_SIZE];
@@ -837,8 +871,8 @@ static void activate_main(int item, float now) {
     if (item == MENU_MODS) open_mods();
     if (item == MENU_SETTINGS) open_settings();
     if (item == MENU_DISC) choose_disc();
-    if (item == MENU_LAST && DESKTOP) leave(0, now);
-    if (item == MENU_LAST && !DESKTOP) choose_saves();
+    if (item == MENU_LAST && !SAVES_ITEM) leave(0, now);
+    if (item == MENU_LAST && SAVES_ITEM) choose_saves();
 }
 
 static void press(int key, float now) {
@@ -873,7 +907,7 @@ static int key_of(SDL_Keycode code) {
     if (code == SDLK_LEFT || code == SDLK_A) return KEY_LEFT;
     if (code == SDLK_RIGHT || code == SDLK_D) return KEY_RIGHT;
     if (code == SDLK_RETURN || code == SDLK_KP_ENTER || code == SDLK_SPACE) return KEY_ACCEPT;
-    if (code == SDLK_ESCAPE || code == SDLK_BACKSPACE) return KEY_BACK;
+    if (code == SDLK_ESCAPE || code == SDLK_BACKSPACE || code == SDLK_AC_BACK) return KEY_BACK;
     if (code == SDLK_P) return KEY_PLAY;
     return KEY_NONE;
 }
@@ -966,14 +1000,14 @@ static void read_mods(void) {
 }
 
 static void dropped(const char *path) {
-    if (!ends_with(path, ".dc2pak")) {
+    char name[PATH_SIZE], target[PATH_SIZE * 2];
+    file_name(path, name, sizeof name);
+    if (!ends_with(name, ".dc2pak")) {
         check_disc(path);
         return;
     }
-    char target[PATH_SIZE];
-    const char *slash = strrchr(path, '/');
     SDL_CreateDirectory(port_paks_folder());
-    snprintf(target, sizeof target, "%s/%s", port_paks_folder(), slash ? slash + 1 : path);
+    snprintf(target, sizeof target, "%s/%s", port_paks_folder(), name);
     int was[MOD_LIMIT];
     char ids[MOD_LIMIT][128];
     int count = mod_count;
@@ -1062,6 +1096,10 @@ static void make_textures(void) {
     for (int style = 0; style < STYLE_COUNT; style++)
         if (launcher_font_bake(styles[style].face, styles[style].size * pixel_scale, &fonts[style]))
             font_textures[style] = texture_of(&fonts[style].atlas);
+    if (!DESKTOP)
+        canvas = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET,
+                                   (int)ceilf(CANVAS_WIDTH * pixel_scale), (int)ceilf(CANVAS_HEIGHT * pixel_scale));
+    if (canvas) SDL_SetTextureScaleMode(canvas, SDL_SCALEMODE_LINEAR);
 }
 
 static void forget(SDL_Texture **texture) {
@@ -1096,14 +1134,10 @@ static int open_window(int hidden) {
     arrow_cursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_DEFAULT);
     hand_cursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_POINTER);
     make_textures();
-    if (!DESKTOP)
-        canvas = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET,
-                                   (int)ceilf(CANVAS_WIDTH * pixel_scale), (int)ceilf(CANVAS_HEIGHT * pixel_scale));
-    if (canvas) SDL_SetTextureScaleMode(canvas, SDL_SCALEMODE_LINEAR);
     return 1;
 }
 
-static void close_window(void) {
+static void forget_textures(void) {
     forget(&canvas);
     forget(&backdrop);
     forget(&glow);
@@ -1111,6 +1145,15 @@ static void close_window(void) {
     forget(&stroke_bar);
     for (int shape = 0; shape < SHAPE_COUNT; shape++) forget(&shape_textures[shape]);
     for (int style = 0; style < STYLE_COUNT; style++) forget(&font_textures[style]);
+}
+
+static void remake_textures(void) {
+    forget_textures();
+    make_textures();
+}
+
+static void close_window(void) {
+    forget_textures();
     SDL_DestroyCursor(arrow_cursor);
     SDL_DestroyCursor(hand_cursor);
     SDL_DestroyRenderer(renderer);
@@ -1176,11 +1219,14 @@ int port_launcher(void) {
         float now = (ticks - start) / 1000.0f, step = (ticks - previous) / 1000.0f;
         previous = ticks;
         SDL_Event event;
-        while (SDL_PollEvent(&event)) handle(&event, now);
+        while (SDL_PollEvent(&event)) {
+            if (event.type == SDL_EVENT_RENDER_DEVICE_RESET) remake_textures();
+            handle(&event, now);
+        }
         if (SDL_GetAtomicInt(&picked)) {
             SDL_SetAtomicInt(&picked, 0);
             choosing = 0;
-            if (picked_path[0]) check_disc(picked_path);
+            if (picked_path[0]) dropped(picked_path);
         }
         animate(step);
         draw(now);

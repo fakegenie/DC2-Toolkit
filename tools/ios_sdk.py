@@ -121,7 +121,7 @@ def ffmpeg_configure(name, source, build, log, asm):
     sdk = target["sdk"]
     flags = f"-arch arm64 -isysroot {capture(['xcrun', '-sdk', sdk, '--show-sdk-path'])} {target['min_flag']}"
     command = [
-        str(source / "configure"), f"--prefix={PREFIX / name}", f"--cc=xcrun -sdk {sdk} clang",
+        str(source / "configure"), "--prefix=/", f"--cc=xcrun -sdk {sdk} clang",
         f"--extra-cflags={flags}", f"--extra-ldflags={flags}", *FFMPEG_CONFIGURE,
     ]
     if not asm:
@@ -143,7 +143,7 @@ def build_ffmpeg(name, source):
         build.mkdir(parents=True)
         seconds = ffmpeg_configure(name, source, build, log, False)
         seconds += run(["make", f"-j{os.cpu_count()}"], cwd=build, log=log)
-    seconds += run(["make", "install"], cwd=build, log=log)
+    seconds += run(["make", "install", f"DESTDIR={PREFIX / name}"], cwd=build, log=log)
     licenses = PREFIX / name / "share" / "licenses" / "ffmpeg"
     licenses.mkdir(parents=True, exist_ok=True)
     for file in ["COPYING.LGPLv2.1", "LICENSE.md"]:

@@ -1,4 +1,6 @@
-# A release for every tag v*: dc2tk for Windows, macOS and Linux, and the Blender add-on.
+# A release for every tag v*: dc2tk for Windows, macOS and Linux, the Blender add-on, and the native port of Dark
+# Chronicle for macOS, Linux, Android (an arm64 APK) and, as an unsigned .ipa for sideloading, iPhone and iPad. Run it by
+# hand (workflow_dispatch) to build everything without releasing it.
 #
 # Each dc2tk zip holds a folder with the executable and the data it reads beside it (sdk/,
 # definitions/ with its native tables: dc2tk looks for them in the nearest folder above itself that has
@@ -6,7 +8,9 @@
 # code is packed) with tools/engine-patches/, the README, the LICENCE, and THIRD-PARTY-LICENCES.md
 # with the licences of the crates built into that platform's executable
 # (tools/third_party_licences.py). The add-on's zip is a Blender extension: blender_manifest.toml
-# at its root, so Blender's Install from Disk takes it as it is, with the LICENCE beside it.
+# at its root, so Blender's Install from Disk takes it as it is, with the LICENCE beside it. The port's packages
+# (tools/port_package.py) hold Dark Chronicle.app or the Linux binary with SDL3 and FFmpeg's MPEG-2 decoder built from
+# pinned sources (tools/port_sdk.py), and no game data: players supply their own disc image.
 #
 #   git tag v1.0.0 && git push origin v1.0.0
 
@@ -15,6 +19,7 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -87,7 +92,7 @@ jobs:
           git rev-parse HEAD:engine > "$folder/engine.commit"
           mkdir -p "$folder/tools"
           cp -R tools/engine-patches "$folder/tools/"
-          cp tools/engine_mods.py tools/native_prepare.py tools/port_sdk.py tools/movie_sdk.py "$folder/tools/"
+          cp tools/engine_mods.py tools/native_prepare.py tools/port_sdk.py "$folder/tools/"
           cp -R port "$folder/"
           # the crates' licences, from the sources the build fetched
           python=python3
@@ -111,6 +116,152 @@ jobs:
           path: dc2tk-*.zip
           if-no-files-found: error
 
+  port:
+    name: Dark Chronicle (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          # for macOS 13 and later on Apple silicon
+          - platform: macos-arm64
+            os: macos-15
+          # the oldest supported Ubuntu, so the binary needs only glibc 2.35
+          - platform: linux-x64
+            os: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Homebrew's clang: Xcode's libc++ headers clash with the engine's own abs() and random()
+      - name: Install LLVM
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+
+      - name: Install clang and SDL's build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+          echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-23 main" | sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-23 lld-23 llvm-23 cmake pkg-config \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev libxfixes-dev libxtst-dev \
+            libxkbcommon-dev libwayland-dev wayland-protocols libdecor-0-dev libegl-dev libgl-dev libdrm-dev libgbm-dev \
+            libasound2-dev libpulse-dev libpipewire-0.3-dev libudev-dev libdbus-1-dev libusb-1.0-0-dev libvulkan-dev
+          echo /usr/lib/llvm-23/bin >> "$GITHUB_PATH"
+
+      - uses: actions/cache@v4
+        with:
+          path: build/port/sdk
+          key: port-sdk-${{ matrix.platform }}-${{ hashFiles('tools/port_sdk.py') }}
+
+      - name: Build SDL3 and FFmpeg
+        run: python3 -I tools/port_sdk.py
+
+      - name: Build and pack the port
+        run: python3 -I tools/port_package.py --version "$GITHUB_REF_NAME"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dark-chronicle-${{ matrix.platform }}
+          path: build/port/package/dark-chronicle-*.*
+          if-no-files-found: error
+
+  ios:
+    name: Dark Chronicle (iOS)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # the engine compiles with Homebrew's clang (Xcode's libc++ headers clash with its abs() and random()); Xcode's
+      # clang++ links, for the iOS runtime
+      - name: Install LLVM
+        run: |
+          brew install llvm
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+
+      - uses: actions/cache@v4
+        with:
+          path: build/port/ios-sdk
+          key: ios-sdk-${{ hashFiles('tools/ios_sdk.py') }}
+
+      - name: Build SDL3 and FFmpeg for iOS
+        run: python3 -I tools/ios_sdk.py
+
+      # unsigned: AltStore, Sideloadly and the like sign it with the player's own Apple ID
+      - name: Build and pack the app
+        run: python3 -I tools/port_package.py --ios --version "$GITHUB_REF_NAME"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dark-chronicle-ios
+          path: build/port/package/dark-chronicle-*.ipa
+          if-no-files-found: error
+
+  android:
+    name: Dark Chronicle (Android)
+    runs-on: ubuntu-22.04
+    env:
+      NDK_VERSION: 27.1.12297006
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # the engine compiles with clang 23 against the NDK's sysroot (the NDK's own clang has no #embed); the NDK's
+      # clang++ links libmain.so
+      - name: Install clang and the NDK
+        run: |
+          set -euo pipefail
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+          echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-23 main" | sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-23 llvm-23 cmake
+          echo /usr/lib/llvm-23/bin >> "$GITHUB_PATH"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK_VERSION" > /dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+
+      - uses: actions/cache@v4
+        with:
+          path: build/port/android-sdk
+          key: android-sdk-${{ env.NDK_VERSION }}-${{ hashFiles('tools/android_sdk.py') }}
+
+      - name: Build SDL3 and FFmpeg for Android
+        run: python3 -I tools/android_sdk.py
+
+      # signed with the public key in port/android, so every release installs over the last
+      - name: Build and pack the APK
+        run: python3 -I tools/port_package.py --android --version "$GITHUB_REF_NAME"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dark-chronicle-android
+          path: build/port/package/dark-chronicle-*.apk
+          if-no-files-found: error
+
   blender-plugin:
     name: Blender add-on
     runs-on: ubuntu-latest
@@ -131,7 +282,8 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [dc2tk, blender-plugin]
+    needs: [dc2tk, port, ios, android, blender-plugin]
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -143,7 +295,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" assets/*.zip \
+          gh release create "$GITHUB_REF_NAME" assets/*.zip assets/*.tar.gz assets/*.ipa assets/*.apk \
             --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" \
             --verify-tag \

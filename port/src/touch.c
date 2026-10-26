@@ -88,6 +88,26 @@ static char notice[96];
 #if TARGET_OS_IPHONE
 void port_ios_haptic(void);
 static void buzz(void) { port_ios_haptic(); }
+#elif defined(__ANDROID__)
+static SDL_Haptic *open_haptic(void) {
+    int count = 0;
+    SDL_HapticID *found = SDL_InitSubSystem(SDL_INIT_HAPTIC) ? SDL_GetHaptics(&count) : NULL;
+    SDL_Haptic *haptic = count ? SDL_OpenHaptic(found[0]) : NULL;
+    SDL_free(found);
+    if (haptic && !SDL_InitHapticRumble(haptic)) {
+        SDL_CloseHaptic(haptic);
+        haptic = NULL;
+    }
+    return haptic;
+}
+
+static void buzz(void) {
+    static SDL_Haptic *haptic;
+    static int opened;
+    if (!opened) haptic = open_haptic();
+    opened = 1;
+    if (haptic) SDL_PlayHapticRumble(haptic, 0.4f, 12);
+}
 #else
 static void buzz(void) {}
 #endif

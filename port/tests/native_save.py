@@ -43,12 +43,9 @@ def main():
         command[command.index("-o") + 1] = str(temporary / "test.o")
         subprocess.run(command, cwd=root, check=True)
         subprocess.run([native.OBJCOPY, f"--globalize-symbol={native.PREFIX}_ZL14ActiveSaveData", str(mainloop[0]), str(temporary / "mainloop.o")], check=True)
-        subprocess.run(["clang", "-std=c11", "-Wall", "-Wextra", "-Werror", *([] if native.DARWIN else ["-fno-pie"]), "-Iport/include", f"-I{out}/copy/ps2/include", f"-I{out}/copy/ps2/include/sce", "-c", "port/src/memory_card.c", "-o", str(temporary / "memory_card.o")], cwd=root, check=True)
-        libraries = []
-        if "-DPORT_GRAPHICS" in command:
-            _, libraries = native.graphics_flags(out / "sdk")
-        if "-DPORT_MOVIES" in command:
-            libraries += native.movie_flags(out / "movie-sdk")[1]
+        cflags, libraries = native.sdk_flags(out / "sdk", "-DPORT_MOVIES" in command)
+        libraries.append(f"-Wl,-rpath,{out / 'sdk/lib'}")
+        subprocess.run(["clang", "-std=c11", "-Wall", "-Wextra", "-Werror", *([] if native.DARWIN else ["-fno-pie"]), "-Iport/include", *cflags, f"-I{out}/copy/ps2/include", f"-I{out}/copy/ps2/include/sce", "-c", "port/src/memory_card.c", "-o", str(temporary / "memory_card.o")], cwd=root, check=True)
         binary = temporary / "native_save"
         link = [f"-Wl,-alias,_{target},_{alias}" for alias, target in native.ALIASES.items()] if native.DARWIN else \
             ["-no-pie", *(f"-Wl,--defsym={alias}={target}" for alias, target in native.ALIASES.items())]

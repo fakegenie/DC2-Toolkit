@@ -33,6 +33,10 @@ The goal of this project is to support converting from and to the original game 
 - Make a mod in `mods/`, or edit the scripts and assets in `extracted/` and package them with `dc2tk mod make dc2.iso my-mod`. See the documentation for how-tos.
 - Run `dc2tk build extracted/scripts dc2.iso -o modded.iso --mod local.my-mod` (the id `mod make` gave it) to build a new iso with your changes.
 
+## Playing on PC
+
+Each release also has a native port of the game for macOS (Apple silicon, macOS 13 or later) and Linux (x86-64): `dark-chronicle-<version>-macos-arm64.zip` holds `Dark Chronicle.app`, and `dark-chronicle-<version>-linux-x64.tar.gz` holds `darkchronicle`. It contains no game data and plays from a disc image of your own PAL copy, which you pick in its launcher, where built mods (`.dc2pak`) are turned on and off too. The app is not notarised: the first time, open it from System Settings, Privacy & Security, Open Anyway. The `README.md` in the download covers the controls and where saves and settings are kept. `dark-chronicle-<version>-ios.ipa` is the same for iPhone and iPad (iOS 17 or later): it is unsigned, so install it with a sideloading tool such as AltStore or Sideloadly, which signs it with your own Apple ID. `dark-chronicle-<version>-android-arm64.apk` is the same for 64-bit Android phones and tablets (Android 10 or later, with Vulkan): allow installing apps from your browser or file manager and open it, and later releases install over it. A Windows build is coming.
+
 ## Notes
 
 - We only support PAL at the moment
@@ -44,4 +48,4 @@ The goal of this project is to support converting from and to the original game 
 
 ## Licence
 
-dc2tk, its SDK, definitions, Blender add-on and documentation are under the [MIT licence](LICENCE). Dark Chronicle and its content (code, art, text, audio, and screenshots of it such as `docs/images/header.png`) belong to their owners and are not covered by it. A release zip also carries `THIRD-PARTY-LICENCES.md`, the licences of the libraries built into dc2tk.
+dc2tk, its SDK, definitions, Blender add-on, documentation and the port's own code (`port/`) are under the [MIT licence](LICENCE). Dark Chronicle and its content (code, art, text, audio, and screenshots of it such as `docs/images/header.png`) belong to Level-5 and Sony Interactive Entertainment and are not covered by it. The port's engine is [ChronicleTwo](https://github.com/TheMoonPeople/ChronicleTwo)'s decompilation, used with their permission and not covered by the MIT licence either ([port/package/NOTICE.md](port/package/NOTICE.md)). Every release zip carries `THIRD-PARTY-LICENCES.md`: for dc2tk the licences of the crates built into it, and for the port those of SDL3 (zlib), FFmpeg's MPEG-2 decoder (LGPL 2.1: replaceable shared libraries on macOS and Linux, linked into the iOS and Android apps, whose complete source here lets you relink them), the Manrope font (OFL), stb_truetype and Kazarov's libvu0 (MIT).
