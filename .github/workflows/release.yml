@@ -1,8 +1,12 @@
-# A release for every tag v*: dc2tk for Windows, macOS and Linux, the Blender add-on, and the native port of Dark
-# Chronicle for macOS, Linux, Windows, Android (an arm64 APK) and, as an unsigned .ipa for sideloading, iPhone and iPad. Run it by
-# hand (workflow_dispatch) to build everything without releasing it.
+# A release for every tag v*: for Windows, macOS and Linux one zip each with dc2tk and the native port of DC2 in it,
+# the port for Android (an arm64 APK) and, as an unsigned .ipa for sideloading, iPhone and iPad, and the Blender
+# add-on. Run it by hand (workflow_dispatch) to build everything without releasing it.
 #
-# Each dc2tk zip holds a folder with the executable and the data it reads beside it (sdk/,
+# The dc2tk and port jobs build their parts, and the bundle job puts them together as
+# dc2tk-VERSION-PLATFORM.zip: dc2tk's folder with the port's package in DC2/ inside it. The macOS one holds the
+# universal dc2tk and DC2.app for Apple silicon. Only the jobs' release-* artifacts go on the release.
+#
+# Each dc2tk folder holds the executable and the data it reads beside it (sdk/,
 # definitions/ with its native tables: dc2tk looks for them in the nearest folder above itself that has
 # definitions/), engine.commit (the ChronicleTwo commit `dc2tk engine fetch` checks out; no engine
 # code is packed) with tools/engine-patches/, the README, the LICENCE, and THIRD-PARTY-LICENCES.md
@@ -187,6 +191,54 @@ jobs:
           path: build/port/package/dc2-*.*
           if-no-files-found: error
 
+  # dc2tk's folder with the port's package as DC2/ in it, zipped with Info-ZIP, which keeps the executables' mode and
+  # (with -y) any symlink in DC2.app
+  bundle:
+    name: dc2tk and DC2 (${{ matrix.platform }})
+    needs: [dc2tk, port]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: windows-x64
+            dc2tk: windows-x64
+            port: windows-x64
+          - platform: linux-x64
+            dc2tk: linux-x64
+            port: linux-x64
+          - platform: macos
+            dc2tk: macos-universal
+            port: macos-arm64
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dc2tk-${{ matrix.dc2tk }}
+          path: parts
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dc2-${{ matrix.port }}
+          path: parts
+
+      - name: Bundle
+        run: |
+          set -euo pipefail
+          folder="dc2tk-$GITHUB_REF_NAME-${{ matrix.platform }}"
+          port="dc2-$GITHUB_REF_NAME-${{ matrix.port }}"
+          unzip -q "parts/dc2tk-$GITHUB_REF_NAME-${{ matrix.dc2tk }}.zip" -d dc2tk
+          mv "dc2tk/dc2tk-$GITHUB_REF_NAME-${{ matrix.dc2tk }}" "$folder"
+          mkdir game
+          if [ -f "parts/$port.tar.gz" ]; then tar -xzf "parts/$port.tar.gz" -C game; else unzip -q "parts/$port.zip" -d game; fi
+          mv "game/$port" "$folder/DC2"
+          zip -qry "$folder.zip" "$folder"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.platform }}
+          path: dc2tk-*.zip
+          if-no-files-found: error
+
   ios:
     name: DC2 (iOS)
     runs-on: macos-15
@@ -220,7 +272,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: dc2-ios
+          name: release-ios
           path: build/port/package/dc2-*.ipa
           if-no-files-found: error
 
@@ -271,7 +323,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: dc2-android
+          name: release-android
           path: build/port/package/dc2-*.apk
           if-no-files-found: error
 
@@ -290,17 +342,19 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: blender-plugin
+          name: release-blender
           path: dc2tk-*-blender.zip
           if-no-files-found: error
 
   release:
-    needs: [dc2tk, port, ios, android, blender-plugin]
+    needs: [bundle, ios, android, blender-plugin]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
+      # the bundles, not the dc2tk and port parts they were made from
       - uses: actions/download-artifact@v4
         with:
+          pattern: release-*
           path: assets
           merge-multiple: true
 
@@ -308,7 +362,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" assets/*.zip assets/*.tar.gz assets/*.ipa assets/*.apk \
+          gh release create "$GITHUB_REF_NAME" assets/*.zip assets/*.ipa assets/*.apk \
             --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" \
             --verify-tag \

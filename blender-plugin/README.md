@@ -11,8 +11,8 @@ and the formats behind them in [maps](../docs/internals/maps.md); the add-on fol
 Blender 4.2 or newer (tested with 4.2.23, 5.1.2 and 5.2.2); written to run on 3.6 too. Plain
 Python, nothing to install besides the add-on.
 
-Besides the sidebar it is in Blender's own menus: Add (Shift+A) > Dark
-Chronicle adds every kind of point, a door to another map, a template of any
+Besides the sidebar it is in Blender's own menus: Add (Shift+A) > DC2
+adds every kind of point, a door to another map, a template of any
 map, a placement copy, a new model and a player to measure by; right-clicking
 an object gives Drop to Ground, Copy Game Coordinates and the template
 tools; Shift+Alt+D opens a pie of the common ones (door, light, spawn, chest,
