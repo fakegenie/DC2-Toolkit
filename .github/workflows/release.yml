@@ -54,7 +54,7 @@ jobs:
     steps:
       # the files packed keep the repository's LF line endings on Windows too
       - run: git config --global core.autocrlf false
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         shell: bash
@@ -114,7 +114,7 @@ jobs:
           "$folder/dc2tk" api-docs --out "$RUNNER_TEMP/api" > /dev/null
           cmp "$RUNNER_TEMP/api/event.md" docs/scripting/api/event.md
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dc2tk-${{ matrix.platform }}
           path: dc2tk-*.zip
@@ -142,11 +142,11 @@ jobs:
     steps:
       # the engine copies keep the repository's LF line endings on Windows too
       - run: git config --global core.autocrlf false
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -170,7 +170,7 @@ jobs:
             libasound2-dev libpulse-dev libpipewire-0.3-dev libudev-dev libdbus-1-dev libusb-1.0-0-dev libvulkan-dev
           echo /usr/lib/llvm-23/bin >> "$GITHUB_PATH"
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             build/port/sdk
@@ -185,7 +185,7 @@ jobs:
       - name: Build and pack the port
         run: python -I tools/port_package.py --version "$GITHUB_REF_NAME"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dc2-${{ matrix.platform }}
           path: build/port/package/dc2-*.*
@@ -211,12 +211,12 @@ jobs:
             dc2tk: macos-universal
             port: macos-arm64
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dc2tk-${{ matrix.dc2tk }}
           path: parts
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dc2-${{ matrix.port }}
           path: parts
@@ -233,7 +233,7 @@ jobs:
           mv "game/$port" "$folder/DC2"
           zip -qry "$folder.zip" "$folder"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.platform }}
           path: dc2tk-*.zip
@@ -243,11 +243,11 @@ jobs:
     name: DC2 (iOS)
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -258,7 +258,7 @@ jobs:
           brew install llvm
           echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: build/port/ios-sdk
           key: ios-sdk-${{ hashFiles('tools/ios_sdk.py') }}
@@ -270,7 +270,7 @@ jobs:
       - name: Build and pack the app
         run: python3 -I tools/port_package.py --ios --version "$GITHUB_REF_NAME"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-ios
           path: build/port/package/dc2-*.ipa
@@ -282,15 +282,15 @@ jobs:
     env:
       NDK_VERSION: 27.1.12297006
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
@@ -309,7 +309,7 @@ jobs:
           (yes || true) | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK_VERSION" > /dev/null
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: build/port/android-sdk
           key: android-sdk-${{ env.NDK_VERSION }}-${{ hashFiles('tools/android_sdk.py') }}
@@ -321,7 +321,7 @@ jobs:
       - name: Build and pack the APK
         run: python3 -I tools/port_package.py --android --version "$GITHUB_REF_NAME"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-android
           path: build/port/package/dc2-*.apk
@@ -331,7 +331,7 @@ jobs:
     name: Blender add-on
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Package
         run: |
@@ -340,7 +340,7 @@ jobs:
           zip -qr "$GITHUB_WORKSPACE/dc2tk-$GITHUB_REF_NAME-blender.zip" . -x '*__pycache__*'
           zip -qj "$GITHUB_WORKSPACE/dc2tk-$GITHUB_REF_NAME-blender.zip" "$GITHUB_WORKSPACE/LICENCE"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-blender
           path: dc2tk-*-blender.zip
@@ -352,7 +352,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # the bundles, not the dc2tk and port parts they were made from
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: release-*
           path: assets
