@@ -1148,10 +1148,19 @@ static void record_blit(int source, int x, int y, int width, int height, int des
     step->blit.filter = SDL_GPU_FILTER_NEAREST;
 }
 
-static void copy_texture(SDL_GPUTextureLocation from, SDL_GPUTextureLocation to, Uint32 width, Uint32 height) {
-    SDL_GPUCopyPass *pass = SDL_BeginGPUCopyPass(command_buffer());
+static SDL_GPUTextureLocation whole(SDL_GPUTexture *texture) {
+    return (SDL_GPUTextureLocation){texture, 0, 0, 0, 0, 0};
+}
+
+static void copy_region(SDL_GPUCommandBuffer *buffer, SDL_GPUTextureLocation from, SDL_GPUTextureLocation to,
+                        Uint32 width, Uint32 height) {
+    SDL_GPUCopyPass *pass = SDL_BeginGPUCopyPass(buffer);
     SDL_CopyGPUTextureToTexture(pass, &from, &to, width, height, 1, false);
     SDL_EndGPUCopyPass(pass);
+}
+
+static void copy_texture(SDL_GPUTextureLocation from, SDL_GPUTextureLocation to, Uint32 width, Uint32 height) {
+    copy_region(command_buffer(), from, to, width, height);
     if (!smoothing) return;
     Step *step = new_step(&recordings[recording_slot]);
     if (!step) return;
@@ -1186,13 +1195,17 @@ static void upload_models(SDL_GPUCopyPass *copy) {
     bone_flushed = bone_count;
 }
 
-static void restart_buffers(void) {
-    vertex_cycle = 1;
-    vertex_used = vertex_flushed = 0;
+static void restart_models(void) {
     model_cycle = 1;
     model_count = model_flushed = 0;
     bone_count = 1;
     bone_flushed = 0;
+}
+
+static void restart_buffers(void) {
+    vertex_cycle = 1;
+    vertex_used = vertex_flushed = 0;
+    restart_models();
 }
 
 static void encode_pass(SDL_GPUCommandBuffer *buffer, const Command *list, int count) {
@@ -1239,15 +1252,14 @@ static void queue(const Command *command, int step) {
     textures[command->texture].sampled += step;
 }
 
-static const Command *pass_order(int count) {
-    int early = 0;
-    for (int i = 0; i < count; ++i)
-        if (pending[i].target != drawing) ordered[early++] = pending[i];
-    if (!early) return pending;
-    int at = early;
-    for (int i = 0; i < count; ++i)
-        if (pending[i].target == drawing) ordered[at++] = pending[i];
-    return ordered;
+static int split_side(void) {
+    int side = 0, kept = 0;
+    for (int i = 0; i < pending_count; ++i) {
+        if (pending[i].target != drawing) ordered[side++] = pending[i];
+        else pending[kept++] = pending[i];
+    }
+    pending_count = kept;
+    return side;
 }
 
 static SDL_GPUCommandBuffer *upload_pending(void) {
@@ -1284,21 +1296,19 @@ static void flush(void) {
     }
     held_valid = 0;
     SDL_GPUCommandBuffer *buffer = upload_pending();
-    encode_passes(buffer, pass_order(pending_count), pending_count);
+    int side = split_side();
+    encode_passes(buffer, ordered, side);
+    encode_passes(buffer, pending, pending_count);
+    for (int i = 0; i < side; ++i) queue(&ordered[i], -1);
     for (int i = 0; i < pending_count; ++i) queue(&pending[i], -1);
     pending_count = 0;
     release_retired_meshes();
 }
 
 static void flush_side(void) {
-    int side = 0, kept = 0;
-    for (int i = 0; i < pending_count; ++i) {
-        if (pending[i].target != drawing) ordered[side++] = pending[i];
-        else pending[kept++] = pending[i];
-    }
+    int side = split_side();
     if (!side) return;
     for (int i = 0; i < side; ++i) queue(&ordered[i], -1);
-    pending_count = kept;
     encode_passes(upload_pending(), ordered, side);
 }
 
@@ -1365,9 +1375,7 @@ static void rename_texture(int slot) {
     }
     int width = texture->width * texture->scale, height = texture->height * texture->scale;
     SDL_GPUTexture *fresh = spare_texture(width, height);
-    SDL_GPUTextureLocation from = {texture->color, 0, 0, 0, 0, 0};
-    SDL_GPUTextureLocation to = {fresh, 0, 0, 0, 0, 0};
-    copy_texture(from, to, (Uint32)width, (Uint32)height);
+    copy_texture(whole(texture->color), whole(fresh), (Uint32)width, (Uint32)height);
     retire_texture(texture->color, width, height);
     texture->color = fresh;
     port_stats.texture_renames++;
@@ -1378,9 +1386,7 @@ static SDL_GPUTexture *destination_copy(void) {
     Texture *target = &textures[bound];
     int width = target->width * target->scale, height = target->height * target->scale;
     SDL_GPUTexture *copy = spare_texture(width, height);
-    SDL_GPUTextureLocation from = {target->color, 0, 0, 0, 0, 0};
-    SDL_GPUTextureLocation to = {copy, 0, 0, 0, 0, 0};
-    copy_texture(from, to, (Uint32)width, (Uint32)height);
+    copy_texture(whole(target->color), whole(copy), (Uint32)width, (Uint32)height);
     retire_texture(copy, width, height);
     port_stats.texture_renames++;
     return copy;
@@ -1842,18 +1848,20 @@ static void record(int source, const RenderState *state, int topology, int cull,
     }
 }
 
+static int slot_like(int slot, int width, int height, int scale) {
+    if (slot && textures[slot].width == width && textures[slot].height == height && textures[slot].scale == scale)
+        return slot;
+    render_release(slot);
+    return new_texture(width, height, scale, 1);
+}
+
 static void restore(void) {
     Texture *target = &textures[bound];
     target->stale = 0;
     int width = target->width, height = target->height, scale = target->scale;
-    if (!restore_slot || textures[restore_slot].width != width || textures[restore_slot].height != height ||
-        textures[restore_slot].scale != scale) {
-        render_release(restore_slot);
-        restore_slot = new_texture(width, height, scale, 1);
-    }
-    SDL_GPUTextureLocation from = {target->color, 0, 0, 0, 0, 0};
-    SDL_GPUTextureLocation to = {textures[restore_slot].color, 0, 0, 0, 0, 0};
-    copy_texture(from, to, (Uint32)(width * scale), (Uint32)(height * scale));
+    restore_slot = slot_like(restore_slot, width, height, scale);
+    copy_texture(whole(target->color), whole(textures[restore_slot].color), (Uint32)(width * scale),
+                 (Uint32)(height * scale));
     RenderVertex a = {0, 0, 0, 0, 0}, b = {(float)width, 0, 0, 1, 0};
     RenderVertex c = {0, (float)height, 0, 0, 1}, d = {(float)width, (float)height, 0, 1, 1};
     RenderVertex quad[6] = {a, b, c, b, d, c};
@@ -2035,10 +2043,7 @@ void render_mesh(const RenderState *state, int cull, const MeshUniforms *uniform
     if (index >= render_toggles.skip_from && index < render_toggles.skip_to) return;
     if (model_count == MODEL_LIMIT || (bones && bone_count == BONE_LIMIT)) {
         flush();
-        model_cycle = 1;
-        model_count = model_flushed = 0;
-        bone_count = 1;
-        bone_flushed = 0;
+        restart_models();
     }
     draw_to_bound();
     if (!target_pending(bound) && textures[bound].stale) restore();
@@ -2087,8 +2092,6 @@ int render_capture_count(void) { return record_count; }
 int render_capture_dropped(void) { return record_dropped; }
 
 int render_capture_commands(void) { return command_serial - command_base; }
-
-int render_capture_passes(void) { return pass_serial - pass_base; }
 
 const RenderRecord *render_capture_records(void) { return records; }
 
@@ -2235,7 +2238,6 @@ static void apply_quality(void) {
     restore_slot = 0;
 }
 
-
 typedef struct {
     float position[2];
     float local[2];
@@ -2252,7 +2254,6 @@ static SDL_GPUTransferBuffer *touch_transfer;
 static SDL_GPUTexture *touch_atlas;
 static const unsigned char *touch_atlas_pixels;
 static TouchShape touch_shapes[TOUCH_SHAPE_LIMIT];
-
 
 static int prepare_touch(SDL_GPUTextureFormat format) {
     if (touch_pipeline && touch_format == format) return 1;
@@ -2469,11 +2470,7 @@ static void publish(SDL_GPUCommandBuffer *buffer, int which, SDL_GPUTexture *col
         screen->pool_height[index] = pixel_height;
         screen->pool_format[index] = format;
     }
-    SDL_GPUTextureLocation from = {color, 0, 0, 0, 0, 0};
-    SDL_GPUTextureLocation to = {screen->pool[index], 0, 0, 0, 0, 0};
-    SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(buffer);
-    SDL_CopyGPUTextureToTexture(copy, &from, &to, pixel_width, pixel_height, 1, false);
-    SDL_EndGPUCopyPass(copy);
+    copy_region(buffer, whole(color), whole(screen->pool[index]), pixel_width, pixel_height);
     if (which == SCREEN_GAME) submit_timed(buffer);
     else SDL_SubmitGPUCommandBuffer(buffer);
     SDL_LockMutex(screen_lock);
@@ -3263,9 +3260,7 @@ int render_replay(float alpha) {
             SDL_BlitGPUTexture(buffer, &step->blit);
             continue;
         }
-        SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(buffer);
-        SDL_CopyGPUTextureToTexture(copy, &step->from, &step->to, step->copy_width, step->copy_height, 1, false);
-        SDL_EndGPUCopyPass(copy);
+        copy_region(buffer, step->from, step->to, step->copy_width, step->copy_height);
     }
     if (paced) present_texture(buffer, frame->shown, frame->shown_scale, frame->shown_width, frame->shown_height);
     else submit_timed(buffer);
@@ -3291,18 +3286,9 @@ int render_refresh_rate(void) {
 static void keep_frame(int target) {
     Texture *source = &textures[target];
     kept_now ^= 1;
-    int slot = kept[kept_now];
-    if (!slot || textures[slot].width != source->width || textures[slot].height != source->height ||
-        textures[slot].scale != source->scale) {
-        render_release(slot);
-        slot = kept[kept_now] = new_texture(source->width, source->height, source->scale, 1);
-    }
-    SDL_GPUTextureLocation from = {source->color, 0, 0, 0, 0, 0};
-    SDL_GPUTextureLocation to = {textures[slot].color, 0, 0, 0, 0, 0};
-    SDL_GPUCopyPass *pass = SDL_BeginGPUCopyPass(command_buffer());
-    SDL_CopyGPUTextureToTexture(pass, &from, &to, (Uint32)(source->width * source->scale),
-                                (Uint32)(source->height * source->scale), 1, false);
-    SDL_EndGPUCopyPass(pass);
+    int slot = kept[kept_now] = slot_like(kept[kept_now], source->width, source->height, source->scale);
+    copy_region(command_buffer(), whole(source->color), whole(textures[slot].color),
+                (Uint32)(source->width * source->scale), (Uint32)(source->height * source->scale));
 }
 
 static int show_kept(void) {

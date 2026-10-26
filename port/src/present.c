@@ -97,25 +97,25 @@ static void release_game(void) {
     SDL_UnlockMutex(lock);
 }
 
-static void park_if_wanted(void) {
-    SDL_LockMutex(lock);
-    if (park_wanted) render_finish();
-    while (park_wanted) {
-        parked = 1;
+static void hold_while(const int *wanted, int *held) {
+    while (*wanted) {
+        *held = 1;
         SDL_BroadcastCondition(changed);
         SDL_WaitCondition(changed, lock);
     }
+}
+
+static void park_if_wanted(void) {
+    SDL_LockMutex(lock);
+    if (park_wanted) render_finish();
+    hold_while(&park_wanted, &parked);
     parked = 0;
     SDL_UnlockMutex(lock);
 }
 
 static void stop_if_wanted(void) {
     SDL_LockMutex(lock);
-    while (stop_wanted) {
-        stopped = 1;
-        SDL_BroadcastCondition(changed);
-        SDL_WaitCondition(changed, lock);
-    }
+    hold_while(&stop_wanted, &stopped);
     SDL_UnlockMutex(lock);
 }
 

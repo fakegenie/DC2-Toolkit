@@ -256,7 +256,6 @@ int render_capturing(void);
 int render_capture_count(void);
 int render_capture_dropped(void);
 int render_capture_commands(void);
-int render_capture_passes(void);
 const RenderRecord *render_capture_records(void);
 int render_slot_limit(void);
 int render_slot(int slot, RenderSlot *info);

@@ -368,15 +368,15 @@ static int hd_picture(const char *name, int width, int height, std::vector<u_int
 }
 
 static CachedTexture *cached(const mgCTexture *texture) {
-    std::vector<CachedTexture *> &entries = by_image[texture->image[0]];
-    for (CachedTexture *entry : entries)
-        if (entry->clut == texture->clut && entry->psm == texture->bpp && entry->width == texture->width &&
-            entry->height == texture->height)
-            return entry;
-    size_t start = ((size_t)texture->image[0] >> 4) % CACHE_LIMIT;
+    auto found = by_image.find(texture->image[0]);
+    if (found != by_image.end())
+        for (CachedTexture *entry : found->second)
+            if (entry->clut == texture->clut && entry->psm == texture->bpp && entry->width == texture->width &&
+                entry->height == texture->height)
+                return entry;
     CachedTexture *empty = NULL;
-    for (size_t step = 0; step < CACHE_LIMIT && !empty; ++step)
-        if (!cache[(start + step) % CACHE_LIMIT].render) empty = &cache[(start + step) % CACHE_LIMIT];
+    for (int i = 0; i < CACHE_LIMIT && !empty; ++i)
+        if (!cache[i].render) empty = &cache[i];
     if (!empty) {
         fputs("draw: the texture cache is full\n", stderr);
         return NULL;
@@ -395,7 +395,7 @@ static CachedTexture *cached(const mgCTexture *texture) {
     empty->render = scale > 0 ? render_texture_at_scale(texture->width, texture->height, scale)
                               : render_texture(texture->width, texture->height);
     if (scale > 0) render_upload_full(empty->render, (const uint32_t *)hd.data());
-    entries.push_back(empty);
+    by_image[texture->image[0]].push_back(empty);
     by_render[empty->render] = empty;
     port_stats.cached_textures++;
     return empty;
