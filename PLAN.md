@@ -264,9 +264,11 @@ one fits per tick on the iPhone (50 shown a second at 120 Hz), and in the swamp 
    targets encodes just them (`flush_side`). Palm Brinks 11.2 to 9.2 passes, swamp 11 to 10, all
    pictures identical. What still splits the frame is real: depth of field copies the frame into
    slot 22, its strips read slot 22, shadows draw into slot 22 against the frame's depth, and the
-   characters read the shadows. Next would be copy-on-write for MSAA targets (a fresh texture for
-   slot 22 when pending draws still read it), which would let shadows and the fire effect queue
-   beside the frame, leaving one split for depth of field.
+   characters read the shadows. Copy-on-write for MSAA targets (a fresh copy of slot 22 when pending
+   draws still read it) was tried and dropped: the shadows test against the frame's own depth
+   buffer, so they split the pass anyway; the redraw that refills a fresh MSAA texture from its
+   resolved copy is lossy at edges unless limited to targets about to be cleared; and the swamp went
+   from 10 to 12 passes. On a tile GPU a lossless MSAA copy costs about what the split it saves does.
 3. **The game on its own thread.** Done. SDL only lets the window's thread acquire a swapchain
    texture, so the game moved instead: `main` starts it on an SDL thread (`run_game`) and the main
    thread runs `port_present_run`, which pumps events, hands them to the game through a queue
@@ -283,9 +285,23 @@ one fits per tick on the iPhone (50 shown a second at 120 Hz), and in the swamp 
    `--smooth 0`: 25.0 ticks a second with the slowest frame 41 ms (it was 70-79 ms when a between
    frame blocked in `nextDrawable`), 105 shown a second; unpaced 445 ticks a second. `shown` in the
    debug API returns the picture last handed to the window.
-4. **Less per tick.** Dirty marks instead of `texture_checksum` every frame; fewer, bigger draws.
-5. **60 ticks (optional, later).** Menus already run at `mgFrameRate` 1 and movement scales by it,
-   but timers, animations and events count ticks.
+4. **Less per tick.** Done. Profiled with `sample` on the game thread during unpaced playback:
+   texture animation re-sent its textures every frame (`mgCDrawManager::ReloadTexture`), so each
+   animated texture was decoded and uploaded again and the cache was scanned for it; a texture the
+   GPU has drawn into now keeps an untouched copy on the GPU (`CachedTexture.pristine`) that is
+   copied back when the same pixels are re-sent, and the cache is found by image and render slot
+   (`by_image`, `by_render`) instead of scanning 4096 slots. Consecutive skinned draws with the same
+   bones share one bone set, and `draw_group` hands `render_mesh` whole runs of resident faces (swamp:
+   4052 mesh calls a frame to 831). Because the restore is a recorded copy, between
+   frames now replay texture animation from the same starting picture as the real frame instead of
+   animating it twice. Unpaced with 4x MSAA: swamp 445 to 700 ticks a second (game 2.16 to 1.35 ms,
+   GPU 1.9 to 1.35 ms), Palm Brinks 395 to 576 (game 2.4 to 1.65 ms), real frames identical. What
+   is left is the engine's own logic and encoding ~840 commands a frame. `texture_checksum` stays:
+   at about 5% of a tick it is cheaper than trapping writes to game memory.
+5. **60 ticks.** Not done, and not needed: smoothing already shows a frame every refresh. Menus run
+   at `mgFrameRate` 1 and movement scales by it, but it is read in 75 places in 20 files while
+   hundreds of timers, animations and events step once a tick, so a faster tick would mean auditing
+   every one of them.
 
 ### Gates only the user can run
 
