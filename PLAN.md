@@ -1,7 +1,7 @@
 # Plan
 
-The engine in dc2tk, mods that change it, and a minimal native port for macOS and Linux, with
-Windows to follow. The facts about
+The engine in dc2tk, mods that change it, and a minimal native port for macOS, Linux and
+Windows. The facts about
 ChronicleTwo come from its source at commit `d51e74b` (Kazarov at `14164f1`), given as paths under
 the submodule, `engine/...`.
 
@@ -317,63 +317,62 @@ drew no launcher backdrop there, so the launcher asks for SDL's Vulkan renderer 
 which resets its textures when the app comes back from another activity (the launcher remakes them on
 `SDL_EVENT_RENDER_DEVICE_RESET`). Save states do not survive an app update: unlike iOS, nothing keeps the old build.
 
-### Next: Windows
+### Windows
 
-The port's macOS and Linux packages ship from `.github/workflows/release.yml` (`port` job: `tools/port_sdk.py` then
-`tools/port_package.py`). Windows was left for a session on a Windows box. Nothing below is built or tested yet.
+Built and checked on a Windows 11 x64 box (2026-10-26). `tools/port_sdk.py` unpacks llvm-mingw 20261020 (LLVM 23.1.4,
+ucrt, sha256-pinned) into `build/port/llvm-mingw` and builds SDL3 and FFmpeg with it into `build/port/windows-sdk`;
+`tools/port.py --movies` links `build/port/windows/darkchronicle.exe` with 0 stubs (148 units, 57 other files);
+`port/tests/run.py --iso pal.iso` passes there, the retail logo and tutorial movies included; the exe, started on
+`pal.iso` in a real window, draws the language select under Vulkan, and the launcher opens; `tools/port_package.py`
+packs `dark-chronicle-<version>-windows-x64.zip`. The shared changes were checked on Linux too (WSL Ubuntu, llvm-mingw's
+own Linux clang 23 with the system's GNU ld): the port links with 0 stubs and `port/tests/run.py` passes. Not yet: a
+human playing past the language select (input needs the window focused), sound on a real device, a savestate taken and
+loaded on Windows, a save through the game's menu, and the release job's first run (`windows-latest`).
 
-## Toolchain
+How it is built:
 
-- Use a MinGW target (llvm-mingw or MSYS2 CLANG64), not MSVC: it keeps Itanium mangling, which `tools/port.py`'s
-  ALIASES, OPERATORS and stubs depend on, and gives `--defsym`, `objcopy`, `nm`.
-- llvm-mingw 20261020 is LLVM 23.1.4. Release asset sha256s: macos-universal
-  `e9c13e4ede38e715003ffc674d4d00a1088df8235439d1f0c16188ff0704c17e`, ubuntu-22.04-x86_64
-  `55064b60b991a1e1e8090b8c2f84e82b22cfe5903d12c159d65064cf5e8ae335`.
-- Link with `-static` (libc++, libunwind, winpthreads) and `-mwindows` for the release binary.
-- `tools/port_sdk.py` would need a Windows path: SDL cmake with `-DCMAKE_SYSTEM_NAME=Windows` and the mingw compilers;
-  FFmpeg configure with `--target-os=mingw32 --arch=x86_64 --cross-prefix=x86_64-w64-mingw32-` (or native in MSYS2).
-  Output: `bin/SDL3.dll`, `bin/avcodec-62.dll`, `bin/avutil-60.dll`, import libs `lib/*.dll.a`. DLLs go beside the exe.
+- **Toolchain**: llvm-mingw, not MSVC: Itanium mangling, which the ALIASES, OPERATORS and stubs depend on. Linked
+  `-static` (libc++, libunwind, winpthreads) and `-mwindows`; the only DLLs beside the exe are SDL3, avcodec and
+  avutil. FFmpeg's configure runs in Git for Windows' bash and builds with llvm-mingw's `mingw32-make`, inside its own
+  unpacked tree: with absolute source paths its header install is one command line longer than Windows takes, and it
+  fails without a word.
+- **Linking**: lld's MinGW driver has no `--defsym`; the ALIASES are lld-link's `/alternatename` through `-Xlink`.
+  llvm-objcopy cannot localise, weaken or rename sections of COFF objects: LOCALISED symbols are renamed to names
+  nothing else uses, the upstream objects are linked last with `--allow-multiple-definition` (the first definition
+  wins, as the strong one does over a weak one on ELF), and `.data`/`.bss` (with their `$` groups) become
+  `gdata`/`gbss` by writing the names in place, as long as the old (PE section names are at most 8 characters). The
+  same option covers an inline function's COMDAT copy beside its out-of-line definition (`ClsMes::Init`,
+  `CMapParts::CMapParts`), which ELF lets the strong one win and COFF calls a duplicate.
+- **Windows names**: the PS2 kernel's `CreateThread`, `GetThreadId` and `TerminateThread` are kernel32 functions too.
+  Every name in our objects that the default import libraries define becomes `ps2_NAME`, so the port's definition (or
+  a stub) is what the engine gets and the static runtime never calls the port's.
+- **LLP64**: `long` is 32 bits. `port.json` makes the costume bits, `mgCDrawPrim::Direct`'s register data, the GS
+  scissor shifts in `nd_meswin.cpp`, `0x80UL << 32` in `inventmn.cpp` and the password's 8-byte groups `u64`/`s64` on
+  every platform (a sweep of every plain `long` in the patched engine found no others that need 64 bits). The rest are
+  harmless at 32 bits: `dbg_font.cpp`, `snd_mngr.cpp` 1912, `nameregi.cpp` 698, and the movie pts/dts of `movie.hpp`
+  and `libmpeg.h` (the engine's `movie.cpp` is not built). `-mno-ms-bitfields` keeps the engine's bitfield layouts
+  (no SDL or FFmpeg header has a bitfield), and `-D_FILE_OFFSET_BITS=64` the 4.4 GB disc's offsets.
+- **Fibers** (`port/src/fiber.c`): a Win64 switch saving rbx, rbp, rdi, rsi, r12-r15, xmm6-xmm15, rsp, the resume
+  address and the thread information block's StackBase and StackLimit, on the caller's stacks as before.
+- **Files**: `port/windows/posix.c` (`port/include/windows_posix.h`) gives `memory_card.c` directory descriptors that
+  keep a path, and the `*at` calls on them, plus `pread`, `fstatvfs` and `fsync`; files open in binary mode. The disc
+  opens with `open`, as SDL's Windows streams have no descriptor. The manifest makes the C runtime's code page UTF-8,
+  so `char` paths are SDL's UTF-8 everywhere. Windows has no symlinks to refuse, so the card test leaves those checks
+  out there.
+- **Savestates** read the PE section headers through `__ImageBase` for `gdata` and `gbss`; the image keeps its fixed
+  base (`--disable-dynamicbase`), as the non-PIE Linux build does.
+- **Console**: `port/windows/console.c` attaches to the console it is started from, unless its output already goes
+  somewhere.
+- **Tests**: `port/tests/run.py` adds the shim to every link and lld-link's `/force:unresolved`, as COFF's lld reports
+  undefined symbols that only discarded sections name, which ELF's lets go; the collision objects are not weakened but
+  come after the engine's.
 
-## Code that is LP64 or POSIX only
+Open on Windows:
 
-- **`long` is 32-bit (LLP64).** `u_long` is already `u64` in C++ (`port/include/port.h`). Engine sites that need 64 bits,
-  to patch with `tools/engine-patches/port.json` (u64/s64 on every platform):
-  - `ps2/src/nd_meswin.cpp` 3906-3907 and 3957-3958: `(unsigned long) x << 32/48` for SCE_GS_SCISSOR_1.
-  - `ps2/src/inventmn.cpp` 5776: `0x80UL << 32`.
-  - `ps2/include/mg_drawprim.hpp` 606 `Direct(unsigned long reg, unsigned long data)`, and the override in
-    `port/src/mg_drawprim.cpp` 138 to match.
-  - Costume bits (34 costumes): `ps2/include/userdata.hpp` 1181 `costume_bit`, 2147, 2157; `ps2/src/userdata.cpp`
-    4678, 4682; `ps2/include/menuchr.hpp` 822; `ps2/src/menuchr.cpp` 331, 6552; `ps2/src/memcard.cpp` 997. The struct
-    layout is part of the save data.
-  - `ps2/src/password.cpp`: 8-byte groups packed in `unsigned long` (ConvLongToTxt, ConvTxtToLong, both unions).
-  - Harmless at 32 bits: `dbg_font.cpp` (debug font), `snd_mngr.cpp` 1912, `nameregi.cpp` 698; movie pts/dts in
-    `movie.hpp`/`libmpeg.h` (engine `movie.cpp` is not built; check the port's own movie code).
-  - The port's C files include no `u_long`/`long` SDK headers.
-- **OPERATORS** in `tools/port.py`: `size_t` mangles as `y`, not `m` (`_Znwy`, `_ZdlPvy`, ...).
-- **Fibers** (`port/src/fiber.c`): arm64 asm, else ucontext, which MinGW lacks. The stacks are the static
-  `stacks[][]` in `kernel.c`, and savestates use `port_kernel_main_stack_top()`, so keep caller-given stacks: a Win64
-  asm switch saving rbx, rbp, rdi, rsi, r12-r15, xmm6-xmm15, rsp, a resume address, and the TIB's StackBase
-  (`gs:[0x08]`) and StackLimit (`gs:[0x10]`). New fiber: rsp 16-aligned, start stub does `sub rsp, 32; call rbx`.
-- **Files**: `cdvd.c` and `overrides.c` use `pread` (ReadFile with an OVERLAPPED offset); `memory_card.c` is built on
-  `openat`/`mkdirat`/`fstatat`/`unlinkat`/`renameat`/`fdopendir`/`fstatvfs` with `O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC`.
-  MinGW has `opendir`/`readdir`/`stat`/`strcasecmp`/`clock_gettime`/`nanosleep`. SDL3's filesystem calls
-  (`SDL_EnumerateDirectory`, `SDL_GetPathInfo`, `SDL_CreateDirectory`, `SDL_RenamePath`, `SDL_RemovePath`) could serve
-  every platform.
-- **Data folders** already go through SDL: `port_data_folder()` (`SDL_GetBasePath`) for mods/overrides, and
-  `SDL_GetPrefPath("DC2 Toolkit", "Dark Chronicle")` for saves and `launcher.cfg` (`%APPDATA%\DC2 Toolkit\Dark Chronicle`).
-- **Savestate sections**: `port/include/port_game.h` puts game data in `game_data`/`game_bss`; `move_data` in
-  `tools/port.py` renames sections per object (Mach-O `__GAME`, ELF objcopy). PE image section names are 8 characters
-  at most, so use short names (e.g. `gdata`/`gbss`, renaming `.data`, `.data$*`, `.bss`, `.bss$*`; clang may emit
-  bigobj COFF). `savestate.cpp` would read the PE section headers of `GetModuleHandleW(NULL)`. Link with
-  `--disable-dynamicbase` so the image sits at its fixed base like the non-PIE Linux build.
-- **ASLR respawn** in `memory.c` is macOS only.
-- **Linking**: `--defsym` aliases work with lld's MinGW driver; undefined symbols print as `undefined symbol: NAME`
-  (`--no-demangle` keeps them mangled for `undefined()`).
-- **Graphics**: `port/src/shaders.h` has MSL and SPIR-V only, so SDL_GPU must use Vulkan on Windows (D3D12 would need
-  DXIL).
-- **Debug build** (`port/debug`): sockets, `/usr/bin/sample`, Mach-O symbol reading; not needed for release.
-- `port/src/symbols.cpp`, `main.c`, `touch.c`, `savestate.cpp` include POSIX or Mach-O headers under `__APPLE__`
-  guards; check each `#else` branch.
+- The debug build (`port/debug`: sockets, signals, `/usr/bin/sample`, Mach-O symbols) and so `tools/golden_port.py`;
+  `port.py --debug` refuses on Windows.
+- `dc2tk build --native` (`native.rs`) has none of this; item 7 (one native build) would bring it.
+- `symbols.cpp` reads Mach-O only; `memory.c`'s ASLR respawn is macOS only and not needed with the fixed base.
 
 ### Gates only the user can run
 
@@ -552,8 +551,8 @@ PCSX2, on a PS2 and natively.
   synth. The rest of the engine runs as it is.
 - **Saves** are a folder per memory card. **Movies** decode with libavcodec, linked dynamically.
 - Engine builds for the ISO need Docker on every OS (Docker Desktop on Windows); the port builds
-  on macOS and Linux (Windows later) with `dc2tk build --native`, which drives clang itself,
-  without CMake.
+  on macOS and Linux with `dc2tk build --native`, which drives clang itself, without CMake, and on
+  Windows with `tools/port.py` only.
 
 ## Part 1: the engine in dc2tk
 
@@ -754,7 +753,8 @@ Each has a gate. A gate that needs PCSX2, a PS2, a display or a listener is the 
    compared with PCSX2. Water, depth of field and texture animation have been seen working, and
    lens flare works since the GS destination alpha test was added. It builds and plays on Linux
    x86-64 (checked in a container with software Vulkan; golden baselines differ by a few levels
-   per channel, so Linux needs its own). Next: Windows, and Linux on real hardware.
+   per channel, so Linux needs its own), and it builds and draws on Windows x64 (see "Windows").
+   Next: Linux on real hardware.
 8. **P3 Input.** Built. Gate: New Game, Palm Brinks, the first dungeon floor, played by a person.
    Next: play past the first floor's gate where it crashed, and melee hits.
 9. **P4 Sound.** Built. Gate: effects, music and voices, heard against retail.

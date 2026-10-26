@@ -135,7 +135,7 @@ PORT_OVERRIDE void mgCDrawPrim::TextureCrd4(int u, int v) {
     gs_write(SCE_GS_UV, uv.value);
 }
 
-PORT_OVERRIDE void mgCDrawPrim::Direct(unsigned long reg, unsigned long data) {
+PORT_OVERRIDE void mgCDrawPrim::Direct(u64 reg, u64 data) {
     drain();
     gs_write((int)reg, data);
 }

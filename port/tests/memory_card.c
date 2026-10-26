@@ -10,6 +10,11 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifdef _WIN32
+#include <direct.h>
+#include <process.h>
+#define setenv(name, value, overwrite) _putenv_s(name, value)
+#endif
 
 enum {
     MC_DIR_FIRST = 0,
@@ -26,10 +31,20 @@ static int settle(int submitted, int expected) {
     return result;
 }
 
+static char *temporary_folder(char *root, size_t size) {
+#ifdef _WIN32
+    snprintf(root, size, "%s/dc2-saves-%d", getenv("TEMP"), _getpid());
+    return _mkdir(root) ? NULL : root;
+#else
+    snprintf(root, size, "/tmp/dc2-saves-XXXXXX");
+    return mkdtemp(root);
+#endif
+}
+
 int main(void) {
     assert(settle(sceMcClose(0), sceMcFuncNoClose) == sceMcResDeniedPermit);
-    char root[] = "/tmp/dc2-saves-XXXXXX";
-    assert(mkdtemp(root));
+    char root[1024];
+    assert(temporary_folder(root, sizeof root));
     assert(port_memory_card_init(root) == 0);
     int type, free_size, formatted;
     assert(sceMcGetInfo(0, 1, &type, &free_size, &formatted) == 0);
@@ -80,11 +95,13 @@ int main(void) {
     assert(settle(sceMcRename(0, 1, "/SAVE/second", "/SAVE/data"), sceMcFuncNoFileInfo) == sceMcResFailReplace);
     assert(settle(sceMcRename(0, 1, "/SAVE/second", "/SAVE/renamed"), sceMcFuncNoFileInfo) == 0);
     assert(settle(sceMcOpen(0, 1, "../escape", SCE_CREAT | SCE_WRONLY), sceMcFuncNoOpen) == sceMcResDeniedPermit);
+    char link[1024];
+#ifndef _WIN32
+    // Windows makes symlinks only with elevated rights, and the port does not refuse them there
     char outside[] = "/tmp/dc2-outside-XXXXXX";
     int outside_fd = mkstemp(outside);
     assert(outside_fd >= 0);
     assert(write(outside_fd, "keep", 4) == 4);
-    char link[1024];
     snprintf(link, sizeof(link), "%s/card0/link", root);
     assert(symlink(outside, link) == 0);
     assert(settle(sceMcOpen(0, 1, "/link", SCE_TRUNC | SCE_CREAT | SCE_WRONLY), sceMcFuncNoOpen) == sceMcResDeniedPermit);
@@ -93,6 +110,7 @@ int main(void) {
     snprintf(link, sizeof(link), "%s/card0/link", root);
     assert(symlink("/tmp", link) == 0);
     assert(settle(sceMcOpen(0, 1, "/link/escape", SCE_CREAT | SCE_WRONLY), sceMcFuncNoOpen) == sceMcResNoEntry);
+#endif
     assert(settle(sceMcDelete(0, 1, "/SAVE"), sceMcFuncNoDelete) == sceMcResDeniedPermit);
     assert(settle(sceMcDelete(0, 1, "/SAVE/renamed"), sceMcFuncNoDelete) == 0);
     const char *names[] = {"mc", "mc0", "mc01", "mc012", "wa", "wab", "wacb", "waccb", "waxb", "wax"};
@@ -115,10 +133,12 @@ int main(void) {
     assert(settle(sceMcGetDir(0, 1, "/*", MC_DIR_FIRST, 3, rows), sceMcFuncNoGetDir) == 0);
     assert(settle(sceMcFormat(1, 1), sceMcFuncNoFormat) == 0);
     assert(sceMcEnd() == 0);
+#ifndef _WIN32
     char kept[4];
     assert(pread(outside_fd, kept, 4, 0) == 4 && !memcmp(kept, "keep", 4));
     close(outside_fd);
     assert(unlink(outside) == 0);
+#endif
     snprintf(link, sizeof(link), "%s/card0", root);
     assert(rmdir(link) == 0);
     snprintf(link, sizeof(link), "%s/card1", root);

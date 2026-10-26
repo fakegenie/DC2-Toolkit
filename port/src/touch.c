@@ -170,7 +170,7 @@ static int action_at(float x, float y) {
     return 0;
 }
 
-static void tell(const char *words) {
+static void show_notice(const char *words) {
     snprintf(notice, sizeof notice, "%s", words);
     notice_at = SDL_GetTicks();
 }
@@ -189,16 +189,16 @@ static void run_action(int kind) {
     char path[1100];
     quick_path(path, sizeof path);
     if (kind == CONTROL_LOAD && !stored()) {
-        tell("No state saved yet");
+        show_notice("No state saved yet");
         return;
     }
     if (kind == CONTROL_LOAD && !quick.data && port_state_read(&quick, path)) {
-        tell("The saved state can't be loaded");
+        show_notice("The saved state can't be loaded");
         return;
     }
     int wanted = kind == CONTROL_SAVE ? STATE_SAVE : STATE_LOAD;
     if (!port_state_request(wanted, &quick)) {
-        tell(port_state_problem());
+        show_notice(port_state_problem());
         return;
     }
     quick_kind = wanted;
@@ -220,7 +220,7 @@ static const char *finish_message(void) {
 
 static void finish_action(void) {
     if (!quick_kind || port_state_pending()) return;
-    tell(finish_message());
+    show_notice(finish_message());
     quick_kind = 0;
 }
 

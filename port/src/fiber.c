@@ -65,6 +65,94 @@ void port_fiber_make(PortFiber *fiber, void *stack, size_t size, void (*entry)(v
     fiber->stack_pointer = ((uint64_t)(uintptr_t)stack + size) & ~(uint64_t)(STACK_ALIGNMENT - 1);
 }
 
+#elif defined(_WIN64)
+
+enum { STACK_ALIGNMENT = 16 };
+
+void port_fiber_start(void);
+
+// The new fiber's stack is 16-byte aligned here, so after 32 bytes of shadow space the call leaves the entry function
+// with the alignment the Win64 calling convention gives it.
+__asm__(".text\n"
+        ".p2align 4\n"
+        ".globl port_fiber_start\n"
+        "port_fiber_start:\n"
+        "    subq $32, %rsp\n"
+        "    callq *%rbx\n"
+        "    ud2\n");
+
+// The Win64 callee-saved registers, rsp and the resume address, and the thread information block's stack bounds
+// (gs:0x08 and gs:0x10), which Windows checks when it unwinds or grows a stack.
+__attribute__((naked)) void port_fiber_switch(PortFiber *from, PortFiber *to) {
+    __asm__ volatile("    movq %%rbx, %c[rbx](%%rcx)\n"
+                     "    movq %%rbp, %c[rbp](%%rcx)\n"
+                     "    movq %%rdi, %c[rdi](%%rcx)\n"
+                     "    movq %%rsi, %c[rsi](%%rcx)\n"
+                     "    movq %%r12, %c[r12](%%rcx)\n"
+                     "    movq %%r13, %c[r13](%%rcx)\n"
+                     "    movq %%r14, %c[r14](%%rcx)\n"
+                     "    movq %%r15, %c[r15](%%rcx)\n"
+                     "    movq (%%rsp), %%rax\n"
+                     "    movq %%rax, %c[resume](%%rcx)\n"
+                     "    leaq 8(%%rsp), %%rax\n"
+                     "    movq %%rax, %c[stack](%%rcx)\n"
+                     "    movq %%gs:0x08, %%rax\n"
+                     "    movq %%rax, %c[base](%%rcx)\n"
+                     "    movq %%gs:0x10, %%rax\n"
+                     "    movq %%rax, %c[limit](%%rcx)\n"
+                     "    movdqu %%xmm6, %c[xmm]+0(%%rcx)\n"
+                     "    movdqu %%xmm7, %c[xmm]+16(%%rcx)\n"
+                     "    movdqu %%xmm8, %c[xmm]+32(%%rcx)\n"
+                     "    movdqu %%xmm9, %c[xmm]+48(%%rcx)\n"
+                     "    movdqu %%xmm10, %c[xmm]+64(%%rcx)\n"
+                     "    movdqu %%xmm11, %c[xmm]+80(%%rcx)\n"
+                     "    movdqu %%xmm12, %c[xmm]+96(%%rcx)\n"
+                     "    movdqu %%xmm13, %c[xmm]+112(%%rcx)\n"
+                     "    movdqu %%xmm14, %c[xmm]+128(%%rcx)\n"
+                     "    movdqu %%xmm15, %c[xmm]+144(%%rcx)\n"
+                     "    movq %c[rbx](%%rdx), %%rbx\n"
+                     "    movq %c[rbp](%%rdx), %%rbp\n"
+                     "    movq %c[rdi](%%rdx), %%rdi\n"
+                     "    movq %c[rsi](%%rdx), %%rsi\n"
+                     "    movq %c[r12](%%rdx), %%r12\n"
+                     "    movq %c[r13](%%rdx), %%r13\n"
+                     "    movq %c[r14](%%rdx), %%r14\n"
+                     "    movq %c[r15](%%rdx), %%r15\n"
+                     "    movq %c[base](%%rdx), %%rax\n"
+                     "    movq %%rax, %%gs:0x08\n"
+                     "    movq %c[limit](%%rdx), %%rax\n"
+                     "    movq %%rax, %%gs:0x10\n"
+                     "    movdqu %c[xmm]+0(%%rdx), %%xmm6\n"
+                     "    movdqu %c[xmm]+16(%%rdx), %%xmm7\n"
+                     "    movdqu %c[xmm]+32(%%rdx), %%xmm8\n"
+                     "    movdqu %c[xmm]+48(%%rdx), %%xmm9\n"
+                     "    movdqu %c[xmm]+64(%%rdx), %%xmm10\n"
+                     "    movdqu %c[xmm]+80(%%rdx), %%xmm11\n"
+                     "    movdqu %c[xmm]+96(%%rdx), %%xmm12\n"
+                     "    movdqu %c[xmm]+112(%%rdx), %%xmm13\n"
+                     "    movdqu %c[xmm]+128(%%rdx), %%xmm14\n"
+                     "    movdqu %c[xmm]+144(%%rdx), %%xmm15\n"
+                     "    movq %c[stack](%%rdx), %%rsp\n"
+                     "    jmpq *%c[resume](%%rdx)\n"
+                     :
+                     : [rbx] "i"(offsetof(PortFiber, rbx)), [rbp] "i"(offsetof(PortFiber, rbp)),
+                       [rdi] "i"(offsetof(PortFiber, rdi)), [rsi] "i"(offsetof(PortFiber, rsi)),
+                       [r12] "i"(offsetof(PortFiber, r12)), [r13] "i"(offsetof(PortFiber, r13)),
+                       [r14] "i"(offsetof(PortFiber, r14)), [r15] "i"(offsetof(PortFiber, r15)),
+                       [stack] "i"(offsetof(PortFiber, stack_pointer)), [resume] "i"(offsetof(PortFiber, resume)),
+                       [base] "i"(offsetof(PortFiber, stack_base)), [limit] "i"(offsetof(PortFiber, stack_limit)),
+                       [xmm] "i"(offsetof(PortFiber, xmm)));
+}
+
+void port_fiber_make(PortFiber *fiber, void *stack, size_t size, void (*entry)(void)) {
+    memset(fiber, 0, sizeof *fiber);
+    fiber->rbx = (uint64_t)(uintptr_t)entry;
+    fiber->resume = (uint64_t)(uintptr_t)port_fiber_start;
+    fiber->stack_pointer = ((uint64_t)(uintptr_t)stack + size) & ~(uint64_t)(STACK_ALIGNMENT - 1);
+    fiber->stack_base = fiber->stack_pointer;
+    fiber->stack_limit = (uint64_t)(uintptr_t)stack;
+}
+
 #else
 
 void port_fiber_make(PortFiber *fiber, void *stack, size_t size, void (*entry)(void)) {

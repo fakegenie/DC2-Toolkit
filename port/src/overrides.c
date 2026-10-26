@@ -9,6 +9,9 @@
 #include <strings.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifdef _WIN32
+#include "windows_posix.h"
+#endif
 #include <SDL3/SDL.h>
 #ifdef __APPLE__
 #include <TargetConditionals.h>

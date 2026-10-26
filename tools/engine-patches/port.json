@@ -1787,5 +1787,111 @@
     "file": "ps2/src/automap.cpp",
     "find": "    seed = iRand(0xFFFF);",
     "replace": "    seed = port_floor_seed(iRand(0xFFFF));"
+  },
+  {
+    "file": "ps2/include/userdata.hpp",
+    "find": "unsigned long      costume_bit;",
+    "replace": "u64                costume_bit;"
+  },
+  {
+    "file": "ps2/include/userdata.hpp",
+    "find": "void SetCostumeBit(unsigned long bit);",
+    "replace": "void SetCostumeBit(u64 bit);"
+  },
+  {
+    "file": "ps2/include/userdata.hpp",
+    "find": "unsigned long GetCostumeBit();",
+    "replace": "u64 GetCostumeBit();"
+  },
+  {
+    "file": "ps2/src/userdata.cpp",
+    "find": "void CUserDataManager::SetCostumeBit(unsigned long bits) {",
+    "replace": "void CUserDataManager::SetCostumeBit(u64 bits) {"
+  },
+  {
+    "file": "ps2/src/userdata.cpp",
+    "find": "unsigned long CUserDataManager::GetCostumeBit() {",
+    "replace": "u64 CUserDataManager::GetCostumeBit() {"
+  },
+  {
+    "file": "ps2/include/menuchr.hpp",
+    "find": "void UpdateCostumeList(int chara_no, unsigned long chara_flag);",
+    "replace": "void UpdateCostumeList(int chara_no, u64 chara_flag);"
+  },
+  {
+    "file": "ps2/src/menuchr.cpp",
+    "find": "static unsigned long CostumeAttr;",
+    "replace": "static u64 CostumeAttr;"
+  },
+  {
+    "file": "ps2/src/menuchr.cpp",
+    "find": "void CMenuCostumeSel::UpdateCostumeList(int mode, unsigned long chara_flag) {",
+    "replace": "void CMenuCostumeSel::UpdateCostumeList(int mode, u64 chara_flag) {"
+  },
+  {
+    "file": "ps2/include/mg_drawprim.hpp",
+    "find": "void Direct(unsigned long reg, unsigned long data);",
+    "replace": "void Direct(u64 reg, u64 data);"
+  },
+  {
+    "file": "ps2/src/mg_drawprim.cpp",
+    "find": "void mgCDrawPrim::Direct(unsigned long reg, unsigned long data) {",
+    "replace": "void mgCDrawPrim::Direct(u64 reg, u64 data) {"
+  },
+  {
+    "file": "ps2/src/nd_meswin.cpp",
+    "find": "(unsigned long) left | ((unsigned long) right << 16) |",
+    "replace": "(u64) left | ((u64) right << 16) |"
+  },
+  {
+    "file": "ps2/src/nd_meswin.cpp",
+    "find": "((unsigned long) top << 32) | ((unsigned long) bottom << 48));",
+    "replace": "((u64) top << 32) | ((u64) bottom << 48));"
+  },
+  {
+    "file": "ps2/src/nd_meswin.cpp",
+    "find": "((unsigned long) (mgScreenWidth - 1) << 16) |",
+    "replace": "((u64) (mgScreenWidth - 1) << 16) |"
+  },
+  {
+    "file": "ps2/src/nd_meswin.cpp",
+    "find": "((unsigned long) (mgScreenHeight - 1) << 48));",
+    "replace": "((u64) (mgScreenHeight - 1) << 48));"
+  },
+  {
+    "file": "ps2/src/inventmn.cpp",
+    "find": "prim->Direct(0x3B, 0x80 | (0x80UL << 32));",
+    "replace": "prim->Direct(0x3B, 0x80 | (0x80ULL << 32));"
+  },
+  {
+    "file": "ps2/src/password.cpp",
+    "find": "static void ConvLongToTxt(unsigned long value, char *text) {",
+    "replace": "static void ConvLongToTxt(u64 value, char *text) {"
+  },
+  {
+    "file": "ps2/src/password.cpp",
+    "find": "static int ConvTxtToLong(char *text, unsigned long *value) {\n    long result = 0;",
+    "replace": "static int ConvTxtToLong(char *text, u64 *value) {\n    s64  result = 0;"
+  },
+  {
+    "file": "ps2/src/password.cpp",
+    "find": "    long weight = 1;",
+    "replace": "    s64  weight = 1;"
+  },
+  {
+    "file": "ps2/src/password.cpp",
+    "find": "        unsigned long value;\n",
+    "replace": "        u64           value;\n",
+    "count": 2
+  },
+  {
+    "file": "ps2/src/password.cpp",
+    "find": "    unsigned long decoded;",
+    "replace": "    u64           decoded;"
+  },
+  {
+    "file": "ps2/src/password.cpp",
+    "find": "printf(\"err %lu\\n\", packed.value);",
+    "replace": "printf(\"err %llu\\n\", packed.value);"
   }
 ]

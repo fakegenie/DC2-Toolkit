@@ -11,6 +11,9 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifdef _WIN32
+#include "windows_posix.h"
+#endif
 #include <SDL3/SDL.h>
 #undef st_ctime
 #undef st_atime
@@ -164,12 +167,17 @@ void port_cdvd_close(void) {
 }
 
 static int open_disc(const char *path) {
+#ifdef _WIN32
+    // SDL's Windows streams have no file descriptor
+    return open(path, O_RDONLY);
+#else
     SDL_IOStream *stream = SDL_IOFromFile(path, "rb");
     SDL_PropertiesID properties = stream ? SDL_GetIOProperties(stream) : 0;
     int descriptor = (int)SDL_GetNumberProperty(properties, SDL_PROP_IOSTREAM_FILE_DESCRIPTOR_NUMBER, -1);
     int kept = descriptor >= 0 ? dup(descriptor) : -1;
     if (stream) SDL_CloseIO(stream);
     return kept;
+#endif
 }
 
 int port_cdvd_init(const char *path) {

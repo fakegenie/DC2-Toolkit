@@ -1,5 +1,5 @@
 # A release for every tag v*: dc2tk for Windows, macOS and Linux, the Blender add-on, and the native port of Dark
-# Chronicle for macOS, Linux, Android (an arm64 APK) and, as an unsigned .ipa for sideloading, iPhone and iPad. Run it by
+# Chronicle for macOS, Linux, Windows, Android (an arm64 APK) and, as an unsigned .ipa for sideloading, iPhone and iPad. Run it by
 # hand (workflow_dispatch) to build everything without releasing it.
 #
 # Each dc2tk zip holds a folder with the executable and the data it reads beside it (sdk/,
@@ -9,7 +9,7 @@
 # with the licences of the crates built into that platform's executable
 # (tools/third_party_licences.py). The add-on's zip is a Blender extension: blender_manifest.toml
 # at its root, so Blender's Install from Disk takes it as it is, with the LICENCE beside it. The port's packages
-# (tools/port_package.py) hold Dark Chronicle.app or the Linux binary with SDL3 and FFmpeg's MPEG-2 decoder built from
+# (tools/port_package.py) hold Dark Chronicle.app, the Linux binary or the Windows exe with SDL3 and FFmpeg's MPEG-2 decoder built from
 # pinned sources (tools/port_sdk.py), and no game data: players supply their own disc image.
 #
 #   git tag v1.0.0 && git push origin v1.0.0
@@ -129,7 +129,15 @@ jobs:
           # the oldest supported Ubuntu, so the binary needs only glibc 2.35
           - platform: linux-x64
             os: ubuntu-22.04
+          # Windows 10 1903 and later: tools/port_sdk.py unpacks llvm-mingw and runs FFmpeg's configure in Git's bash
+          - platform: windows-x64
+            os: windows-latest
+    defaults:
+      run:
+        shell: bash
     steps:
+      # the engine copies keep the repository's LF line endings on Windows too
+      - run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
         with:
           submodules: true
@@ -160,14 +168,18 @@ jobs:
 
       - uses: actions/cache@v4
         with:
-          path: build/port/sdk
+          path: |
+            build/port/sdk
+            build/port/windows-sdk
+            build/port/llvm-mingw
           key: port-sdk-${{ matrix.platform }}-${{ hashFiles('tools/port_sdk.py') }}
 
+      # python, as Windows has no python3
       - name: Build SDL3 and FFmpeg
-        run: python3 -I tools/port_sdk.py
+        run: python -I tools/port_sdk.py
 
       - name: Build and pack the port
-        run: python3 -I tools/port_package.py --version "$GITHUB_REF_NAME"
+        run: python -I tools/port_package.py --version "$GITHUB_REF_NAME"
 
       - uses: actions/upload-artifact@v4
         with:

@@ -17,6 +17,7 @@
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
+#elif defined(_WIN32)
 #else
 #include <dlfcn.h>
 #include <link.h>
@@ -95,6 +96,60 @@ static int image_targets(Target *targets) {
         command = (const struct load_command *)((const char *)command + command->cmdsize);
     }
     return count;
+}
+#elif defined(_WIN32)
+extern "C" char __ImageBase;
+
+// IMAGE_SECTION_HEADER
+typedef struct {
+    char name[8];
+    uint32_t virtual_size;
+    uint32_t address;
+    uint32_t raw_size, raw_offset, relocations, lines;
+    uint16_t relocation_count, line_count;
+    uint32_t flags;
+} PeSection;
+enum { PE_EXECUTE = 0x20000000, PE_WRITE = 0x80000000 };
+
+static uint64_t image_base(void) {
+    return (uint64_t)(uintptr_t)&__ImageBase;
+}
+
+static const PeSection *pe_sections(int *count) {
+    const unsigned char *image = (const unsigned char *)&__ImageBase;
+    uint32_t header;
+    uint16_t sections, optional;
+    memcpy(&header, image + 0x3c, sizeof header);
+    memcpy(&sections, image + header + 6, sizeof sections);
+    memcpy(&optional, image + header + 20, sizeof optional);
+    *count = sections;
+    return (const PeSection *)(image + header + 24 + optional);
+}
+
+static int game_regions(Region *regions) {
+    static const char *const names[] = {"gdata", "gbss"};
+    int count;
+    const PeSection *sections = pe_sections(&count);
+    for (int kind = 0; kind < 2; ++kind) {
+        regions[kind] = {0, 0};
+        for (int i = 0; i < count; ++i)
+            if (!strncmp(sections[i].name, names[kind], sizeof sections[i].name))
+                regions[kind] = {image_base() + sections[i].address, sections[i].virtual_size};
+    }
+    return 2;
+}
+
+static int image_targets(Target *targets) {
+    int count, found = 0;
+    const PeSection *sections = pe_sections(&count);
+    for (int i = 0; i < count && found < TARGET_LIMIT; ++i)
+        if (!(sections[i].flags & PE_WRITE))
+            targets[found++] = {image_base() + sections[i].address, sections[i].virtual_size, (sections[i].flags & PE_EXECUTE) != 0};
+    Region regions[REGION_LIMIT];
+    int region_count = game_regions(regions);
+    for (int i = 0; i < region_count && found < TARGET_LIMIT; ++i)
+        targets[found++] = {regions[i].start, regions[i].size, 0};
+    return found;
 }
 #else
 extern "C" char __start_game_data[], __stop_game_data[], __start_game_bss[], __stop_game_bss[];

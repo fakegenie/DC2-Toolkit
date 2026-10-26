@@ -41,7 +41,8 @@ folder for `Dark Chronicle.app`. For MPEG2 movies add `--movies` to the native b
 as well as MWCC by `mod check --native`.
 
 `python3 -I tools/port_package.py` builds the port with movies and packs it for players in `build/port/package`:
-`Dark Chronicle.app` in a zip on macOS, or `darkchronicle` with its libraries in a tar.gz on Linux, each with
+`Dark Chronicle.app` in a zip on macOS, `darkchronicle` with its libraries in a tar.gz on Linux, or `Dark Chronicle.exe`
+with its DLLs in a zip on Windows, each with
 `port/package/README.md`, `port/package/NOTICE.md`, the LICENCE and the licences of SDL3, FFmpeg, the launcher's font
 and the other code built in. `--ios` packs the unsigned `--ios device` app, with the notice and licences inside it, as
 `dark-chronicle-<version>-ios.ipa` for sideloading. `--android` packs `dark-chronicle-<version>-android-arm64.apk`,
@@ -60,6 +61,16 @@ on iOS. Its Disc row opens Android's file picker and remembers the disc it picks
 picked `.dc2pak` into the mods folder. Saves, mods and `log.txt` (what the port prints) are in the app's folder,
 `Android/data/dc2toolkit.darkchronicle/files`; `launcher.cfg` is in its private storage. The launcher draws with SDL's
 Vulkan renderer, like the game. A state saved before an update does not load after it.
+
+On Windows (x64, Windows 10 1903 or later), `python -I tools/port_sdk.py` first unpacks the pinned llvm-mingw (LLVM 23)
+into `build/port/llvm-mingw`, then builds SDL3 and FFmpeg with it into `build/port/windows-sdk`. FFmpeg's configure runs
+in Git for Windows' bash, so it needs Git, cmake and Python. `python -I tools/port.py --movies` then builds
+`build/port/windows/darkchronicle.exe` with `SDL3.dll`, `avcodec-62.dll` and `avutil-60.dll` beside it, and
+`tools/port_package.py` packs it as `Dark Chronicle.exe` in `dark-chronicle-<version>-windows-x64.zip`. It draws with
+Vulkan, its manifest makes the C runtime's file names UTF-8, and it opens no console of its own but writes to the one it
+is started from. `launcher.cfg` and `saves` are in `%APPDATA%\DC2 Toolkit\Dark Chronicle`, built mods in `mods` beside
+the exe. `python -I port/tests/run.py` runs the boundary checks there too. The debug build (`--debug`) and
+`dc2tk build --native` do not run on Windows yet.
 
 A chosen mod's `"port"` sources are compiled into the binary too (see [Native port mods](mods.md#native-port-mods)); `python3 -I tools/port.py --mod mods/<name>` does the same for the port's own build.
 

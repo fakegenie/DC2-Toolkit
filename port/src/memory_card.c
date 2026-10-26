@@ -14,9 +14,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <sys/statvfs.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef _WIN32
+#include "windows_posix.h"
+#else
+#include <sys/statvfs.h>
+#endif
 #include <SDL3/SDL.h>
 
 enum {

@@ -1,6 +1,7 @@
 """Run python3 -I tools/port_package.py [--version NAME] [--ios | --android] to build the port with movies and pack it for
-players into build/port/package: Dark Chronicle.app in a zip on macOS, or a folder with darkchronicle and its libraries in
-a tar.gz on Linux, each beside the README, NOTICE, LICENCE and THIRD-PARTY-LICENCES.md. Build the SDK first with
+players into build/port/package: Dark Chronicle.app in a zip on macOS, a folder with darkchronicle and its libraries in
+a tar.gz on Linux, or a folder with Dark Chronicle.exe and its DLLs in a zip on Windows, each beside the README, NOTICE,
+LICENCE and THIRD-PARTY-LICENCES.md. Build the SDK first with
 python3 -I tools/port_sdk.py. With --ios it packs an unsigned DarkChronicle.app for iPhone and iPad in an .ipa, with the
 NOTICE and licences inside the app, from the SDKs python3 -I tools/ios_sdk.py builds. With --android it packs an arm64
 APK, signed with port/android's public key and with the NOTICE and licences in its assets, from the SDKs
@@ -19,7 +20,8 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "build" / "port"
-SDK = OUT / "sdk"
+WINDOWS = sys.platform == "win32"
+SDK = OUT / ("windows-sdk" if WINDOWS else "sdk")
 IOS_SDK = OUT / "ios-sdk" / "device"
 ANDROID_SDK = OUT / "android-sdk"
 ANDROID = ROOT / "port" / "android"
@@ -177,6 +179,26 @@ def linux(name):
     return archive
 
 
+def windows(name):
+    subprocess.run([sys.executable, "-I", str(ROOT / "tools/port.py"), "--movies"], check=True)
+    built = OUT / "windows"
+    strip = OUT / "llvm-mingw" / "bin" / "llvm-strip.exe"
+    folder = PACKAGE / f"dark-chronicle-{name}-windows-x64"
+    folder.mkdir(parents=True)
+    shutil.copyfile(ROOT / "port/package/README.md", folder / "README.md")
+    notices(folder, SDK, shared_ffmpeg())
+    executable = folder / "Dark Chronicle.exe"
+    shutil.copyfile(built / "darkchronicle.exe", executable)
+    subprocess.run([str(strip), str(executable)], check=True)
+    for library in sorted(built.glob("*.dll")):
+        shutil.copyfile(library, folder / library.name)
+    archive = PACKAGE / f"{folder.name}.zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as packed:
+        for path in sorted(folder.rglob("*")):
+            packed.write(path, path.relative_to(PACKAGE).as_posix())
+    return archive
+
+
 def ios(name):
     subprocess.run([sys.executable, "-I", str(ROOT / "tools/port.py"), "--ios", "device"], check=True)
     payload = PACKAGE / "Payload"
@@ -264,7 +286,8 @@ def main():
     name = options.version or version()
     shutil.rmtree(PACKAGE, ignore_errors=True)
     PACKAGE.mkdir(parents=True)
-    archive = ios(name) if options.ios else android(name) if options.android else macos(name) if DARWIN else linux(name)
+    archive = (ios(name) if options.ios else android(name) if options.android else macos(name) if DARWIN
+               else windows(name) if WINDOWS else linux(name))
     print(f"packed {archive.relative_to(ROOT)} ({os.path.getsize(archive) >> 20} MB)")
 
 

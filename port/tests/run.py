@@ -3,14 +3,17 @@
 import argparse
 import importlib.util
 import json
+import os
 import pathlib
 import shutil
 import subprocess
 import sys
 
 DARWIN = sys.platform == "darwin"
+WINDOWS = sys.platform == "win32"
 DEAD_STRIP = "-Wl,-dead_strip" if DARWIN else "-Wl,--gc-sections"
 OBJCOPY = (shutil.which("llvm-objcopy") or "/opt/homebrew/opt/llvm/bin/llvm-objcopy") if DARWIN else "objcopy"
+EXE = ".exe" if WINDOWS else ""
 
 
 def main():
@@ -22,16 +25,25 @@ def main():
     port = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(port)
     sdk = root / "build/port/sdk"
+    if WINDOWS:
+        # llvm-mingw's tools first, and the DLLs found on PATH, as Windows has no rpath
+        sdk = root / "build/port/windows-sdk"
+        os.environ["PATH"] = os.pathsep.join([str(port.TOOLCHAIN / "bin"), str(sdk / "bin"), os.environ["PATH"]])
     sdk_cflags, sdk_libraries = port.sdk_flags(sdk, bool(options.iso))
-    sdk_libraries.append(f"-Wl,-rpath,{sdk / 'lib'}")
+    if WINDOWS:
+        # ELF's lld lets the tests leave undefined what only discarded sections name, COFF's reports it all
+        sdk_libraries.append("-Wl,-Xlink=/force:unresolved")
+    else:
+        sdk_libraries.append(f"-Wl,-rpath,{sdk / 'lib'}")
     include = ["-Iport/include", "-Iengine/ps2/include", "-Iengine/ps2/include/sce"]
     temporary = root / "build" / "port" / "tests"
     headers = temporary / "include"
     c_include = ["-Iport/include", "-I" + str(headers), "-I" + str(headers / "sce")]
-    c_flags = ["clang", "-std=c11", "-pthread", "-Wall", "-Wextra", "-Werror", *(["-Wno-deprecated-declarations"] if DARWIN else []), *c_include, *sdk_cflags]
+    windows = ["-mno-ms-bitfields", "-D_FILE_OFFSET_BITS=64"] if WINDOWS else []
+    c_flags = ["clang", "-std=c11", "-pthread", "-Wall", "-Wextra", "-Werror", *(["-Wno-deprecated-declarations"] if DARWIN else []), *windows, *c_include, *sdk_cflags]
     cpp_flags = ["clang++", "-std=c++26", "-pthread", "-O2", "-DPORT", "-DPAL", "-fms-extensions", "-w",
                  "-fno-strict-aliasing", "-fwrapv", "-ffp-contract=off", "-fno-strict-return",
-                 "-ftrivial-auto-var-init=zero",
+                 "-ftrivial-auto-var-init=zero", *windows,
                  "-include", "port/include/port.h", *include]
     cases = [
         ("devices", [*c_flags, "-Wno-unused-parameter", "port/tests/devices.c", "port/src/devices.c", "port/src/iop.c", "port/src/audio.c", "port/src/midi.c", "port/src/spu2.c", "port/src/cdvd.c", "port/src/overrides.c", "-lm", "port/src/hooks.c", "port/src/mods.c"]),
@@ -60,6 +72,10 @@ def main():
         count = patch.get("count", 1)
         assert count > 0 and header.count(patch["find"]) == count
         path.write_text(header.replace(patch["find"], patch["replace"], count))
+    if WINDOWS:
+        posix_object = str(pathlib.Path(temporary) / "posix.o")
+        subprocess.run([*c_flags, "-c", "port/windows/posix.c", "-o", posix_object], cwd=root, check=True)
+        sdk_libraries.insert(0, posix_object)
     movie_object = str(pathlib.Path(temporary) / "movie_decode.o")
     subprocess.run([*c_flags, "-Wno-unused-parameter", "-c", "port/src/movie_decode.c", "-o", movie_object], cwd=root, check=True)
     cases.append(("movie", [*cpp_flags, "port/tests/movie.cpp", "port/src/movie.cpp", movie_object]))
@@ -89,15 +105,18 @@ def main():
         subprocess.run([cpp_flags[0], "-I" + str(headers), *cpp_flags[1:],
                         "-Iengine/port/include", "-Iengine/port/src", "-ffunction-sections", "-fdata-sections",
                         "-c", "engine/port/src/" + name, "-o", str(target)], cwd=root, check=True)
-        subprocess.run([OBJCOPY, "--weaken", str(target)], cwd=root, check=True)
+        # COFF cannot be weakened; there the first definition wins, and these objects come after the engine's
+        if not WINDOWS:
+            subprocess.run([OBJCOPY, "--weaken", str(target)], cwd=root, check=True)
         collision_objects.append(str(target))
     cases.append(("collision", [cpp_flags[0], "-I" + str(headers), *cpp_flags[1:],
                                 "-ffunction-sections", "-fdata-sections", "port/tests/collision.cpp",
                                 "port/src/collision.cpp", sources["mg_math.cpp"], *collision_objects,
-                                "engine/tools/kazarov/src/cpp/sce/libvu0.cpp", DEAD_STRIP]))
+                                "engine/tools/kazarov/src/cpp/sce/libvu0.cpp", DEAD_STRIP,
+                                *(["-Wl,--allow-multiple-definition"] if WINDOWS else [])]))
     failed = []
     for name, command in cases:
-        binary = pathlib.Path(temporary) / name
+        binary = pathlib.Path(temporary) / (name + EXE)
         try:
             subprocess.run([*command, *sdk_libraries, "-o", str(binary)], cwd=root, check=True)
             subprocess.run([str(binary)], cwd=root, check=True, timeout=15)
@@ -107,16 +126,17 @@ def main():
             failed.append(name)
     math_outputs = []
     for level in ["-O0", "-O2"]:
-        target = pathlib.Path(temporary) / ("math_bits" + level)
+        target = pathlib.Path(temporary) / ("math_bits" + level + EXE)
         subprocess.run([*cpp_flags, *(["-fmath-errno"] if DARWIN else []), level, "-ffunction-sections", "-fdata-sections",
                         "port/tests/math_bits.cpp", "port/src/frame.cpp", "port/src/collision.cpp",
-                        "engine/tools/kazarov/src/cpp/sce/libvu0.cpp", DEAD_STRIP, "-o", str(target)], cwd=root, check=True)
+                        "engine/tools/kazarov/src/cpp/sce/libvu0.cpp", DEAD_STRIP,
+                        *(["-Wl,-Xlink=/force:unresolved"] if WINDOWS else []), "-o", str(target)], cwd=root, check=True)
         result = subprocess.check_output([str(target)], cwd=root, text=True, timeout=15)
         math_outputs.append(result.split()[0])
     if math_outputs[0] != math_outputs[1]:
         raise RuntimeError("optimized matrix, clipping and collision results differ from the O0 build")
     print("math_bits: O0/O2 outputs match", flush=True)
-    movie_test = pathlib.Path(temporary) / "movie_decode"
+    movie_test = pathlib.Path(temporary) / ("movie_decode" + EXE)
     subprocess.run([*c_flags, "-Wno-unused-parameter", *(["-DPORT_MOVIES"] if options.iso else []),
                     "port/tests/movie_decode.c", "port/src/movie_decode.c", "port/src/cdvd.c", "port/src/overrides.c", "port/src/mods.c", "port/src/hooks.c",
                     *sdk_libraries, "-o", str(movie_test)], cwd=root, check=True)

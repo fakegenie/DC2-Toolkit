@@ -10,6 +10,14 @@ typedef struct {
     uint64_t stack_pointer;
     double d8, d9, d10, d11, d12, d13, d14, d15;
 } PortFiber;
+#elif defined(_WIN64)
+typedef struct {
+    uint64_t rbx, rbp, rdi, rsi, r12, r13, r14, r15;
+    uint64_t stack_pointer;
+    uint64_t resume;
+    uint64_t stack_base, stack_limit;
+    uint64_t xmm[20];
+} PortFiber;
 #else
 #include <ucontext.h>
 typedef struct {

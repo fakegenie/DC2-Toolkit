@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Builds the native port for Linux x86-64 or macOS arm64: the engine's units with tools/engine-patches/port.json applied,
+"""Builds the native port for Linux x86-64, macOS arm64 or Windows x64: the engine's units with tools/engine-patches/port.json applied,
 ChronicleTwo's C++ for the MWCC asm (its symbols made weak, so where the engine still has a
 function its own definition is used), and port/src, compiled by clang and linked into
-build/port/darkchronicle, with the shared SDL3 and FFmpeg of tools/port_sdk.py copied into build/port/lib. Every symbol
+build/port/darkchronicle, with the shared SDL3 and FFmpeg of tools/port_sdk.py copied into build/port/lib. On Windows
+llvm-mingw from tools/port_sdk.py links build/port/windows/darkchronicle.exe, with the DLLs beside it. Every symbol
 nothing defines yet becomes a stub that names itself and aborts, and build/port/missing.txt lists them by library.
 
     python3 -I tools/port.py            build
@@ -49,23 +50,36 @@ SDL_CFLAGS = []
 TARGET = []
 LINKER = "clang++"
 DARWIN = sys.platform == "darwin"
+WINDOWS = sys.platform == "win32"
 MACOS_MINIMUM = "13.0"
 PLATFORM_SOURCES = []
 PREFIX = "_" if DARWIN else ""
-OBJCOPY = (shutil.which("llvm-objcopy") or "/opt/homebrew/opt/llvm/bin/llvm-objcopy") if DARWIN else "objcopy"
+OBJCOPY = ((shutil.which("llvm-objcopy") or "/opt/homebrew/opt/llvm/bin/llvm-objcopy") if DARWIN
+           else "llvm-objcopy" if WINDOWS else "objcopy")
 NM = OBJCOPY.replace("objcopy", "nm")
-POSITION = [] if DARWIN else ["-fno-pie", "-fno-pic"]
+CXXFILT = "llvm-cxxfilt" if WINDOWS else "c++filt"
+POSITION = [] if DARWIN or WINDOWS else ["-fno-pie", "-fno-pic"]
 ANDROID_API = 29
+TOOLCHAIN = ROOT / "build" / "port" / "llvm-mingw"
+# the import libraries clang's MinGW driver links, and the names they define (windows_names)
+WINDOWS_IMPORTS = ["gdi32", "comdlg32", "advapi32", "shell32", "user32", "kernel32"]
+WINDOWS_NAMES = set()
 
 UPSTREAM_ASM = ["mg_math.cpp", "collision_asm.cpp", "gameutil_asm.cpp", "mg_drawprim_asm.cpp"]
 FLAGS = [
-    "-O0", "-g", "-pthread", f"-ffile-prefix-map={ROOT}/=", "-DPORT", "-DPAL",
+    "-O0", "-g", "-pthread", f"-ffile-prefix-map={ROOT}{os.sep}=", "-DPORT", "-DPAL",
     "-fms-extensions", "-fno-strict-aliasing", "-fwrapv", "-ffp-contract=off",
     "-fno-strict-return", "-ftrivial-auto-var-init=zero",
     "-Wno-c++11-narrowing", "-Wno-register", "-Wno-return-mismatch", "-w",
+    # MinGW lays bitfields out as MSVC does by default, and the engine's PS2 registers and save data need the GCC
+    # layout; the disc image is larger than a 32-bit off_t
+    *(["-mno-ms-bitfields", "-D_FILE_OFFSET_BITS=64"] if WINDOWS else []),
 ]
-LINK_FLAGS = ["-pthread", *(["-lobjc"] if DARWIN else ["-no-pie", "-static-libstdc++", "-static-libgcc"])]
-RPATHS = ["@executable_path/lib", "@executable_path/../Frameworks"] if DARWIN else ["$ORIGIN/lib"]
+LINK_FLAGS = ["-pthread", *(["-lobjc"] if DARWIN
+                            # a fixed image base, as the non-PIE Linux build has; -mwindows opens no console
+                            else ["-static", "-mwindows", "-Wl,--disable-dynamicbase", "-Wl,--disable-high-entropy-va"]
+                            if WINDOWS else ["-no-pie", "-static-libstdc++", "-static-libgcc"])]
+RPATHS = ["@executable_path/lib", "@executable_path/../Frameworks"] if DARWIN else [] if WINDOWS else ["$ORIGIN/lib"]
 IOS = {
     "simulator": {"sdk": "iphonesimulator", "target": "arm64-apple-ios17.0-simulator", "platform": "iPhoneSimulator"},
     "device": {"sdk": "iphoneos", "target": "arm64-apple-ios17.0", "platform": "iPhoneOS"},
@@ -108,6 +122,24 @@ IOS_FRAMEWORKS = ["AVFoundation", "AudioToolbox", "CoreBluetooth", "CoreGraphics
                   "UniformTypeIdentifiers"]
 IOS_ICONS = {"AppIcon60x60@2x.png": 120, "AppIcon60x60@3x.png": 180, "AppIcon76x76@2x~ipad.png": 152,
              "AppIcon83.5x83.5@2x~ipad.png": 167}
+WINDOWS_MANIFEST = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity type="win32" name="DC2Toolkit.DarkChronicle" version="1.0.0.0"/>
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+    </application>
+  </compatibility>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </windowsSettings>
+  </application>
+</assembly>
+"""
 LOCALISED = {"mainloop": ["MainBuffer"], "eventedit": ["_Z10VectMatMulPfS_PA4_f"]}
 ALIASES = {
     "BuffWorkData__2": "BuffWorkData",
@@ -144,6 +176,9 @@ OPERATORS = {
     **dict.fromkeys([f"_Zd{kind}Pv{size}{rest}" for kind in "la" for size in ("", "m")
                      for rest in ("", "RKSt9nothrow_t", "St11align_val_t", "St11align_val_tRKSt9nothrow_t")], "port_delete"),
 }
+if WINDOWS:
+    # size_t is unsigned long long on Win64, which mangles as y
+    OPERATORS = {re.sub(r"^(_Zn[wa])m|^(_Zd[la]Pv)m", r"\1\2y", name): target for name, target in OPERATORS.items()}
 SPLIT_DATA = {"Vu_progmain", "Vu_prog0", "Vu_prog_sdw", "Vu_prog_3dsp", "Vu_prog_wtr", "My_dma_start0", "_gp"}
 LIBRARIES = [
     ("libgraph", r"^sceGs"), ("libdma", r"^sceDma"), ("libvifpk", r"^sceVif1Pk"), ("libgifpk", r"^sceGifPk"),
@@ -177,7 +212,14 @@ def write_if_changed(path, text):
     if path.exists() and path.read_text(encoding="utf-8") == text:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+    path.write_text(text, encoding="utf-8", newline="\n")
+
+
+def write_bytes_if_changed(path, data):
+    if path.exists() and path.read_bytes() == data:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
 
 
 def copy_engine():
@@ -237,8 +279,11 @@ def compile_one(source, name):
                f"-I{PORT / 'include'}", f"-I{COPY / 'ps2' / 'include'}", f"-I{COPY / 'ps2' / 'include' / 'sce'}",
                *([f"-I{ENGINE / 'port' / 'include'}"] if name.startswith("upstream_") else []),
                f"-I{ENGINE / 'port' / 'src'}", str(source), "-o", str(target)]
-    changes = [f"--localize-symbol={PREFIX}{symbol}" for symbol in LOCALISED.get(name, [])]
-    if name.startswith("upstream_"):
+    # llvm-objcopy cannot localise or weaken COFF symbols: a local symbol is renamed to one nothing else names, and link
+    # puts the upstream objects last instead
+    changes = [f"--redefine-sym={symbol}={symbol}.{name}" if WINDOWS else f"--localize-symbol={PREFIX}{symbol}"
+               for symbol in LOCALISED.get(name, [])]
+    if name.startswith("upstream_") and not WINDOWS:
         changes.append("--weaken")
     if name == "main":
         changes.append(f"--redefine-sym={PREFIX}main={PREFIX}port_game_main")
@@ -285,9 +330,55 @@ def move_elf_data(target):
         subprocess.run([OBJCOPY, *sorted(renames), str(target)], check=True)
 
 
+def coff_name(data, at, strings):
+    """Where the name of a section header or symbol record at `at` is, and the name."""
+    name = data[at:at + 8]
+    if name.startswith(b"//"):
+        alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+        at = strings + sum(alphabet.index(digit) << 6 * place for place, digit in enumerate(reversed(name[2:])))
+    elif name.startswith(b"/"):
+        at = strings + int(name[1:].rstrip(b"\0"))
+    elif name.startswith(b"\0\0\0\0"):
+        at = strings + struct.unpack_from("<I", data, at + 4)[0]
+    else:
+        return at, bytes(name.rstrip(b"\0"))
+    return at, bytes(data[at:data.index(b"\0", at)])
+
+
+def move_coff_data(target):
+    # PE section names are at most 8 characters: .data and .bss, with their $ groups, become gdata and gbss. llvm-objcopy
+    # cannot rename COFF sections, but the new names are as long as the old, so they are written in place, in the
+    # section headers and the section symbols that name them.
+    data = bytearray(target.read_bytes())
+    if struct.unpack_from("<HH", data) == (0, 0xFFFF):
+        count, symbols, symbol_count = struct.unpack_from("<III", data, 44)
+        headers, symbol_size = 56, 20
+    else:
+        count, symbols, symbol_count, optional = struct.unpack_from("<H4xIIH", data, 2)
+        headers, symbol_size = 20 + optional, 18
+    strings = symbols + symbol_count * symbol_size
+    moved = set()
+    for index in range(count):
+        at, name = coff_name(data, headers + index * 40, strings)
+        if any(name == kind or name.startswith(kind + b"$") for kind in (b".data", b".bss")):
+            data[at] = ord("g")
+            moved.add(name)
+    index = 0
+    while index < symbol_count:
+        record = symbols + index * symbol_size
+        at, name = coff_name(data, record, strings)
+        if name in moved and data[record + symbol_size - 2] == 3:
+            data[at] = ord("g")
+        index += 1 + data[record + symbol_size - 1]
+    if moved:
+        target.write_bytes(data)
+
+
 def move_data(target):
     if DARWIN:
         move_mach_data(target)
+    elif WINDOWS:
+        move_coff_data(target)
     else:
         move_elf_data(target)
 
@@ -307,6 +398,13 @@ def compile_command(source, target, depfile, command_file, command, changes, ope
         for old, new in OPERATORS.items():
             if f"{PREFIX}{old}" in used:
                 subprocess.run([OBJCOPY, f"--redefine-sym={PREFIX}{old}={PREFIX}{new}", str(target)], check=True)
+    if WINDOWS and not source.is_relative_to(PORT / "windows"):
+        # the PS2 kernel's CreateThread, GetThreadId and TerminateThread are Windows functions too: in our objects they
+        # are renamed, so they never meet Windows' and the static runtime never calls the port's
+        names = set(subprocess.run([NM, "-j", str(target)], capture_output=True, text=True, check=True).stdout.split())
+        clashes = sorted(names & WINDOWS_NAMES)
+        if clashes:
+            subprocess.run([OBJCOPY, *(f"--redefine-sym={name}=ps2_{name}" for name in clashes), str(target)], check=True)
     if game:
         move_data(target)
     command_file.write_text(signature, encoding="utf-8")
@@ -356,13 +454,26 @@ def build_id(inputs, binary):
     return target
 
 
+def windows_names():
+    libraries = [str(TOOLCHAIN / "x86_64-w64-mingw32" / "lib" / f"lib{name}.a") for name in WINDOWS_IMPORTS]
+    listing = subprocess.run([NM, "--defined-only", "-j", *libraries], capture_output=True, text=True, check=True).stdout
+    return {name for name in listing.split() if not name.endswith(":") and not name.startswith(("@", "__imp_"))}
+
+
 def link(objects, extra, binary):
+    inputs = [*objects, *extra]
     if DARWIN:
         platform = [f"-Wl,-alias,_{target},_{alias}" for alias, target in ALIASES.items()]
+    elif WINDOWS:
+        # lld's MinGW driver has no --defsym; lld-link's /alternatename resolves the alias to the target. COFF has no
+        # weak definitions to make, and an inline function's COMDAT copy clashes with its out-of-line definition, which
+        # ELF lets win: duplicates are allowed, the first wins, and the upstream objects come last, as if they were weak.
+        platform = ["-Wl,--no-demangle", "-Wl,--allow-multiple-definition",
+                    *(f"-Wl,-Xlink=/alternatename:{alias}={target}" for alias, target in ALIASES.items())]
+        inputs.sort(key=lambda path: path.stem.startswith("upstream_"))
     else:
         platform = ["-Wl,--no-demangle", *(f"-Wl,--defsym={alias}={target}" for alias, target in ALIASES.items())]
     fresh = binary.with_name(binary.name + ".linking")
-    inputs = [*objects, *extra]
     command = [LINKER, *TARGET, "-o", str(fresh), *map(str, inputs), str(build_id(inputs, binary)), *platform, *LINK_FLAGS]
     result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode == 0:
@@ -383,7 +494,7 @@ def undefined(link_errors, objects):
 def demangled(names):
     if not names:
         return {}
-    result = subprocess.run(["c++filt"], input="\n".join(names), capture_output=True, text=True, check=True)
+    result = subprocess.run([CXXFILT], input="\n".join(names), capture_output=True, text=True, check=True)
     return dict(zip(names, result.stdout.splitlines()))
 
 
@@ -419,9 +530,13 @@ def write_missing(names, readable):
 
 def sdk_flags(prefix, movies):
     packages = ["sdl3", *(["libavcodec", "libavutil"] if movies else [])]
+    if (prefix / "include/SDL3/SDL.h").exists() and WINDOWS:
+        # by path: -static has -l find only static libraries, not the DLLs' import libraries
+        names = ["SDL3", *(["avcodec", "avutil"] if movies else [])]
+        return [f"-I{prefix / 'include'}"], [str(prefix / "lib" / f"lib{name}.dll.a") for name in names]
     if (prefix / "include/SDL3/SDL.h").exists():
         libraries = ["-lSDL3", *(["-lavcodec", "-lavutil"] if movies else [])]
-        rpaths = [*(f"-Wl,-rpath,{path}" for path in RPATHS), *([] if DARWIN else ["-Wl,--disable-new-dtags"])]
+        rpaths = [*(f"-Wl,-rpath,{path}" for path in RPATHS), *([] if DARWIN or WINDOWS else ["-Wl,--disable-new-dtags"])]
         return [f"-I{prefix / 'include'}"], [f"-L{prefix / 'lib'}", *rpaths, *libraries]
     try:
         cflags = subprocess.check_output(["pkg-config", "--cflags", *packages], text=True)
@@ -432,11 +547,32 @@ def sdk_flags(prefix, movies):
 
 
 def copy_libraries(prefix):
+    if WINDOWS:
+        OUT.mkdir(parents=True, exist_ok=True)
+        for library in sorted((prefix / "bin").glob("*.dll")):
+            shutil.copy2(library, OUT / library.name)
+        return
     folder = OUT / "lib"
     shutil.rmtree(folder, ignore_errors=True)
     folder.mkdir(parents=True)
     for library in sorted((prefix / "lib").glob("*.dylib" if DARWIN else "*.so*")):
         shutil.copy2(library, folder / library.name, follow_symlinks=False)
+
+
+def windows_resources():
+    """The icon and a manifest that makes the C runtime's char paths UTF-8, as SDL's are, and the window DPI aware."""
+    folder = OBJ / "resources"
+    folder.mkdir(parents=True, exist_ok=True)
+    png = (PORT / "launcher" / "icon.png").read_bytes()
+    # an .ico of one PNG image; 0 by 0 stands for 256 pixels or more
+    write_bytes_if_changed(folder / "icon.ico", struct.pack("<HHHBBBBHHII", 0, 1, 1, 0, 0, 0, 0, 1, 32, len(png), 22) + png)
+    write_if_changed(folder / "darkchronicle.manifest", WINDOWS_MANIFEST)
+    write_if_changed(folder / "darkchronicle.rc", '1 ICON "icon.ico"\n1 24 "darkchronicle.manifest"\n')
+    target = OBJ / "resources.o"
+    sources = [folder / name for name in ("icon.ico", "darkchronicle.manifest", "darkchronicle.rc")]
+    if not target.exists() or any(source.stat().st_mtime > target.stat().st_mtime for source in sources):
+        subprocess.run(["llvm-windres", "-I", str(folder), str(folder / "darkchronicle.rc"), "-o", str(target)], check=True)
+    return target
 
 
 def ios_flags(kind):
@@ -574,7 +710,8 @@ def main():
     parser.add_argument("--movies", action="store_true", help="enable MPEG-2 movies with the local FFmpeg SDK")
     parser.add_argument("--debug", action="store_true", help="also link the debug build with its window and API")
     parser.add_argument("--mod", type=Path, action="append", default=[], help="a mod folder whose port code goes into the binaries")
-    parser.add_argument("--sdk", type=Path, default=OUT / "sdk", help="the prefix tools/port_sdk.py installed SDL3 and FFmpeg in")
+    parser.add_argument("--sdk", type=Path, default=OUT / ("windows-sdk" if WINDOWS else "sdk"),
+                        help="the prefix tools/port_sdk.py installed SDL3 and FFmpeg in")
     parser.add_argument("--ios", choices=sorted(IOS), help="build DarkChronicle.app for the iOS simulator or an iPhone")
     parser.add_argument("--bundle-id", default="dc2toolkit.darkchronicle", help="the iOS app's bundle identifier")
     parser.add_argument("--android", action="store_true", help="build libmain.so for arm64 Android")
@@ -597,6 +734,21 @@ def main():
         cflags, libraries = android_flags()
         PLATFORM_SOURCES.extend(sorted((PORT / "android").glob("*.c")))
         FLAGS.append("-DPORT_MOVIES")
+    elif WINDOWS:
+        if not (TOOLCHAIN / "bin" / "clang.exe").exists():
+            sys.exit("llvm-mingw missing: run python -I tools/port_sdk.py")
+        if options.debug:
+            sys.exit("the debug build does not run on Windows yet")
+        os.environ["PATH"] = f"{TOOLCHAIN / 'bin'}{os.pathsep}{os.environ['PATH']}"
+        WINDOWS_NAMES.update(windows_names())
+        OUT = ROOT / "build" / "port" / "windows"
+        OBJ = OUT / "obj"
+        BINARY = OUT / "darkchronicle.exe"
+        PLATFORM_SOURCES.extend(sorted((PORT / "windows").glob("*.c")))
+        if options.movies:
+            FLAGS.append("-DPORT_MOVIES")
+        cflags, libraries = sdk_flags(options.sdk.resolve(), options.movies)
+        copy_libraries(options.sdk.resolve())
     else:
         if DARWIN:
             TARGET.append(f"-mmacosx-version-min={MACOS_MINIMUM}")
@@ -615,6 +767,8 @@ def main():
     every, units, others = compile_all(copy_engine(), options.debug, [mod.resolve() for mod in options.mod])
     debug_objects = [path for path in every if path.stem.startswith(("mod_dc2tk_debug_tools_", "imgui_"))]
     objects = [path for path in every if path not in debug_objects]
+    if WINDOWS:
+        objects.append(windows_resources())
     first = link(objects, [], BINARY)
     names = undefined(first.stderr, objects)
     if first.returncode != 0 and not names:

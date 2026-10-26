@@ -126,12 +126,18 @@ def main():
     spec = importlib.util.spec_from_file_location('port_build', root / 'tools/port.py')
     port = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(port)
-    with tempfile.TemporaryDirectory() as temporary:
+    windows = sys.platform == 'win32'
+    # on Windows the loaded library cannot be deleted while it is loaded
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=windows) as temporary:
         folder = pathlib.Path(temporary)
-        library = folder / 'cdvd.so'
-        sdk = root / 'build/port/sdk'
+        library = folder / ('cdvd.dll' if windows else 'cdvd.so')
+        sdk = root / ('build/port/windows-sdk' if windows else 'build/port/sdk')
         cflags, libraries = port.sdk_flags(sdk, False)
-        subprocess.run(['clang', '-std=c11', '-Wall', '-Wextra', '-Werror', '-shared', '-fPIC', '-I' + str(root / 'port/include'), '-I' + str(headers), '-I' + str(headers / 'sce'), *cflags, str(root / 'port/src/cdvd.c'), str(root / 'port/src/overrides.c'), str(root / 'port/src/mods.c'), str(root / 'port/src/split_data.c'), str(root / 'port/src/hooks.c'), *libraries, '-Wl,-rpath,' + str(sdk / 'lib'), '-o', str(library)], check=True)
+        platform = ([str(root / 'port/windows/posix.c'), '-mno-ms-bitfields', '-D_FILE_OFFSET_BITS=64'] if windows
+                    else ['-Wl,-rpath,' + str(sdk / 'lib')])
+        subprocess.run(['clang', '-std=c11', '-Wall', '-Wextra', '-Werror', '-shared', '-fPIC', '-I' + str(root / 'port/include'), '-I' + str(headers), '-I' + str(headers / 'sce'), *cflags, str(root / 'port/src/cdvd.c'), str(root / 'port/src/overrides.c'), str(root / 'port/src/mods.c'), str(root / 'port/src/split_data.c'), str(root / 'port/src/hooks.c'), *libraries, *platform, '-o', str(library)], check=True)
+        if windows:
+            os.add_dll_directory(str(sdk / 'bin'))
         os.environ['DC2TK_OVERRIDES'] = str(folder / 'overrides')
         iso = folder / 'test.iso'
         iso.write_bytes(image())
