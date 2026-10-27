@@ -848,11 +848,35 @@ pixels (512 is 4:3) while the game's 512-wide layout stays as it was, centred in
 
 Left to do:
 
-1. **Effects in the side areas:** depth of field, heat haze, water refraction, outlines, the
-   photo camera and cross-fades act on the middle only.
-2. **The HUD** stays in the middle; anchoring the edge pieces (health, minimap) to the sides.
-3. **Content limits:** cutscenes framed for 4:3 may show scenery or actors off camera; movies
-   stay 4:3.
+1. **Effects in the side areas:** depth of field, heat haze and water refraction act on the
+   middle only. Done for the rest:
+   - outlines already covered the sides (`COutLineDraw` and `GetDrawRect` use the wide width): a
+     woman in the left side area of Polly's Bakery has the same edge as the baker in the middle;
+   - the photo camera shows 4:3 while it is up (`port_town_shows_world` and
+     `port_dungeon_shows_world` are false under `NowTakePhoto()`), as the photo is a 64x64
+     thumbnail of the middle kept in the save, so the viewfinder shows what is taken;
+   - cross-fades store the whole wide frame: `cross_f` and `capture` are entered
+     `port_wide_width()` wide, their pixels go to buffers of the port's own
+     (`port_cross_image`), as the engine's spare buffers hold only 512 x 480, and
+     `port_store_screen` reads the frame around the middle; `DivSpriteScreen` and the wipes read
+     the wide image, where they smeared the edge pixels over the sides;
+   - the event sepia stores and draws the whole frame the same way (`port_sepia_image`);
+   - event screen sprites: an untextured full-screen sprite (the black of a title card) reaches
+     the edges, and a textured one that covers the 512 x 416 still area (the drawings of event
+     207, the Griffon picture) gets black bars beside it that fade with it
+     (`port_screen_bars`).
+   Left: the event movie's black backing and the mono flash have no case to test and stay in
+   the middle.
+2. **The HUD:** done. `port_hud` spreads `DrawStatusBord` and `WarningGage2` (health, weapons),
+   the small minimap (its scissor moves with it; the large map stays centred), the boss gauge at
+   the bottom left (`boss_life_gage`) and the town's Georama icon and balance bars
+   (`DrawEditSystem`). Left in the middle by design: message windows, level-up and damage
+   numbers, and the floor title.
+3. **Content limits:** checked at 16:9 in events 11030 (the pump room) and 11100 (the
+   floor 7 boss intro) in the Underground Water Channel, 12080 (the Dwarves' house) in
+   Sindain, 11091 (the mayor's office) and 207 (the station): no actor pops in or out at the
+   sides and the scenery reaches the edges, so event cameras stay wide. A fixed camera in a
+   small interior (Polly's Bakery) shows black past the room's walls. Movies stay 4:3.
 
 ### 144 fps
 

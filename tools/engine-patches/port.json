@@ -1037,7 +1037,7 @@
   {
     "file": "ps2/src/editloop.cpp",
     "find": "static int LoopMode;",
-    "replace": "static int LoopMode;\n\nextern \"C\" int port_town_shows_world(void) {\n    return LoopMode == EDIT_LOOP_WALK || LoopMode == EDIT_LOOP_EDIT || LoopMode == EDIT_LOOP_WAIT_READ;\n}"
+    "replace": "static int LoopMode;\n\nint NowTakePhoto();\n\nextern \"C\" int port_town_shows_world(void) {\n    return (LoopMode == EDIT_LOOP_WALK || LoopMode == EDIT_LOOP_EDIT || LoopMode == EDIT_LOOP_WAIT_READ) && !NowTakePhoto();\n}"
   },
   {
     "file": "ps2/src/mainloop.cpp",
@@ -1047,12 +1047,12 @@
   {
     "file": "ps2/src/effectlist.cpp",
     "find": "    for (x = 0; x < mgScreenWidth; x += 64) {\n        for (y = 0; y < mgScreenHeight; y += 32) {\n            *(u_long128 *) vertex = *(u_long128 *) offset;\n            uv[0] = x * 16;\n            uv[1] = y * 16;\n            prim.Data(uv);\n            vertex[0] = uv[0] + offset[0];\n            vertex[1] = uv[1] + offset[1];\n            prim.Data(vertex);\n            uv[0] = (x + 64) * 16;\n            uv[1] = (y + 32) * 16;\n            prim.Data(uv);\n            vertex[0] = uv[0] + offset[0];\n            vertex[1] = uv[1] + offset[1];\n            prim.Data(vertex);\n        }\n    }",
-    "replace": "    int side = (port_screen_width() - mgScreenWidth) / 2;\n\n    for (x = -side; x < mgScreenWidth + side; x += 64) {\n        for (y = 0; y < mgScreenHeight; y += 32) {\n            *(u_long128 *) vertex = *(u_long128 *) offset;\n            uv[0] = (x < 0 ? 0 : x > mgScreenWidth ? mgScreenWidth : x) * 16;\n            uv[1] = y * 16;\n            prim.Data(uv);\n            vertex[0] = x * 16 + offset[0];\n            vertex[1] = uv[1] + offset[1];\n            prim.Data(vertex);\n            uv[0] = (x + 64 < 0 ? 0 : x + 64 > mgScreenWidth ? mgScreenWidth : x + 64) * 16;\n            uv[1] = (y + 32) * 16;\n            prim.Data(uv);\n            vertex[0] = (x + 64) * 16 + offset[0];\n            vertex[1] = uv[1] + offset[1];\n            prim.Data(vertex);\n        }\n    }"
+    "replace": "    int side = (port_screen_width() - mgScreenWidth) / 2;\n    int texture_side = (port_wide_width() - mgScreenWidth) / 2;\n\n    for (x = -side; x < mgScreenWidth + side; x += 64) {\n        for (y = 0; y < mgScreenHeight; y += 32) {\n            *(u_long128 *) vertex = *(u_long128 *) offset;\n            uv[0] = (x + texture_side) * 16;\n            uv[1] = y * 16;\n            prim.Data(uv);\n            vertex[0] = x * 16 + offset[0];\n            vertex[1] = uv[1] + offset[1];\n            prim.Data(vertex);\n            uv[0] = (x + 64 + texture_side) * 16;\n            uv[1] = (y + 32) * 16;\n            prim.Data(uv);\n            vertex[0] = (x + 64) * 16 + offset[0];\n            vertex[1] = uv[1] + offset[1];\n            prim.Data(vertex);\n        }\n    }"
   },
   {
     "file": "ps2/src/dng_main.cpp",
     "find": "DNG_STATUS            DngStatus;",
-    "replace": "DNG_STATUS            DngStatus;\n\nextern \"C\" int port_dungeon_shows_world(void) {\n    return DngStatus.mode == DNG_STATUS_FIELD || DngStatus.mode == DNG_STATUS_EVENT || DngStatus.mode == DNG_STATUS_EXIT;\n}"
+    "replace": "DNG_STATUS            DngStatus;\n\nextern \"C\" int port_dungeon_shows_world(void) {\n    return (DngStatus.mode == DNG_STATUS_FIELD || DngStatus.mode == DNG_STATUS_EVENT || DngStatus.mode == DNG_STATUS_EXIT) && !NowTakePhoto();\n}"
   },
   {
     "file": "ps2/src/mainloop.cpp",
@@ -1893,5 +1893,96 @@
     "file": "ps2/src/password.cpp",
     "find": "printf(\"err %lu\\n\", packed.value);",
     "replace": "printf(\"err %llu\\n\", packed.value);"
+  },
+  {
+    "file": "ps2/src/editloop.cpp",
+    "find": "cross_texture = textures->EnterTexture(213, \"cross_f\", NULL, mgScreenWidth, mgScreenHeight, 32, NULL, 0, 0);",
+    "replace": "cross_texture = textures->EnterTexture(213, \"cross_f\", NULL, port_wide_width(), mgScreenHeight, 32, NULL, 0, 0);"
+  },
+  {
+    "file": "ps2/src/editloop.cpp",
+    "find": "    CrossFadeBuff = read_buffer + 131072;",
+    "replace": "    CrossFadeBuff = port_cross_image(read_buffer + 131072);"
+  },
+  {
+    "file": "ps2/src/maintex.cpp",
+    "find": "mgTexManager.EnterTexture(0x65, \"capture\", NULL, mgScreenWidth, mgScreenHeight, mgScreenDepth, NULL, 0, 0);",
+    "replace": "mgTexManager.EnterTexture(0x65, \"capture\", NULL, port_wide_width(), mgScreenHeight, mgScreenDepth, NULL, 0, 0);"
+  },
+  {
+    "file": "ps2/src/maintex.cpp",
+    "find": "scene->fade.SetCrossTexture(mgTexManager.GetTexture(\"capture\", -1), BuffReadData + 0x20000);",
+    "replace": "scene->fade.SetCrossTexture(mgTexManager.GetTexture(\"capture\", -1), port_cross_image(BuffReadData + 0x20000));"
+  },
+  {
+    "file": "ps2/src/effectlist.cpp",
+    "find": "    mgStoreImage(&back_buffer, cross_texture->image[0]);",
+    "replace": "    port_store_screen(&back_buffer, cross_texture->width, cross_texture->image[0]);"
+  },
+  {
+    "file": "ps2/src/effectlist.cpp",
+    "find": "        vertex[0] = uv[0] + offset[0];",
+    "replace": "        vertex[0] = uv[0] + offset[0] - (port_wide_width() - mgScreenWidth) * 8;",
+    "count": 2
+  },
+  {
+    "file": "ps2/src/effectlist.cpp",
+    "find": "fptosi((alpha / 128.0f) * (float) mgScreenWidth), 0);",
+    "replace": "fptosi((alpha / 128.0f) * (float) port_wide_width()), 0);"
+  },
+  {
+    "file": "ps2/src/effectlist.cpp",
+    "find": "                        int width = mgScreenWidth;",
+    "replace": "                        int width = port_wide_width();"
+  },
+  {
+    "file": "ps2/src/dng_main.cpp",
+    "find": "            AutoMapGen.mini_map.Draw(pos);",
+    "replace": "            port_hud(config->map == SV_CONFIG_MAP_SMALL);\n            AutoMapGen.mini_map.Draw(pos);"
+  },
+  {
+    "file": "ps2/src/dng_main.cpp",
+    "find": "            AutoMapGen.mini_map.DrawSymbol_Chara(MainChara__2);",
+    "replace": "            AutoMapGen.mini_map.DrawSymbol_Chara(MainChara__2);\n            port_hud(0);"
+  },
+  {
+    "file": "ps2/src/editloop.cpp",
+    "find": "        DrawEditSystem(0xA3, MainScene, system_pos, LoopMode == EDIT_LOOP_EDIT);",
+    "replace": "        port_hud(1);\n        DrawEditSystem(0xA3, MainScene, system_pos, LoopMode == EDIT_LOOP_EDIT);\n        port_hud(0);"
+  },
+  {
+    "file": "ps2/src/eventsprite.cpp",
+    "find": "                } else {\n                    prim.Color(color);\n                    prim.Vertex(pos[0] - width, pos[1] - height, 0.0f);\n                    prim.Vertex(pos[0] + width, pos[1] + height, 0.0f);",
+    "replace": "                } else {\n                    prim.Color(color);\n                    prim.Vertex(port_screen_left(pos[0] - width), pos[1] - height, 0.0f);\n                    prim.Vertex(port_screen_right(pos[0] + width), pos[1] + height, 0.0f);"
+  },
+  {
+    "file": "ps2/src/eventsprite.cpp",
+    "find": "            prim.End();\n            break;\n        case EVENT_SPRITE2_TYPE_WORLD:",
+    "replace": "            prim.End();\n            port_screen_bars(texture != NULL && rot_z == 0.0f, pos[0] - width, pos[1] - height, pos[0] + width, pos[1] + height, color[3], alpha_blend);\n            break;\n        case EVENT_SPRITE2_TYPE_WORLD:"
+  },
+  {
+    "file": "ps2/src/event_func.cpp",
+    "find": "                                          block_no, \"event sepia\", NULL, mgScreenWidth,\n                                          mgScreenHeight, mgScreenDepth, 0, 0LL, 0),\n                                      buffer);",
+    "replace": "                                          block_no, \"event sepia\", NULL, port_wide_width(),\n                                          mgScreenHeight, mgScreenDepth, 0, 0LL, 0),\n                                      port_sepia_image(buffer));"
+  },
+  {
+    "file": "ps2/src/event_func.cpp",
+    "find": "    mgStoreImage(&screen, sepia_texture->image[0]);\n    u_char *pixels = (u_char *) sepia_texture->image[0];\n\n    for (int i = 0; i < mgScreenHeight * mgScreenWidth * 4; i += 4) {",
+    "replace": "    port_store_screen(&screen, sepia_texture->width, sepia_texture->image[0]);\n    u_char *pixels = (u_char *) sepia_texture->image[0];\n\n    for (int i = 0; i < mgScreenHeight * sepia_texture->width * 4; i += 4) {"
+  },
+  {
+    "file": "ps2/src/event_func.cpp",
+    "find": "        sepia_prim.TextureCrd(0, 0);\n        sepia_prim.Vertex(-1, -1, 0);\n        sepia_prim.TextureCrd(mgScreenWidth, mgScreenHeight);\n        sepia_prim.Vertex(mgScreenWidth, mgScreenHeight, 0);",
+    "replace": "        int sepia_side = (port_screen_width() - mgScreenWidth) / 2;\n        int sepia_left = (sepia_texture->width - mgScreenWidth) / 2 - sepia_side;\n        sepia_prim.TextureCrd(sepia_left, 0);\n        sepia_prim.Vertex(-1 - sepia_side, -1, 0);\n        sepia_prim.TextureCrd(sepia_left + mgScreenWidth + 2 * sepia_side, mgScreenHeight);\n        sepia_prim.Vertex(mgScreenWidth + sepia_side, mgScreenHeight, 0);"
+  },
+  {
+    "file": "ps2/include/mglib.hpp",
+    "find": "extern int mgScreenHeight;",
+    "replace": "extern int mgScreenHeight;\nextern \"C\" u_long128 *port_cross_image(u_long128 *buffer);\nextern \"C\" u_long128 *port_sepia_image(u_long128 *buffer);\nextern \"C\" void port_store_screen(mgCTexture *screen, int width, u_long128 *buffer);\nextern \"C\" float port_screen_left(float x);\nextern \"C\" float port_screen_right(float x);\nextern \"C\" void port_screen_bars(int textured, float left, float top, float right, float bottom, int alpha, int blend);"
+  },
+  {
+    "file": "ps2/src/monster.cpp",
+    "find": "        boss_life_gage.Draw(0);",
+    "replace": "        port_hud(1);\n        boss_life_gage.Draw(0);\n        port_hud(0);"
   }
 ]
