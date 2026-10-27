@@ -113,6 +113,7 @@ typedef struct {
     int pair;
     int shadow;
     int follow;
+    int sprite;
     uint32_t copy;
     int moving;
     int target;
@@ -131,6 +132,7 @@ enum { STEP_PASS, STEP_COPY, STEP_BLIT };
 #define ATTACH_REACH 400.0f
 #define EXACT_FRACTION 1e-6f
 #define SCREEN_WEIGHT 1e-7f
+#define SPRITE_REACH 40.0f
 
 static void forget_recordings(void);
 static void multiply(float *out, const float *a, const float *b);
@@ -159,7 +161,17 @@ typedef struct {
 typedef struct {
     RenderScreenMapping mapping;
     float depth;
+    float view[16];
+    float slide[2];
 } RenderFollow;
+
+typedef struct {
+    uint64_t key;
+    float place[3];
+    int follow;
+    uint32_t copy;
+    int match;
+} SpriteRecord;
 
 typedef struct {
     const void *key;
@@ -213,6 +225,9 @@ typedef struct {
     RenderFollow *follows;
     int follow_count;
     int follow_capacity;
+    SpriteRecord *sprites;
+    int sprite_count;
+    int sprite_capacity;
     float eye[3];
     float pose[9];
     float view[16];
@@ -355,6 +370,7 @@ static ShadowPoint *point_data;
 static const ShadowPoint *shadow_points;
 static int drawing_shadow = -1;
 static int drawing_follow = -1;
+static int drawing_sprite = -1;
 static uint32_t vertex_used;
 static uint32_t vertex_flushed;
 static int vertex_cycle;
@@ -1105,7 +1121,8 @@ static void record_pass(const Texture *target, int depth, SDL_GPULoadOp color_lo
         const Command *command = &list[i];
         Command *kept = &frame->commands[frame->command_count++];
         *kept = *command;
-        kept->signature = command->model < 0 && !command->resident && command->shadow < 0 && !textures[command->texture].target
+        kept->signature = command->model < 0 && !command->resident && command->shadow < 0 && command->follow < 0 &&
+                                  !textures[command->texture].target
                               ? draw_signature(command, target->color)
                               : 0;
         kept->pair = -1;
@@ -1134,6 +1151,8 @@ static void record_pass(const Texture *target, int depth, SDL_GPULoadOp color_lo
             kept->copy = start;
             frame->vertex_used = start + bytes;
             if (command->shadow >= 0 && !keep_points(frame, kept, command)) kept->shadow = -1;
+            for (int k = 0; command->sprite >= 0 && k * 6 < kept->count && command->sprite + k < frame->sprite_count; ++k)
+                frame->sprites[command->sprite + k].copy = start + (uint32_t)(k * 6) * sizeof(RenderVertex);
         }
         if (command->model >= 0) record_model(frame, kept, command, target->width << 12 | target->height);
     }
@@ -1820,6 +1839,7 @@ static int prepare(Command *command, const RenderState *state, PipelineKey key) 
     command->model = -1;
     command->shadow = -1;
     command->follow = -1;
+    command->sprite = -1;
     Texture *target = &textures[bound];
     int x0 = state->scissor.left < 0 ? 0 : state->scissor.left;
     int y0 = state->scissor.top < 0 ? 0 : state->scissor.top;
@@ -1953,11 +1973,13 @@ static void submit(const RenderState *state, int topology, const RenderVertex *v
     }
     command.shadow = drawing_shadow;
     command.follow = drawing_follow;
+    command.sprite = drawing_sprite;
     if (drawing_shadow >= 0)
         memcpy(point_data + command.offset / sizeof(RenderVertex), shadow_points, (size_t)count * sizeof *point_data);
     Command *last = pending_count ? &pending[pending_count - 1] : NULL;
     int merged = last && last->target == command.target && last->model < 0 && last->offset + (uint32_t)last->count * sizeof(RenderVertex) == command.offset &&
                  last->shadow == command.shadow && last->follow == command.follow &&
+                 (command.sprite < 0 ? last->sprite < 0 : last->sprite >= 0 && last->sprite + last->count / 6 == command.sprite) &&
                  last->key.value == command.key.value && last->texture == command.texture && last->color == command.color &&
                  last->destination == command.destination &&
                  last->sampler == command.sampler &&
@@ -2052,20 +2074,41 @@ int render_shadow_setup(const void *key, const float *world, const float *camera
     return frame->shadow_count++;
 }
 
-void render_sprite(const RenderState *state, const RenderVertex *vertices, int count, const RenderScreenMapping *mapping,
-                   float depth) {
+static int find_follow(const RenderScreenMapping *mapping, float depth, const float *view, float slide_x, float slide_y) {
+    if (!smoothing) return -1;
     Recording *frame = &recordings[recording_slot];
-    int follow = -1;
-    if (smoothing) {
-        RenderFollow wanted = {*mapping, depth};
-        int last = frame->follow_count - 1;
-        if (last >= 0 && !memcmp(&frame->follows[last], &wanted, sizeof wanted)) follow = last;
-        else if (grow((void **)&frame->follows, &frame->follow_capacity, frame->follow_count + 1, sizeof *frame->follows)) {
-            frame->follows[frame->follow_count] = wanted;
-            follow = frame->follow_count++;
-        }
+    RenderFollow wanted = {*mapping, depth, {0.0f}, {slide_x, slide_y}};
+    if (view) memcpy(wanted.view, view, sizeof wanted.view);
+    int last = frame->follow_count - 1;
+    if (last >= 0 && !memcmp(&frame->follows[last], &wanted, sizeof wanted)) return last;
+    if (!grow((void **)&frame->follows, &frame->follow_capacity, frame->follow_count + 1, sizeof *frame->follows)) return -1;
+    frame->follows[frame->follow_count] = wanted;
+    return frame->follow_count++;
+}
+
+void render_sprite(const RenderState *state, const RenderVertex *vertices, const RenderScreenMapping *mapping, float depth,
+                   const float *view, const void *key, const float *place) {
+    Recording *frame = &recordings[recording_slot];
+    drawing_follow = find_follow(mapping, depth, view, 0.0f, 0.0f);
+    if (drawing_follow >= 0 &&
+        grow((void **)&frame->sprites, &frame->sprite_capacity, frame->sprite_count + 1, sizeof *frame->sprites)) {
+        SpriteRecord *sprite = &frame->sprites[frame->sprite_count];
+        sprite->key = ((uint64_t)(uintptr_t)key * 0x9e3779b97f4a7c15ull ^ (uint64_t)(uint32_t)state->texture) | 1;
+        memcpy(sprite->place, place, sizeof sprite->place);
+        sprite->follow = drawing_follow;
+        sprite->copy = UINT32_MAX;
+        sprite->match = -1;
+        drawing_sprite = frame->sprite_count++;
     }
-    drawing_follow = follow;
+    render_draw(state, RENDER_TRIANGLES, vertices, 6);
+    drawing_follow = -1;
+    drawing_sprite = -1;
+}
+
+void render_water(const RenderState *state, const RenderVertex *vertices, int count, const RenderScreenMapping *mapping,
+                  float depth) {
+    const Texture *texture = &textures[state->texture];
+    drawing_follow = find_follow(mapping, depth, NULL, 1.0f / (float)texture->width, 1.0f / (float)texture->height);
     render_draw(state, RENDER_TRIANGLES, vertices, count);
     drawing_follow = -1;
 }
@@ -2600,6 +2643,7 @@ static void start_recording(Recording *frame) {
     frame->shape_count = 0;
     frame->prism_count = 0;
     frame->follow_count = 0;
+    frame->sprite_count = 0;
     frame->bone_count = 0;
     if (grow((void **)&frame->bones, &frame->bone_capacity, 1, sizeof *frame->bones)) {
         memset(frame->bones[0], 0, sizeof frame->bones[0]);
@@ -2815,6 +2859,52 @@ static void match_shadows(void) {
     for (int i = 0; i < frame->shadow_count; ++i) frame->shadows_matched += frame->shadows[i].match >= 0;
 }
 
+static void match_sprites(void) {
+    static int *table;
+    static int table_capacity;
+    static int *heads;
+    static int heads_capacity;
+    static int *chain;
+    static int chain_capacity;
+    Recording *frame = &recordings[shown_slot], *before = &recordings[previous_slot];
+    for (int i = 0; i < frame->sprite_count; ++i) frame->sprites[i].match = -1;
+    if (!before->valid || !before->sprite_count || !frame->sprite_count || camera_cut(frame, before)) return;
+    int size = 1;
+    while (size < before->sprite_count * 2) size *= 2;
+    if (!grow((void **)&table, &table_capacity, size, sizeof *table) ||
+        !grow((void **)&heads, &heads_capacity, size, sizeof *heads) ||
+        !grow((void **)&chain, &chain_capacity, before->sprite_count, sizeof *chain))
+        return;
+    for (int i = 0; i < size; ++i) table[i] = heads[i] = -1;
+    for (int i = before->sprite_count - 1; i >= 0; --i) {
+        uint64_t key = before->sprites[i].key;
+        uint32_t slot = (uint32_t)(key * 0x9e3779b97f4a7c15ull >> 40) & (uint32_t)(size - 1);
+        while (table[slot] >= 0 && before->sprites[table[slot]].key != key) slot = (slot + 1) & (uint32_t)(size - 1);
+        table[slot] = i;
+        chain[i] = heads[slot];
+        heads[slot] = i;
+    }
+    for (int i = 0; i < frame->sprite_count; ++i) {
+        SpriteRecord *sprite = &frame->sprites[i];
+        uint32_t slot = (uint32_t)(sprite->key * 0x9e3779b97f4a7c15ull >> 40) & (uint32_t)(size - 1);
+        while (table[slot] >= 0 && before->sprites[table[slot]].key != sprite->key) slot = (slot + 1) & (uint32_t)(size - 1);
+        float best = SPRITE_REACH;
+        int chosen = -1, *link = &heads[slot], *chosen_link = NULL;
+        for (int found = *link; found >= 0; link = &chain[found], found = *link) {
+            const float *was = before->sprites[found].place;
+            float apart = 0.0f;
+            for (int j = 0; j < 3; ++j) apart = fmaxf(apart, fabsf(was[j] - sprite->place[j]));
+            if (apart >= best) continue;
+            best = apart;
+            chosen = found;
+            chosen_link = link;
+        }
+        if (chosen < 0) continue;
+        *chosen_link = chain[chosen];
+        sprite->match = chosen;
+    }
+}
+
 static void bone_matrix(float *out, const RenderBone *bone) {
     for (int c = 0; c < 3; ++c) {
         for (int k = 0; k < 3; ++k) out[c * 4 + k] = bone->rows[k][c];
@@ -2887,6 +2977,7 @@ static void finish_recording(int target, int width, int height) {
     match_models();
     match_draws();
     match_shadows();
+    match_sprites();
     attach_shadows();
     layout_moving(&recordings[shown_slot]);
     replay_uploaded = 0;
@@ -3109,24 +3200,101 @@ static void blend_shadows(unsigned char *mapped, const Recording *frame, const R
         }
 }
 
-static void follow_camera(unsigned char *mapped, const Recording *frame, const float *shift) {
+static void unmap_vertex(float *out, const RenderVertex *vertex, const RenderFollow *follow) {
+    const RenderScreenMapping *mapping = &follow->mapping;
+    out[0] = (vertex->x * mapping->scale_x - mapping->offset_x - 1.0f) / mapping->scale_x;
+    out[1] = (vertex->y * mapping->scale_y - mapping->offset_y + 1.0f) / mapping->scale_y;
+    out[2] = vertex->z / follow->depth;
+}
+
+static void map_vertex(RenderVertex *vertex, const float *point, const RenderFollow *follow) {
+    const RenderScreenMapping *mapping = &follow->mapping;
+    vertex->x = (point[0] * mapping->scale_x + mapping->offset_x + 1.0f) / mapping->scale_x;
+    vertex->y = (point[1] * mapping->scale_y + mapping->offset_y - 1.0f) / mapping->scale_y;
+    float z = point[2] * follow->depth;
+    vertex->z = z < 0.0f ? 0.0f : z > 1.0f ? 1.0f : z;
+}
+
+static int project_place(float *out, const float *matrix, const float *place) {
+    float p[4];
+    shadow_corner(p, matrix, place);
+    if (p[3] == 0.0f) return 0;
+    for (int k = 0; k < 3; ++k) out[k] = p[k] / p[3];
+    out[3] = 1.0f / p[3];
+    return 1;
+}
+
+static void follow_camera(RenderVertex *out, const RenderVertex *in, int count, const RenderFollow *follow,
+                          const float *shift) {
+    if (!shift) {
+        memcpy(out, in, (size_t)count * sizeof *out);
+        return;
+    }
+    const RenderScreenMapping *mapping = &follow->mapping;
+    float x = (mapping->offset_x + 1.0f) / mapping->scale_x, y = (mapping->offset_y - 1.0f) / mapping->scale_y;
+    float from[16] = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f / follow->depth, 0.0f, -x, -y, 0.0f, 1.0f};
+    float to[16] = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, follow->depth, 0.0f, x, y, 0.0f, 1.0f};
+    float matrix[16];
+    multiply(matrix, shift, from);
+    multiply(matrix, to, matrix);
+    for (int k = 0; k < count; ++k) {
+        RenderVertex vertex = in[k];
+        float position[3] = {vertex.x, vertex.y, vertex.z}, p[4];
+        shadow_corner(p, matrix, position);
+        if (p[3] != 0.0f) {
+            float q = 1.0f / p[3], z = p[2] * q;
+            vertex.x = p[0] * q;
+            vertex.y = p[1] * q;
+            vertex.z = z < 0.0f ? 0.0f : z > 1.0f ? 1.0f : z;
+            vertex.u += (vertex.x - in[k].x) * follow->slide[0];
+            vertex.v += (vertex.y - in[k].y) * follow->slide[1];
+        }
+        out[k] = vertex;
+    }
+}
+
+static void place_sprite(RenderVertex *out, const Recording *frame, const Recording *before, int index, float alpha,
+                         const float *shift) {
+    const SpriteRecord *sprite = &frame->sprites[index];
+    const SpriteRecord *was = sprite->match >= 0 ? &before->sprites[sprite->match] : NULL;
+    if (!was && !shift) return;
+    const RenderFollow *follow = &frame->follows[sprite->follow];
+    float place[3], view[16], now[4], then[4], placed[4];
+    for (int j = 0; j < 3; ++j) place[j] = was ? was->place[j] + (sprite->place[j] - was->place[j]) * alpha : sprite->place[j];
+    if (shift) multiply(view, shift, follow->view);
+    else memcpy(view, follow->view, sizeof view);
+    if (!project_place(now, follow->view, sprite->place) || !project_place(placed, view, place)) return;
+    const RenderFollow *old_follow = was && was->copy != UINT32_MAX ? &before->follows[was->follow] : NULL;
+    const RenderVertex *old = old_follow ? (const RenderVertex *)(before->vertices + was->copy) : NULL;
+    if (old && !project_place(then, old_follow->view, was->place)) old = NULL;
+    for (int k = 0; k < 6; ++k) {
+        float corner[3], old_corner[3], point[3];
+        unmap_vertex(corner, &out[k], follow);
+        if (old) unmap_vertex(old_corner, &old[k], old_follow);
+        for (int j = 0; j < 2; ++j) {
+            float offset = (corner[j] - now[j]) / now[3];
+            if (old) offset = (old_corner[j] - then[j]) / then[3] * (1.0f - alpha) + offset * alpha;
+            point[j] = placed[j] + offset * placed[3];
+        }
+        point[2] = placed[2];
+        map_vertex(&out[k], point, follow);
+        if (!old) continue;
+        out[k].r = (uint8_t)lroundf(old[k].r + (out[k].r - old[k].r) * alpha);
+        out[k].g = (uint8_t)lroundf(old[k].g + (out[k].g - old[k].g) * alpha);
+        out[k].b = (uint8_t)lroundf(old[k].b + (out[k].b - old[k].b) * alpha);
+        out[k].a = (uint8_t)lroundf(old[k].a + (out[k].a - old[k].a) * alpha);
+        out[k].fog = old[k].fog + (out[k].fog - old[k].fog) * alpha;
+    }
+}
+
+static void place_sprites(unsigned char *mapped, const Recording *frame, const Recording *before, float alpha,
+                          const float *shift) {
     for (int i = 0; i < frame->command_count; ++i) {
         const Command *command = &frame->commands[i];
-        if (command->follow < 0 || command->pair >= 0) continue;
-        const RenderScreenMapping *mapping = &frame->follows[command->follow].mapping;
-        float depth = frame->follows[command->follow].depth;
+        if (command->sprite < 0) continue;
         RenderVertex *out = (RenderVertex *)(mapped + command->offset);
-        for (int k = 0; k < command->count; ++k) {
-            float v[4] = {(out[k].x * mapping->scale_x - mapping->offset_x - 1.0f) / mapping->scale_x,
-                          (out[k].y * mapping->scale_y - mapping->offset_y + 1.0f) / mapping->scale_y, out[k].z / depth, 1.0f};
-            float p[4];
-            for (int r = 0; r < 4; ++r) p[r] = shift[r] * v[0] + shift[4 + r] * v[1] + shift[8 + r] * v[2] + shift[12 + r];
-            if (p[3] == 0.0f) continue;
-            out[k].x = (p[0] / p[3] * mapping->scale_x + mapping->offset_x + 1.0f) / mapping->scale_x;
-            out[k].y = (p[1] / p[3] * mapping->scale_y + mapping->offset_y - 1.0f) / mapping->scale_y;
-            float z = p[2] / p[3] * depth;
-            out[k].z = z < 0.0f ? 0.0f : z > 1.0f ? 1.0f : z;
-        }
+        for (int k = 0; k * 6 + 6 <= command->count && command->sprite + k < frame->sprite_count; ++k)
+            place_sprite(out + k * 6, frame, before, command->sprite + k, alpha, shift);
     }
 }
 
@@ -3219,17 +3387,26 @@ static int upload_replay_vertices(SDL_GPUCommandBuffer *buffer, const Recording 
     }
     for (int i = 0; i < frame->command_count; ++i) {
         const Command *command = &frame->commands[i];
-        if (command->moving)
+        if (command->moving && (command->follow < 0 || command->sprite >= 0))
             memcpy(scratch + command->offset, frame->vertices + command->copy, (size_t)command->count * sizeof(RenderVertex));
     }
     float shift[16];
     int follow = camera_shift(shift, frame, before, alpha);
     if (frame->paired) blend_draws(scratch, frame, before, alpha);
     if (frame->shadow_count) blend_shadows(scratch, frame, before, alpha, follow ? shift : NULL);
-    if (frame->follow_count && follow) follow_camera(scratch, frame, shift);
+    if (frame->sprite_count) place_sprites(scratch, frame, before, alpha, follow ? shift : NULL);
     unsigned char *mapped = SDL_MapGPUTransferBuffer(device, moving_transfer, true);
     if (!mapped) return 0;
-    memcpy(mapped, scratch, frame->moving_bytes);
+    for (int i = 0; i < frame->command_count; ++i) {
+        const Command *command = &frame->commands[i];
+        if (!command->moving) continue;
+        RenderVertex *out = (RenderVertex *)(mapped + command->offset);
+        if (command->follow >= 0 && command->sprite < 0)
+            follow_camera(out, (const RenderVertex *)(frame->vertices + command->copy), command->count,
+                          &frame->follows[command->follow], follow ? shift : NULL);
+        else
+            memcpy(out, scratch + command->offset, (size_t)command->count * sizeof *out);
+    }
     SDL_UnmapGPUTransferBuffer(device, moving_transfer);
     SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(buffer);
     SDL_GPUTransferBufferLocation from = {moving_transfer, 0};

@@ -935,8 +935,29 @@ script that counts frames):
 
 Left to do:
 
-1. **What the CPU places on the screen** (particles, 3D sprites, water, shadows drawn as 2D)
-   stays at the game's rate; recording them in world space would let them blend too.
+1. **What the CPU places on the screen** (particles, 3D sprites, water, shadows drawn as 2D).
+   Done for 3D sprites and water; shadows already blended (`blend_shadows`):
+   - Every `mgC3DSprite` item (the effect manager's particles, dust, fire) is recorded with its
+     world position, its object as key and the camera it was projected with (`render_sprite`).
+     `match_sprites` pairs each with the nearest of the same object and texture in the frame
+     before (within 40 units); the replay projects the blended position with the blended camera
+     and blends the corner offsets, colour and fog. One with no match follows the camera.
+   - Water (`render_water`) follows the camera shift, and its refraction coordinates slide with
+     it, instead of being paired by vertex count (which changes as strips are culled).
+   - Measured with `between alpha=0` against the real frame before (pixels off by more than 24;
+     0 would be perfect), before and after: Finny Frenzy race 763 to 299, swamp 228 to 70,
+     fire 470 to 418, pool 657 to 97-125 (three runs), palm 56 to 56. Real frames and alpha 1 are
+     unchanged.
+   - Cost: `stats` `replay_us` per replay in the debug build (fresh launch per scene, two rounds,
+     nothing else running), before and after: pool 1.44-1.53 to 1.81-1.93 ms, swamp 1.89-1.97 to
+     1.94-2.05 ms, fire 0.83-1.19 to 1.19-1.38 ms, so 0.1 to 0.4 ms more, mostly placing sprites
+     and water on the CPU.
+   - Left: GS draws the engine projects itself (`mgTransWorldPrim`, `mgTransWorldPrim3DSprite`:
+     combat hit and death effects, sword trails, town rain and ripples, gift marks) are still
+     paired by signature only and stay at 25 Hz when their count changes. Following them is
+     possible (a projection call since the last PRIM write plus a GEQUAL/GREATER depth test marks
+     one) but none showed up in the test scenes, so it was left out. Texture animation (waterfalls,
+     scrolling streams, flame frames) steps at 25 Hz.
 2. **Present pacing with vsync:** each replay blocks on the display, so fewer fit between the
    20 ms fields; a mailbox present (where the platform has one) would not block.
 3. **Mid-frame uploads:** a texture uploaded after an earlier pass used it is replayed with its

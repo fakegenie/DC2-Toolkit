@@ -113,6 +113,9 @@ PORT_OVERRIDE void mgC3DSprite::EndCreatePacket() {}
 
 struct SpriteFrame {
     float local_screen[4][4];
+    float world_screen[4][4];
+    float local_world[4][4];
+    const void *key;
     float axis_x;
     float axis_y;
     RenderFogCurve fog;
@@ -186,8 +189,12 @@ static void draw_sprite(const SpriteFrame &frame, const SpriteOp &item, const Re
         out[i].u /= (float)width;
         out[i].v /= (float)height;
     }
+    float place[3];
+    for (int k = 0; k < 3; k++)
+        place[k] = p[0] * frame.local_world[0][k] + p[1] * frame.local_world[1][k] + p[2] * frame.local_world[2][k] +
+                   frame.local_world[3][k];
     render_source = RENDER_SOURCE_SPRITE;
-    render_sprite(&state, out, 6, &screen, depth);
+    render_sprite(&state, out, &screen, depth, &frame.world_screen[0][0], frame.key, place);
 }
 
 PORT_OVERRIDE int mgC3DSprite::CreateRenderInfoPacket(u_int *dest, float (*matrix)[4], mgRENDER_INFO *render_info) {
@@ -210,6 +217,9 @@ PORT_OVERRIDE int mgC3DSprite::Draw(u_int *tag, float (*matrix)[4], mgCDrawManag
     info->scissor = 0;
     SpriteFrame frame;
     mgMulMatrix(frame.local_screen, info->world_screen, matrix);
+    memcpy(frame.world_screen, info->world_screen, sizeof frame.world_screen);
+    memcpy(frame.local_world, matrix, sizeof frame.local_world);
+    frame.key = this;
     frame.axis_x = info->view_screen[0][0] * mgDistVector(matrix[0]);
     frame.axis_y = info->view_screen[1][1] * mgDistVector(matrix[1]);
     frame.fog = {info->fog.offset, info->fog.near_value, info->fog.far_value, info->fog.scale};

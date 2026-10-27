@@ -246,8 +246,10 @@ typedef struct {
 } ShadowPoint;
 int render_shadow_setup(const void *key, const float *world, const float *camera, const float *light, const float *screen,
                         const RenderScreenMapping *mapping, float depth, const float (*shape)[4], int count, int prisms);
-void render_sprite(const RenderState *state, const RenderVertex *vertices, int count, const RenderScreenMapping *mapping,
-                   float depth);
+void render_sprite(const RenderState *state, const RenderVertex *vertices, const RenderScreenMapping *mapping, float depth,
+                   const float *view, const void *key, const float *place);
+void render_water(const RenderState *state, const RenderVertex *vertices, int count, const RenderScreenMapping *mapping,
+                  float depth);
 void render_shadow(const RenderState *state, const RenderVertex *vertices, const ShadowPoint *points, int count, int setup);
 void render_present(int target, int width, int height);
 
