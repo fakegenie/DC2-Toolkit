@@ -230,6 +230,7 @@ PORT_OVERRIDE int CWater::Draw(u_int *tag, float (*matrix)[4], mgCDrawManager *d
     gs_screen_mapping(&screen, &depth);
     RenderScreenMapping placed = {1.0f, -view.left - 1.0f, 1.0f, 1.0f - view.offset_y};
     render_source = RENDER_SOURCE_WATER;
+    gs_drawing_scaled(state.texture);
     render_water(&state, out.data(), (int)out.size(), &placed, depth);
     return 0;
 }

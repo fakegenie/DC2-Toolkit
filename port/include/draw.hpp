@@ -50,6 +50,7 @@ void gs_packed(int reg, const void *qword);
 void gs_texture_source(const mgCTexture *texture);
 int gs_texture(u_int base, int width, int height);
 int gs_sampled(int texture, int width, int height, int repeat);
+void gs_drawing_scaled(int texture);
 void gs_copy_image(u_int source_base, int source_x, int source_y, u_int destination_base, int destination_x,
                    int destination_y, int width, int height);
 int gs_texture_for(const mgCTexture *texture);

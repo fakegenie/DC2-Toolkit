@@ -64,6 +64,25 @@ bool alpha_passes(float value) {
     return level != reference;
 }
 
+#ifdef SPREAD
+float lit_coverage(vec2 at) {
+    vec4 lit = sign(textureGather(source, at, 0) + textureGather(source, at, 1) + textureGather(source, at, 2));
+    vec2 weight = fract(at * vec2(textureSize(source, 0)) - 0.5);
+    return mix(mix(lit.w, lit.z, weight.x), mix(lit.x, lit.y, weight.x), weight.y);
+}
+
+float spread_coverage(vec2 at) {
+    vec2 quarter = 0.25 / vec2(textureSize(source, 0));
+    vec2 half_step = 2.0 * quarter;
+    vec3 around = texture(source, at - half_step).rgb + texture(source, at + half_step).rgb +
+                  texture(source, at + vec2(half_step.x, -half_step.y)).rgb +
+                  texture(source, at + vec2(-half_step.x, half_step.y)).rgb;
+    if (around == vec3(0.0)) return 0.0;
+    return 0.25 * (lit_coverage(at - quarter) + lit_coverage(at + quarter) +
+                   lit_coverage(at + vec2(quarter.x, -quarter.y)) + lit_coverage(at + vec2(-quarter.x, quarter.y)));
+}
+#endif
+
 float fog_amount() {
     if (frag_fog_curve == vec4(0.0)) return frag_fog;
     float fogged = frag_fog_curve.x + frag_fog_curve.w * gl_FragCoord.w;
@@ -102,8 +121,12 @@ void main() {
         vec2 uv = frag_limits == vec4(0.0) ? frag_uv : clamp(frag_uv, frag_limits.xy, frag_limits.zw);
         vec4 texel = (flags & PS2_SAMPLING) != 0u ? ps2_texel(uv) : texture(source, uv);
         if ((flags & TEXA) != 0u) {
+#ifdef SPREAD
+            texel.a = spread_coverage(uv) * float(texture_alpha) / 128.0;
+#else
             bool black = texel.r + texel.g + texel.b == 0.0;
             texel.a = (flags & AEM) != 0u && black ? 0.0 : float(texture_alpha) / 128.0;
+#endif
         }
         if ((flags & VERTEX_ALPHA) != 0u) texel.a = frag_color.a * MODULATE;
         else if ((flags & DECAL) == 0u) texel.a = texel.a * frag_color.a * MODULATE;

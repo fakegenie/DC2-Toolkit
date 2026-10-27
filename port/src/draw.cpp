@@ -5,6 +5,7 @@
 #include "mg_drawprim.hpp"
 #include "port_graphics.h"
 #include "port_overrides.h"
+#include "port_present.h"
 #include "sce/libgraph.h"
 #include <cmath>
 #include <cstdio>
@@ -17,6 +18,7 @@ enum { LAYOUT_WIDTH = 512, LAYOUT_RIGHT = 511, WIDE_FRAME_LIMIT = 16, UV_WRAP = 
 enum { COORDINATE_CENTER = 2048 };
 static const float SAMPLE_OFFSET = 0.46875f;
 static const float TEXEL_TIE = 0.0625f;
+static const float ONE_TO_ONE = 1.0f / 32.0f;
 
 union GifPacked {
     struct {
@@ -453,6 +455,28 @@ static int target_copy(int target, int width, int height) {
     return copy->render;
 }
 
+static int scaled_cache_texture(int slot) {
+    int scale, samples;
+    render_quality(&scale, &samples);
+    if (scale == 1 || render_scaled(slot)) return slot;
+    auto found = by_render.find(slot);
+    if (found == by_render.end() || found->second->hd) return slot;
+    CachedTexture *entry = found->second;
+    int scaled = render_scaled_texture(entry->width, entry->height);
+    render_copy(slot, 0, 0, scaled, 0, 0, entry->width, entry->height);
+    by_render.erase(slot);
+    by_render[scaled] = entry;
+    entry->render = scaled;
+    if (render_bound() == slot) render_bind(scaled);
+    if (frame_target == slot) frame_target = scaled;
+    render_release(slot);
+    return scaled;
+}
+
+void gs_drawing_scaled(int texture) {
+    if (texture != frame_target) scaled_cache_texture(frame_target);
+}
+
 int gs_sampled(int texture, int width, int height, int repeat) {
     RenderSlot slot;
     if (!render_slot(texture, &slot) || !slot.target) return texture;
@@ -479,6 +503,7 @@ void gs_copy_image(u_int source_base, int source_x, int source_y, u_int destinat
     int destination = gs_texture(destination_base, destination_x + width, destination_y + height);
     if (!source || !destination) return;
     if (source == destination && source_x == destination_x && source_y == destination_y) return;
+    if (source != destination && render_scaled(source)) destination = scaled_cache_texture(destination);
     width = smaller(width, smaller(render_width(source) - source_x, render_width(destination) - destination_x));
     height = smaller(height, smaller(render_height(source) - source_y, render_height(destination) - destination_y));
     render_copy(source, source_x, source_y, destination, destination_x, destination_y, width, height);
@@ -738,6 +763,26 @@ static void align_sprite(RenderVertex *a, RenderVertex *b, int textured) {
     b->limits = limits;
 }
 
+static int one_to_one(const RenderVertex *a, const RenderVertex *b) {
+    float across = b->x - a->x, down = b->y - a->y;
+    return across != 0.0f && down != 0.0f && std::fabs(std::fabs((b->u - a->u) / across) - 1.0f) < ONE_TO_ONE &&
+           std::fabs(std::fabs((b->v - a->v) / down) - 1.0f) < ONE_TO_ONE;
+}
+
+static float centre_shift(float start, float end, float texel, float last_texel, float size) {
+    float at = texel * size + (std::floor(start) + 0.5f - start) * (last_texel - texel) * size / (end - start);
+    return (0.5f - (at - std::floor(at))) / size;
+}
+
+static void snap_texels(RenderVertex *a, RenderVertex *b, float width, float height) {
+    float shift_u = centre_shift(a->x, b->x, a->u, b->u, width);
+    float shift_v = centre_shift(a->y, b->y, a->v, b->v, height);
+    a->u += shift_u, b->u += shift_u, a->v += shift_v, b->v += shift_v;
+    if (a->limits.high_u > a->limits.low_u) a->limits.low_u += shift_u, a->limits.high_u += shift_u;
+    if (a->limits.high_v > a->limits.low_v) a->limits.low_v += shift_v, a->limits.high_v += shift_v;
+    b->limits = a->limits;
+}
+
 static void kick(u_int x, u_int y, u_int z, int fog, int draw) {
     RenderVertex *vertex = &queue[queued < 3 ? queued : 2];
     if (queued == 3) {
@@ -789,12 +834,22 @@ static void kick(u_int x, u_int y, u_int z, int fog, int draw) {
                 out[i].a = out[count - 1].a;
             }
         int topology = type == MG_PRIM_POINT ? RENDER_POINTS : type <= MG_PRIM_LINE_STRIP ? RENDER_LINES : RENDER_TRIANGLES;
+        if (!state.texture || render_scaled(state.texture)) gs_drawing_scaled(state.texture);
         if (type == MG_PRIM_SPRITE) {
             RenderVertex a = out[0], b = out[1];
             RenderSlot target;
+            int shown_width, shown_height;
+            int sharp = state.linear && render_scale(state.texture) == 1 &&
+                        render_bound() == port_display_target(&shown_width, &shown_height) &&
+                        render_slot(render_bound(), &target) && target.scale > 1 &&
+                        one_to_one(&queue[queued - 2], &queue[queued - 1]);
             if (state.texture) round_texels_down(&a, &b);
             if (render_slot(render_bound(), &target) && (target.scale > 1 || target.samples > 1))
                 align_sprite(&a, &b, state.texture != 0);
+            if (sharp) {
+                state.linear = 0;
+                snap_texels(&a, &b, (float)width, (float)height);
+            }
             RenderVertex corner_b = b, corner_c = b;
             corner_b.x = b.x, corner_b.y = a.y, corner_b.u = b.u, corner_b.v = a.v;
             corner_c.x = a.x, corner_c.y = b.y, corner_c.u = a.u, corner_c.v = b.v;

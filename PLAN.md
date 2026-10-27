@@ -836,8 +836,37 @@ which the display mod (`port/display/`, `dc2tk.display`) sets from its player-fa
 The window is HiDPI on macOS. Left to do:
 
 1. **An in-game options screen** for these, instead of a mod set.
-2. **The known 1x gaps:** render-to-texture cache textures stay 1x and shadow edges are not
-   antialiased; the bitmap fonts and 2D art go soft when upscaled.
+2. **The known 1x gaps:** done, checked at 1x, 2x and 4x on the language screen, title, attract
+   demo, Palm Brinks (square, canal, main menu), the castle dungeon's floor select and floor 1.
+   Scale 1 is unchanged (golden passes; every shot but one matches; see the last point).
+   - Render-to-texture cache textures: a decoded texture the engine draws into is replaced by a
+     scaled copy (`scaled_cache_texture` in `draw.cpp`) the first time a model, 3D sprite, water,
+     untextured 2D draw or draw from a scaled texture lands in it, or a scaled target is copied
+     into it. Draws of 1x art into it (texture animations) leave it 1x, so those stay as sharp as
+     the art. UVs are normalised, so PS2 texel addressing is unchanged. In the scenes tried only
+     Palm Brinks' canal water (`water`, ripples drawn as ~1000 untextured triangles) is upgraded;
+     the menu backdrop `menuwork2` comes from a CPU read-back (`mgStoreImage`) and the other
+     effect targets were already scaled render targets. The canal looks almost the same
+     (MAE 0.1 over a crop at 2x and 4x).
+   - Shadow edges: the shadow composite samples the volume mask as CT24 with AEM, so each texel is
+     either shadow or not, which left a staircase at the scaled resolution. Such draws (TEXA, AEM,
+     linear, scaled source) now use a variant of `draw.frag` built with `SPREAD`
+     (`tools/port_shaders.py` builds `draw_spread_frag`, `PipelineKey.spread` picks it). It expands
+     alpha per texel before filtering, as the GS does, and averages four taps a quarter texel
+     apart, so edges fade over about one pixel. It returns early where the 3x3 neighbourhood is
+     black. Putting this in the one shader instead cost every draw ~0.4-1.2 ms at 4x.
+   - Sharp 2D: a linear sprite from a 1x texture into the displayed frame whose texels map 1:1 to
+     layout pixels (within 1/32) is drawn nearest, with its UVs shifted so pixel centres land on
+     texel centres (`one_to_one`, `snap_texels`). Scaled or rotated art, and 2D drawn into work
+     targets that are sampled later, stay linear. The menus' text and frames were already
+     nearest or scaled; the visible case is the floor-select marker, which now matches 1x.
+   - GPU cost (`tools/bench.py --unpaced`, gpu_ms mean, two runs each): at 2x Palm Brinks 1.41 ->
+     1.46 ms, swamp 1.20 -> 1.19; at 4x 3.41 -> 3.66 and 3.15 -> 3.37.
+   - Left: no scene with 3D drawn into a decoded texture (portraits, photo) was found, so that
+     path is only exercised by the canal water. Not checked with `--msaa` or 16:9. Adding any
+     field to render.c's `Texture` or `PipelineKey` changes 13-21 pixels by 1 in the town menu's
+     frame at 1x (with all new logic disabled too, and with nothing else changed), so some
+     pre-existing code depends on memory layout; not found.
 3. **Checks at 2x and above** of heat haze, depth of field and water: done, at 2x and 4x in
    Balance Valley (torch haze, distance blur), the fish race course (map 96, a CWater surface) and
    the Rainbow Butterfly Wood. Haze and water matched 1x (on/off difference 211/208/220 for haze,

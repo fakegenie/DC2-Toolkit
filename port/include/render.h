@@ -221,6 +221,7 @@ void render_release(int texture);
 int render_width(int texture);
 int render_height(int texture);
 int render_scale(int texture);
+int render_scaled(int texture);
 void render_upload(int texture, int x, int y, int width, int height, const uint32_t *pixels);
 void render_download(int texture, int x, int y, int width, int height, uint32_t *pixels);
 void render_download_full(int texture, int width, int height, uint32_t *pixels);

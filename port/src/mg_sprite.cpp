@@ -194,6 +194,7 @@ static void draw_sprite(const SpriteFrame &frame, const SpriteOp &item, const Re
         place[k] = p[0] * frame.local_world[0][k] + p[1] * frame.local_world[1][k] + p[2] * frame.local_world[2][k] +
                    frame.local_world[3][k];
     render_source = RENDER_SOURCE_SPRITE;
+    gs_drawing_scaled(state.texture);
     render_sprite(&state, out, &screen, depth, &frame.world_screen[0][0], frame.key, place);
 }
 

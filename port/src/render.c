@@ -76,6 +76,7 @@ typedef union {
         uint32_t samples : 2;
         uint32_t mirror : 1;
         uint32_t depthless : 1;
+        uint32_t spread : 1;
     };
 } PipelineKey;
 
@@ -305,6 +306,7 @@ static int model_count;
 static RenderBone bone_sets[BONE_LIMIT][RENDER_BONE_SLOTS];
 static int bone_count;
 static SDL_GPUShader *fragment_shader;
+static SDL_GPUShader *spread_shader;
 static SDL_GPUSampler *samplers[8];
 static SDL_GPUBuffer *vertex_buffer;
 static SDL_GPUTransferBuffer *vertex_transfer;
@@ -631,6 +633,8 @@ int render_init(void) {
                                 SDL_GPU_SHADERSTAGE_VERTEX, 0, 0, 2);
     fragment_shader = create_shader(draw_frag_spirv, sizeof draw_frag_spirv, draw_frag_msl, sizeof draw_frag_msl,
                                     SDL_GPU_SHADERSTAGE_FRAGMENT, 2, 1, 0);
+    spread_shader = create_shader(draw_spread_frag_spirv, sizeof draw_spread_frag_spirv, draw_spread_frag_msl,
+                                  sizeof draw_spread_frag_msl, SDL_GPU_SHADERSTAGE_FRAGMENT, 2, 1, 0);
     for (int i = 0; i < 8; ++i) {
         SDL_GPUSamplerCreateInfo info = {0};
         info.min_filter = info.mag_filter = (i & 1) ? SDL_GPU_FILTER_LINEAR : SDL_GPU_FILTER_NEAREST;
@@ -786,7 +790,7 @@ static SDL_GPUGraphicsPipeline *pipeline_for(PipelineKey key) {
     targets[1].blend_state.color_write_mask = key.depth_write ? SDL_GPU_COLORCOMPONENT_R : 0;
     SDL_GPUGraphicsPipelineCreateInfo info = {0};
     info.vertex_shader = mesh ? mesh_shader : vertex_shader;
-    info.fragment_shader = fragment_shader;
+    info.fragment_shader = key.spread ? spread_shader : fragment_shader;
     info.vertex_input_state.vertex_buffer_descriptions = &buffer;
     info.vertex_input_state.num_vertex_buffers = 1;
     info.vertex_input_state.vertex_attributes = mesh ? model : flat;
@@ -1532,6 +1536,8 @@ int render_width(int slot) { return textures[slot].width; }
 
 int render_scale(int slot) { return textures[slot].scale; }
 
+int render_scaled(int slot) { return textures[slot].scaled; }
+
 struct SDL_GPUDevice *render_device(void) { return device; }
 
 struct SDL_Window *render_window(void) { return window; }
@@ -1836,6 +1842,8 @@ static int prepare(Command *command, const RenderState *state, PipelineKey key) 
         if (render_toggles.wireframe && key.topology == RENDER_TRIANGLES) command->key.wire = 1;
     }
     command->sampler = (state->linear ? 1 : 0) | (state->repeat_u ? 2 : 0) | (state->repeat_v ? 4 : 0);
+    command->key.spread = textured && state->texa && state->expansion.aem && state->linear &&
+                          textures[state->texture].scale > 1;
     command->model = -1;
     command->shadow = -1;
     command->follow = -1;
