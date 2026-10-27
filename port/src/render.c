@@ -55,6 +55,9 @@ typedef struct {
     int drawn;
     int queued;
     int sampled;
+    int depth_tests;
+    int depth_writes;
+    int reads_pending;
 } Texture;
 
 typedef union {
@@ -72,6 +75,7 @@ typedef union {
         uint32_t wire : 1;
         uint32_t samples : 2;
         uint32_t mirror : 1;
+        uint32_t depthless : 1;
     };
 } PipelineKey;
 
@@ -112,6 +116,7 @@ typedef struct {
     uint32_t copy;
     int moving;
     int target;
+    int snapshot;
 } Command;
 
 enum { STEP_PASS, STEP_COPY, STEP_BLIT };
@@ -777,14 +782,14 @@ static SDL_GPUGraphicsPipeline *pipeline_for(PipelineKey key) {
     static const SDL_GPUCullMode culls[3] = {SDL_GPU_CULLMODE_NONE, SDL_GPU_CULLMODE_FRONT, SDL_GPU_CULLMODE_BACK};
     info.rasterizer_state.cull_mode = culls[key.cull % 3];
     info.rasterizer_state.front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE;
-    info.depth_stencil_state.enable_depth_test = true;
+    info.depth_stencil_state.enable_depth_test = !key.depthless;
     info.depth_stencil_state.compare_op = (SDL_GPUCompareOp)key.depth_compare;
     info.depth_stencil_state.enable_depth_write = key.depth_write;
     info.multisample_state.sample_count = samples;
     info.target_info.color_target_descriptions = targets;
     info.target_info.num_color_targets = key.mirror ? 2 : 1;
     info.target_info.depth_stencil_format = depth_format;
-    info.target_info.has_depth_stencil_target = true;
+    info.target_info.has_depth_stencil_target = !key.depthless;
     SDL_GPUGraphicsPipeline *pipeline = SDL_CreateGPUGraphicsPipeline(device, &info);
     if (!pipeline) render_error("pipeline");
     pipelines[pipeline_count].key = key;
@@ -831,6 +836,12 @@ static void release_depths(void) {
 static int writes_depth(const Command *list, int count) {
     for (int i = 0; i < count; ++i)
         if (list[i].key.depth_write) return 1;
+    return 0;
+}
+
+static int needs_depth(const Command *list, int count) {
+    for (int i = 0; i < count; ++i)
+        if (list[i].key.depth_write || list[i].key.depth_compare != SDL_GPU_COMPAREOP_ALWAYS) return 1;
     return 0;
 }
 
@@ -950,7 +961,7 @@ void render_mesh_forget(int first, int count) {
 
 static void encode(SDL_GPUCommandBuffer *buffer, SDL_GPURenderPass *pass, const Command *list, int count,
                    SDL_GPUBuffer *model_list, SDL_GPUBuffer *bone_list, SDL_GPUBuffer *drawn, int width, int height,
-                   int mirror) {
+                   int mirror, int depthless) {
     float scale[4] = {2.0f / (float)width, 2.0f / (float)height, 0.0f, 0.0f};
     SDL_GPUBuffer *bound_buffer = NULL;
     SDL_GPUGraphicsPipeline *last_pipeline = NULL;
@@ -976,6 +987,7 @@ static void encode(SDL_GPUCommandBuffer *buffer, SDL_GPURenderPass *pass, const 
         }
         PipelineKey key = command->key;
         key.mirror = mirror != 0;
+        key.depthless = depthless != 0;
         SDL_GPUGraphicsPipeline *pipeline = pipeline_for(key);
         if (pipeline != last_pipeline) {
             SDL_BindGPUGraphicsPipeline(pass, pipeline);
@@ -1218,7 +1230,8 @@ static void encode_pass(SDL_GPUCommandBuffer *buffer, const Command *list, int c
         create_depth(shared, target->width * target->scale, target->height * target->scale, target->samples);
     }
     int multi = target->samples > 1;
-    int mirror = multi && (writes_depth(list, count) || !depths[shared].cleared);
+    int depthless = !needs_depth(list, count);
+    int mirror = multi && !depthless && (writes_depth(list, count) || !depths[shared].cleared);
     SDL_GPUColorTargetInfo color[2];
     memset(color, 0, sizeof color);
     color[0].texture = multi ? target->multi : target->color;
@@ -1229,7 +1242,7 @@ static void encode_pass(SDL_GPUCommandBuffer *buffer, const Command *list, int c
     SDL_GPUDepthStencilTargetInfo depth = {0};
     depth.texture = depths[shared].texture;
     depth.load_op = depths[shared].cleared ? SDL_GPU_LOADOP_LOAD : SDL_GPU_LOADOP_CLEAR;
-    depths[shared].cleared = 1;
+    if (!depthless) depths[shared].cleared = 1;
     depth.store_op = SDL_GPU_STOREOP_STORE;
     depth.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
     depth.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
@@ -1238,18 +1251,22 @@ static void encode_pass(SDL_GPUCommandBuffer *buffer, const Command *list, int c
     color[1].store_op = SDL_GPU_STOREOP_RESOLVE_AND_STORE;
     color[1].resolve_texture = depths[shared].resolved;
     target->drawn = 1;
-    SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(buffer, color, mirror ? 2 : 1, &depth);
+    SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(buffer, color, mirror ? 2 : 1, depthless ? NULL : &depth);
     pass_serial++;
     port_stats.render_passes++;
     port_stats.gpu_commands += (uint32_t)count;
-    if (smoothing) record_pass(target, shared, color[0].load_op, depth.load_op, mirror, list, count);
-    encode(buffer, pass, list, count, model_buffer, bone_buffer, vertex_buffer, target->width, target->height, mirror);
+    if (smoothing) record_pass(target, depthless ? -1 : shared, color[0].load_op, depth.load_op, mirror, list, count);
+    encode(buffer, pass, list, count, model_buffer, bone_buffer, vertex_buffer, target->width, target->height, mirror,
+           depthless);
     SDL_EndGPURenderPass(pass);
 }
 
 static void queue(const Command *command, int step) {
-    textures[command->target].queued += step;
-    textures[command->texture].sampled += step;
+    Texture *target = &textures[command->target];
+    target->queued += step;
+    if (command->key.depth_compare != SDL_GPU_COMPAREOP_ALWAYS) target->depth_tests += step;
+    if (command->key.depth_write) target->depth_writes += step;
+    if (!command->snapshot) textures[command->texture].sampled += step;
 }
 
 static int split_side(void) {
@@ -1320,11 +1337,40 @@ static int target_pending(int slot) {
     return textures[slot].queued > 0;
 }
 
+static int waits(int slot, int first, int second) {
+    Texture *texture = &textures[slot];
+    return slot != drawing && slot != first && slot != second && !used_by_pending(slot) && !texture->depth_tests &&
+           !texture->depth_writes && !texture->reads_pending;
+}
+
+static void flush_for(int first, int second) {
+    if (held_valid) {
+        flush();
+        return;
+    }
+    int count = 0, kept = 0, with_drawing = first == drawing || second == drawing;
+    for (int i = 0; i < pending_count; ++i) textures[pending[i].target].reads_pending = 0;
+    for (int i = 0; i < pending_count; ++i)
+        if (!pending[i].snapshot && target_pending(pending[i].texture)) textures[pending[i].target].reads_pending = 1;
+    for (int i = 0; i < pending_count; ++i)
+        if (pending[i].target != drawing && !waits(pending[i].target, first, second)) ordered[count++] = pending[i];
+    for (int i = 0; i < pending_count && with_drawing; ++i)
+        if (pending[i].target == drawing) ordered[count++] = pending[i];
+    for (int i = 0; i < pending_count; ++i)
+        if (pending[i].target == drawing ? !with_drawing : waits(pending[i].target, first, second))
+            pending[kept++] = pending[i];
+    pending_count = kept;
+    if (!count) return;
+    for (int i = 0; i < count; ++i) queue(&ordered[i], -1);
+    encode_passes(upload_pending(), ordered, count);
+    if (!pending_count) release_retired_meshes();
+}
+
 static void settle(int slot) {
     if (!target_pending(slot) && !used_by_pending(slot)) return;
     int side = 0;
     for (int i = 0; i < pending_count; ++i) {
-        if (pending[i].texture != slot && pending[i].target != slot) continue;
+        if ((pending[i].texture != slot || pending[i].snapshot) && pending[i].target != slot) continue;
         if (pending[i].target == drawing) {
             flush();
             return;
@@ -1588,8 +1634,7 @@ void render_download_full(int slot, int width, int height, uint32_t *pixels) {
 void render_copy(int source, int source_x, int source_y, int destination, int destination_x, int destination_y,
                  int width, int height) {
     if (width <= 0 || height <= 0) return;
-    if (target_pending(drawing) && (source == drawing || destination == drawing)) flush();
-    if (target_pending(source) || target_pending(destination)) flush_side();
+    if (target_pending(source) || target_pending(destination)) flush_for(source, destination);
     if (used_by_pending(destination)) rename_texture(destination);
     int scale = textures[source].scale;
     if (scale == textures[destination].scale) {
@@ -1659,9 +1704,33 @@ void render_bind(int target) {
     bound = target;
 }
 
-static void draw_to_bound(void) {
+static void detach_readers(int slot) {
+    if (target_pending(slot)) flush_side();
+    if (!used_by_pending(slot)) return;
+    Texture *texture = &textures[slot];
+    int width = texture->width * texture->scale, height = texture->height * texture->scale;
+    SDL_GPUTexture *copy = spare_texture(width, height);
+    copy_texture(whole(texture->color), whole(copy), (Uint32)width, (Uint32)height);
+    for (int i = 0; i < pending_count; ++i) {
+        if (pending[i].texture != slot || pending[i].snapshot) continue;
+        if (pending[i].color == texture->color) pending[i].color = copy;
+        pending[i].snapshot = 1;
+        texture->sampled--;
+    }
+    retire_texture(copy, width, height);
+    port_stats.texture_renames++;
+}
+
+static int depth_clash(const RenderState *state) {
+    if (depth_for(bound) != depth_for(drawing) || !touches_depth(state)) return 0;
+    if (state->depth_write) return textures[drawing].depth_tests > 0 || textures[drawing].depth_writes > 0;
+    return textures[drawing].depth_writes > 0;
+}
+
+static void draw_to_bound(const RenderState *state) {
     if (bound == drawing) return;
-    if (target_pending(drawing) && used_by_pending(bound)) flush();
+    if (target_pending(drawing) && (state->texture == drawing || depth_clash(state))) flush_for(drawing, 0);
+    if (target_pending(drawing) && used_by_pending(bound)) detach_readers(bound);
     if (!target_pending(drawing)) drawing = bound;
 }
 
@@ -1678,18 +1747,11 @@ static SDL_GPUCompareOp depth_compare(const RenderTests *tests) {
     return ops[tests->depth_method];
 }
 
-static void draw_to_bound(void);
-
 static int prepare(Command *command, const RenderState *state, PipelineKey key) {
-    draw_to_bound();
+    draw_to_bound(state);
     if (state->texture && state->texture == bound) {
         fputs("render: a draw samples its own target\n", stderr);
         return 0;
-    }
-    if (bound != drawing &&
-        (state->texture == drawing || (depth_for(bound) == depth_for(drawing) && touches_depth(state)))) {
-        flush();
-        drawing = bound;
     }
     uint32_t source, destination, op, flags = 0;
     SDL_GPUTexture *alpha_copy = textures[blank].color;
@@ -1881,7 +1943,7 @@ static void restore(void) {
 
 static void submit(const RenderState *state, int topology, const RenderVertex *vertices, int count, int index,
                    int source) {
-    draw_to_bound();
+    draw_to_bound(state);
     if (!target_pending(bound) && textures[bound].stale) restore();
     Command command;
     if (!prepare(&command, state, (PipelineKey){.topology = (uint32_t)topology}) ||
@@ -2047,7 +2109,7 @@ void render_mesh(const RenderState *state, int cull, const MeshUniforms *uniform
         flush();
         restart_models();
     }
-    draw_to_bound();
+    draw_to_bound(state);
     if (!target_pending(bound) && textures[bound].stale) restore();
     Command command;
     int prepared = prepare(&command, state, (PipelineKey){.topology = RENDER_TRIANGLES, .mesh = 1, .cull = (uint32_t)cull});
@@ -3221,19 +3283,22 @@ static void replay_pass(SDL_GPUCommandBuffer *buffer, const Recording *frame, co
     color[0].clear_color.a = 1.0f;
     color[0].store_op = step->multi ? SDL_GPU_STOREOP_RESOLVE_AND_STORE : SDL_GPU_STOREOP_STORE;
     color[0].resolve_texture = step->color;
+    int depthless = step->depth < 0;
     SDL_GPUDepthStencilTargetInfo depth = {0};
-    depth.texture = depths[step->depth].texture;
-    depth.load_op = step->depth_load;
-    depth.store_op = SDL_GPU_STOREOP_STORE;
-    depth.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
-    depth.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
-    color[1].texture = depths[step->depth].color;
-    color[1].load_op = depth.load_op;
-    color[1].store_op = SDL_GPU_STOREOP_RESOLVE_AND_STORE;
-    color[1].resolve_texture = depths[step->depth].resolved;
-    SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(buffer, color, step->mirror ? 2 : 1, &depth);
+    if (!depthless) {
+        depth.texture = depths[step->depth].texture;
+        depth.load_op = step->depth_load;
+        depth.store_op = SDL_GPU_STOREOP_STORE;
+        depth.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
+        depth.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+        color[1].texture = depths[step->depth].color;
+        color[1].load_op = depth.load_op;
+        color[1].store_op = SDL_GPU_STOREOP_RESOLVE_AND_STORE;
+        color[1].resolve_texture = depths[step->depth].resolved;
+    }
+    SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(buffer, color, step->mirror ? 2 : 1, depthless ? NULL : &depth);
     encode(buffer, pass, frame->commands + step->first, step->count, replay_model_buffer, replay_bone_buffer,
-           replay_buffer, step->width, step->height, step->mirror);
+           replay_buffer, step->width, step->height, step->mirror, depthless);
     SDL_EndGPURenderPass(pass);
 }
 
