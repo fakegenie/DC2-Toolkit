@@ -839,13 +839,12 @@ static void kick(u_int x, u_int y, u_int z, int fog, int draw) {
             RenderVertex a = out[0], b = out[1];
             RenderSlot target;
             int shown_width, shown_height;
-            int sharp = state.linear && render_scale(state.texture) == 1 &&
+            int targeted = render_slot(render_bound(), &target);
+            int sharp = targeted && target.scale > 1 && state.linear && render_scale(state.texture) == 1 &&
                         render_bound() == port_display_target(&shown_width, &shown_height) &&
-                        render_slot(render_bound(), &target) && target.scale > 1 &&
                         one_to_one(&queue[queued - 2], &queue[queued - 1]);
             if (state.texture) round_texels_down(&a, &b);
-            if (render_slot(render_bound(), &target) && (target.scale > 1 || target.samples > 1))
-                align_sprite(&a, &b, state.texture != 0);
+            if (targeted && (target.scale > 1 || target.samples > 1)) align_sprite(&a, &b, state.texture != 0);
             if (sharp) {
                 state.linear = 0;
                 snap_texels(&a, &b, (float)width, (float)height);

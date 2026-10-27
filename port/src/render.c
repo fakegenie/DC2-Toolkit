@@ -2867,6 +2867,12 @@ static void match_shadows(void) {
     for (int i = 0; i < frame->shadow_count; ++i) frame->shadows_matched += frame->shadows[i].match >= 0;
 }
 
+static uint32_t sprite_slot(const int *table, int size, const Recording *before, uint64_t key) {
+    uint32_t slot = (uint32_t)(key * 0x9e3779b97f4a7c15ull >> 40) & (uint32_t)(size - 1);
+    while (table[slot] >= 0 && before->sprites[table[slot]].key != key) slot = (slot + 1) & (uint32_t)(size - 1);
+    return slot;
+}
+
 static void match_sprites(void) {
     static int *table;
     static int table_capacity;
@@ -2885,17 +2891,14 @@ static void match_sprites(void) {
         return;
     for (int i = 0; i < size; ++i) table[i] = heads[i] = -1;
     for (int i = before->sprite_count - 1; i >= 0; --i) {
-        uint64_t key = before->sprites[i].key;
-        uint32_t slot = (uint32_t)(key * 0x9e3779b97f4a7c15ull >> 40) & (uint32_t)(size - 1);
-        while (table[slot] >= 0 && before->sprites[table[slot]].key != key) slot = (slot + 1) & (uint32_t)(size - 1);
+        uint32_t slot = sprite_slot(table, size, before, before->sprites[i].key);
         table[slot] = i;
         chain[i] = heads[slot];
         heads[slot] = i;
     }
     for (int i = 0; i < frame->sprite_count; ++i) {
         SpriteRecord *sprite = &frame->sprites[i];
-        uint32_t slot = (uint32_t)(sprite->key * 0x9e3779b97f4a7c15ull >> 40) & (uint32_t)(size - 1);
-        while (table[slot] >= 0 && before->sprites[table[slot]].key != sprite->key) slot = (slot + 1) & (uint32_t)(size - 1);
+        uint32_t slot = sprite_slot(table, size, before, sprite->key);
         float best = SPRITE_REACH;
         int chosen = -1, *link = &heads[slot], *chosen_link = NULL;
         for (int found = *link; found >= 0; link = &chain[found], found = *link) {
