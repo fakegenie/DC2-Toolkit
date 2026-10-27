@@ -269,18 +269,33 @@ one fits per tick on the iPhone (50 shown a second at 120 Hz), and in the swamp 
    composited at the character's alpha. `MeshUniforms.edge` names the side so smoothing pairs
    each copy with the same side a tick before. Swamp unpaced with 4x MSAA: 34 to 11 render passes
    a frame, GPU 3.0 to 2.0 ms, 303 to 421 ticks a second; Palm Brinks 29.5 to 11.2 passes.
-2. **No mid-frame splits.** Partly done: each pending command keeps its target, and draws to
-   another target that nothing pending reads (and that neither reads the frame nor shares its
-   depth buffer while testing depth) are queued beside the frame's and encoded before them, so
-   texture animation no longer ends the main pass. A copy or upload that needs only those side
-   targets encodes just them (`flush_side`). Palm Brinks 11.2 to 9.2 passes, swamp 11 to 10, all
-   pictures identical. What still splits the frame is real: depth of field copies the frame into
-   slot 22, its strips read slot 22, shadows draw into slot 22 against the frame's depth, and the
-   characters read the shadows. Copy-on-write for MSAA targets (a fresh copy of slot 22 when pending
-   draws still read it) was tried and dropped: the shadows test against the frame's own depth
-   buffer, so they split the pass anyway; the redraw that refills a fresh MSAA texture from its
-   resolved copy is lossy at edges unless limited to targets about to be cleared; and the swamp went
-   from 10 to 12 passes. On a tile GPU a lossless MSAA copy costs about what the split it saves does.
+2. **No mid-frame splits.** Done. Each pending command keeps its target, and draws to another
+   target that nothing pending reads (and that neither reads the frame nor clashes with its depth)
+   are queued beside the frame's and encoded before them, so texture animation no longer ends the
+   main pass. A side draw clashes with the frame's depth only when one of them writes it: shadows
+   that only test the frame's depth queue beside it. A draw to a side target that pending draws
+   still read copies its resolved picture first and points those readers at the copy
+   (`detach_readers`), so the depth of field strips keep reading the halved frame while the shadows
+   are drawn into the same slot. A flush for a copy, or for a draw that reads the frame, encodes
+   only what has to come first (`flush_for`): a side target that nothing pending reads, that reads
+   nothing pending and does no depth work waits, so the swamp's texture animation into slot 22
+   shares a pass with the depth of field's halving. A pass that neither tests nor writes depth gets
+   no depth buffer and no depth mirror. Unpaced with 4x MSAA (`stats`): swamp 10 to 8.2 passes a
+   frame, Palm Brinks 9.2 to 8; attachment loads and stores, counted from the passes without
+   compression, 231 to 152 MB a frame in the swamp and 192 to 135 in Palm Brinks at scale 1. Every
+   frame of both recordings is identical (hashed at each present; the loading screen's frames
+   63-85 vary between runs of the same build). On the M1 Pro at scale 1 the game is CPU-bound and
+   the change is lost in the noise (about 650-800 ticks a second either way); at scale 3 it is 1-4%
+   faster when the GPU stays in its fast state (swamp 186 to 190 ticks a second, Palm Brinks 197
+   to 203), and the GPU's clock state swings runs by 30%, more than the change. What still splits
+   the frame is real: the depth of field reads the scene before the characters, its strips need the
+   halved copy resolved, the shadows and the fire animation each need their own version of slot
+   22, and the heat haze copies the frame into `fire_work` every frame before the HUD is drawn, even
+   when no fire reads it. Copy-on-write for MSAA targets was tried before and dropped: the redraw
+   that refills a fresh MSAA texture from its resolved copy is lossy at edges. Left: the texture
+   animation and fire draws into slots 17 and 22 are 128x128 but pay for a whole 640x512 4x MSAA
+   target, as `render_target` makes every target at least that size with the frame's samples; and
+   nothing here was measured on a tile GPU.
 3. **The game on its own thread.** Done. SDL only lets the window's thread acquire a swapchain
    texture, so the game moved instead: `main` starts it on an SDL thread (`run_game`) and the main
    thread runs `port_present_run`, which pumps events, hands them to the game through a queue

@@ -57,6 +57,7 @@ typedef struct {
     int sampled;
     int depth_tests;
     int depth_writes;
+    int reads_pending;
 } Texture;
 
 typedef union {
@@ -1336,6 +1337,35 @@ static int target_pending(int slot) {
     return textures[slot].queued > 0;
 }
 
+static int waits(int slot, int first, int second) {
+    Texture *texture = &textures[slot];
+    return slot != drawing && slot != first && slot != second && !used_by_pending(slot) && !texture->depth_tests &&
+           !texture->depth_writes && !texture->reads_pending;
+}
+
+static void flush_for(int first, int second) {
+    if (held_valid) {
+        flush();
+        return;
+    }
+    int count = 0, kept = 0, with_drawing = first == drawing || second == drawing;
+    for (int i = 0; i < pending_count; ++i) textures[pending[i].target].reads_pending = 0;
+    for (int i = 0; i < pending_count; ++i)
+        if (!pending[i].snapshot && target_pending(pending[i].texture)) textures[pending[i].target].reads_pending = 1;
+    for (int i = 0; i < pending_count; ++i)
+        if (pending[i].target != drawing && !waits(pending[i].target, first, second)) ordered[count++] = pending[i];
+    for (int i = 0; i < pending_count && with_drawing; ++i)
+        if (pending[i].target == drawing) ordered[count++] = pending[i];
+    for (int i = 0; i < pending_count; ++i)
+        if (pending[i].target == drawing ? !with_drawing : waits(pending[i].target, first, second))
+            pending[kept++] = pending[i];
+    pending_count = kept;
+    if (!count) return;
+    for (int i = 0; i < count; ++i) queue(&ordered[i], -1);
+    encode_passes(upload_pending(), ordered, count);
+    if (!pending_count) release_retired_meshes();
+}
+
 static void settle(int slot) {
     if (!target_pending(slot) && !used_by_pending(slot)) return;
     int side = 0;
@@ -1604,8 +1634,7 @@ void render_download_full(int slot, int width, int height, uint32_t *pixels) {
 void render_copy(int source, int source_x, int source_y, int destination, int destination_x, int destination_y,
                  int width, int height) {
     if (width <= 0 || height <= 0) return;
-    if (target_pending(drawing) && (source == drawing || destination == drawing)) flush();
-    if (target_pending(source) || target_pending(destination)) flush_side();
+    if (target_pending(source) || target_pending(destination)) flush_for(source, destination);
     if (used_by_pending(destination)) rename_texture(destination);
     int scale = textures[source].scale;
     if (scale == textures[destination].scale) {
@@ -1700,7 +1729,7 @@ static int depth_clash(const RenderState *state) {
 
 static void draw_to_bound(const RenderState *state) {
     if (bound == drawing) return;
-    if (target_pending(drawing) && (state->texture == drawing || depth_clash(state))) flush();
+    if (target_pending(drawing) && (state->texture == drawing || depth_clash(state))) flush_for(drawing, 0);
     if (target_pending(drawing) && used_by_pending(bound)) detach_readers(bound);
     if (!target_pending(drawing)) drawing = bound;
 }
