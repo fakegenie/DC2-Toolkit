@@ -14,7 +14,7 @@ void mgInitRetail(int screen_mode, int video_mode);
 void mgEndFrameRetail(mgCDrawManager *manager);
 void mgSetPkFrameBufferRetail(int fbp, int width, int height, int psm);
 
-enum { LAYOUT_WIDTH = 512, UV_MASK = 0x3fff };
+enum { LAYOUT_WIDTH = 512, UV_MASK = 0x3fff, WIDE_IMAGE_PIXELS = 1024 * 512, STILL_HEIGHT = 416 };
 
 static int rotate_priority = -1;
 static int display_target;
@@ -164,17 +164,12 @@ PORT_OVERRIDE void mgSetPkMoveImage(sceGsTex0 *src, mgRect<int> src_rect, sceGsT
     mgSetPkFrameBuffer(-1, -1, -1, -1);
 }
 
-PORT_OVERRIDE int mgStoreImage(mgCTexture *texture, u_long128 *buffer) {
-    if (texture == NULL || buffer == NULL) return 0;
-    int width = texture->width, height = texture->height;
-    int source = gs_texture(texture->tex0.TBP0, width, height);
-    u_int *pixels = (u_int *)std::malloc((size_t)width * (size_t)height * 4);
-    render_download(source, gs_read_shift((u_int)texture->tex0.TBP0), 0, width, height, pixels);
+static void store_pixels(int psm, const u_int *pixels, int count, u_long128 *buffer) {
     unsigned char *out = (unsigned char *)buffer;
-    for (int i = 0; i < width * height; ++i) {
+    for (int i = 0; i < count; ++i) {
         u_int color = pixels[i];
         u_int alpha = ((color >> 24) + 1) / 2;
-        switch (texture->tex0.PSM) {
+        switch (psm) {
             case SCE_GS_PSMCT24:
                 out[i * 3] = (unsigned char)color;
                 out[i * 3 + 1] = (unsigned char)(color >> 8);
@@ -195,8 +190,79 @@ PORT_OVERRIDE int mgStoreImage(mgCTexture *texture, u_long128 *buffer) {
             }
         }
     }
+}
+
+PORT_OVERRIDE int mgStoreImage(mgCTexture *texture, u_long128 *buffer) {
+    if (texture == NULL || buffer == NULL) return 0;
+    int width = texture->width, height = texture->height;
+    int source = gs_texture(texture->tex0.TBP0, width, height);
+    u_int *pixels = (u_int *)std::malloc((size_t)width * (size_t)height * 4);
+    render_download(source, gs_read_shift((u_int)texture->tex0.TBP0), 0, width, height, pixels);
+    store_pixels((int)texture->tex0.PSM, pixels, width * height, buffer);
     std::free(pixels);
     return texture->bpp * (width * height);
+}
+
+extern "C" void port_store_screen(mgCTexture *screen, int width, u_long128 *buffer) {
+    if (screen == NULL || buffer == NULL) return;
+    int height = screen->height;
+    int source = gs_texture(screen->tex0.TBP0, screen->width, height);
+    int left = gs_read_shift((u_int)screen->tex0.TBP0) - (width - screen->width) / 2;
+    int from = left < 0 ? 0 : left;
+    int to = left + width < render_width(source) ? left + width : render_width(source);
+    u_int *pixels = (u_int *)std::calloc((size_t)width * (size_t)height, 4);
+    if (to > from) {
+        u_int *shown = (u_int *)std::malloc((size_t)(to - from) * (size_t)height * 4);
+        render_download(source, from, 0, to - from, height, shown);
+        for (int y = 0; y < height; ++y)
+            std::memcpy(pixels + y * width + (from - left), shown + y * (to - from), (size_t)(to - from) * 4);
+        std::free(shown);
+    }
+    store_pixels((int)screen->tex0.PSM, pixels, width * height, buffer);
+    std::free(pixels);
+}
+
+PORT_GAME_BEGIN
+static u_long128 cross_image[WIDE_IMAGE_PIXELS / 4];
+static u_long128 sepia_image[WIDE_IMAGE_PIXELS / 4];
+PORT_GAME_END
+
+extern "C" u_long128 *port_cross_image(u_long128 *buffer) {
+    return port_wide_width() == mgScreenWidth ? buffer : cross_image;
+}
+
+extern "C" u_long128 *port_sepia_image(u_long128 *buffer) {
+    return port_wide_width() == mgScreenWidth ? buffer : sepia_image;
+}
+
+extern "C" float port_screen_left(float x) {
+    return x <= 0.0f ? x - (float)((port_screen_width() - mgScreenWidth) / 2) : x;
+}
+
+extern "C" float port_screen_right(float x) {
+    return x >= (float)mgScreenWidth ? x + (float)((port_screen_width() - mgScreenWidth) / 2) : x;
+}
+
+extern "C" void port_screen_bars(int textured, float left, float top, float right, float bottom, int alpha, int blend) {
+    int side = (port_screen_width() - mgScreenWidth) / 2;
+    if (!textured || side == 0 || left > 0.0f || right < (float)mgScreenWidth || top > 0.0f ||
+        bottom < (float)STILL_HEIGHT)
+        return;
+    mgCDrawPrim prim;
+    prim.Initialize(NULL, NULL);
+    prim.DepthTestEnable(1);
+    prim.DepthTest(MG_DEPTH_TEST_ALWAYS);
+    prim.TextureMapEnable(0);
+    prim.AlphaBlendEnable(1);
+    prim.AlphaBlend(blend);
+    prim.AlphaTestEnable(0);
+    prim.Begin(MG_PRIM_SPRITE);
+    prim.Color(0, 0, 0, alpha);
+    prim.Vertex((float)-side, top, 0.0f);
+    prim.Vertex(left, bottom, 0.0f);
+    prim.Vertex(right, top, 0.0f);
+    prim.Vertex((float)(mgScreenWidth + side), bottom, 0.0f);
+    prim.End();
 }
 
 int port_display_target(int *width, int *height) {

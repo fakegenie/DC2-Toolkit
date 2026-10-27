@@ -196,6 +196,13 @@ int gs_read_shift(u_int base) {
 static int hud_spread;
 static int ps2_sampling;
 
+static int hud_move(float low, float high) {
+    if (!hud_spread || !frame_shift) return 0;
+    float middle = (float)(frame_shift + LAYOUT_WIDTH / 2);
+    int side = frame_shift < HUD_SIDE ? frame_shift : HUD_SIDE;
+    return high <= middle ? -side : low >= middle ? side : 0;
+}
+
 extern "C" void port_hud(int spread) {
     hud_spread = spread;
 }
@@ -206,21 +213,21 @@ extern "C" void port_ps2_sampling(int on) {
 
 static void spread_hud(RenderVertex *vertices, int count) {
     if (!hud_spread || !frame_shift) return;
-    float middle = (float)(frame_shift + LAYOUT_WIDTH / 2), low = vertices[0].x, high = vertices[0].x;
+    float low = vertices[0].x, high = vertices[0].x;
     for (int i = 1; i < count; ++i) {
         low = std::fmin(low, vertices[i].x);
         high = std::fmax(high, vertices[i].x);
     }
-    int side = frame_shift < HUD_SIDE ? frame_shift : HUD_SIDE;
-    float move = high <= middle ? (float)-side : low >= middle ? (float)side : 0.0f;
+    float move = (float)hud_move(low, high);
     for (int i = 0; i < count; ++i) vertices[i].x += move;
 }
 
 static sceGsScissor shifted_scissor(sceGsScissor scissor) {
     if (scissor.SCAX0 == 0 && scissor.SCAX1 == LAYOUT_RIGHT) scissor.SCAX1 += 2 * frame_shift;
     else {
-        scissor.SCAX0 += frame_shift;
-        scissor.SCAX1 += frame_shift;
+        int move = frame_shift + hud_move((float)(scissor.SCAX0 + frame_shift), (float)(scissor.SCAX1 + frame_shift));
+        scissor.SCAX0 += move;
+        scissor.SCAX1 += move;
     }
     return scissor;
 }
@@ -482,7 +489,9 @@ void gs_copy_image(u_int source_base, int source_x, int source_y, u_int destinat
     auto variants = by_image.find(texture->image[0]);
     if (variants == by_image.end()) return;
     for (CachedTexture *palette : variants->second) {
-        if (palette->render == destination) continue;
+        if (palette->render == destination || palette->width != texture->width || palette->height != texture->height ||
+            palette->psm != texture->bpp)
+            continue;
         mgCTexture variant = *texture;
         variant.clut = (decltype(variant.clut))palette->clut;
         gs_texture_for(&variant);
