@@ -934,6 +934,26 @@
     "replace": "void mgSetPkFrameBufferRetail(int fbp, int width, int height, int psm) {"
   },
   {
+    "file": "ps2/src/mglib.cpp",
+    "find": "int mgTransWorldPrim(int *out, float *pos) {",
+    "replace": "int mgTransWorldPrimRetail(int *out, float *pos) {"
+  },
+  {
+    "file": "ps2/src/mglib.cpp",
+    "find": "int mgTransWorldPrim3DSprite(int *top_left, int *bottom_right, float *position, float width, float height, int unused) {",
+    "replace": "int mgTransWorldPrim3DSpriteRetail(int *top_left, int *bottom_right, float *position, float width, float height, int unused) {"
+  },
+  {
+    "file": "ps2/include/wavetable.hpp",
+    "find": "    void CreateTexture(mgCTexture *texture);",
+    "replace": "    void CreateTexture(mgCTexture *texture);\n    void CreateTextureRetail(mgCTexture *texture);"
+  },
+  {
+    "file": "ps2/src/wavetable.cpp",
+    "find": "void CWaveTable::CreateTexture(mgCTexture *output_texture) {",
+    "replace": "void CWaveTable::CreateTextureRetail(mgCTexture *output_texture) {"
+  },
+  {
     "file": "ps2/src/scene.cpp",
     "find": "        return slot->name;\n    }\n\n    return 0;",
     "replace": "        return slot->name;\n    }\n\n    return (char *) \"\";"

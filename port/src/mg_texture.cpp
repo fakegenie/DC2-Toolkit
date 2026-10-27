@@ -1,6 +1,8 @@
 #include "mg_texture.hpp"
 #include "mglib.hpp"
+#include "render.h"
 #include "sce/libgraph.h"
+#include "wavetable.hpp"
 
 int GetZBufVram(int *size);
 int CheckCopyToZBufVram(mgCTexture *texture, int *size);
@@ -43,7 +45,16 @@ PORT_OVERRIDE void mgCTextureManager::ReloadTexture(int index, sceVif1Packet *pa
     int previous = last_block;
     if (previous != index) place_textures(this, index, 1);
     last_block = index;
-    if (previous != index && blocks[index].anime != NULL) blocks[index].anime->TexAnime(index, packet);
+    if (previous == index || blocks[index].anime == NULL) return;
+    render_set_animating(1);
+    blocks[index].anime->TexAnime(index, packet);
+    render_set_animating(0);
+}
+
+PORT_OVERRIDE void CWaveTable::CreateTexture(mgCTexture *texture) {
+    render_set_animating(1);
+    CreateTextureRetail(texture);
+    render_set_animating(0);
 }
 
 PORT_OVERRIDE void mgCTextureManager::ReloadCLUT(mgCTexture *texture, sceVif1Packet *packet) {

@@ -16,6 +16,7 @@
 enum { CACHE_LIMIT = 4096, CACHE_IDLE_FRAMES = 300, COPY_LIMIT = 8 };
 enum { LAYOUT_WIDTH = 512, LAYOUT_RIGHT = 511, WIDE_FRAME_LIMIT = 16, UV_WRAP = 1 << 14, HUD_SIDE = 85 };
 enum { COORDINATE_CENTER = 2048 };
+enum { PROJECTED_SLOTS = 4096, PROJECTED_BITS = 12, PROJECTED_PROBES = 8, XY_MASK = 0xffff, Z_MASK = 0xffffff };
 static const float SAMPLE_OFFSET = 0.46875f;
 static const float TEXEL_TIE = 0.0625f;
 static const float ONE_TO_ONE = 1.0f / 32.0f;
@@ -116,6 +117,13 @@ struct TargetCopy {
     int height;
 };
 
+struct Projected {
+    u_int xy;
+    u_int z;
+    int tag;
+    u_int frame;
+};
+
 PORT_GAME_BEGIN
 GsRegisters gs;
 static int frame_shift;
@@ -137,6 +145,9 @@ static std::unordered_map<const void *, std::vector<CachedTexture *>> by_image;
 static std::unordered_map<int, CachedTexture *> by_render;
 static TargetCopy copies[COPY_LIMIT];
 static u_int frame_number = 1;
+static Projected projected[PROJECTED_SLOTS];
+static int projected_count;
+static int queue_tags[3];
 static std::unordered_map<const void *, std::vector<u_int>> palettes;
 
 static int smaller(int a, int b) {
@@ -580,8 +591,49 @@ void gs_texture_source(const mgCTexture *texture) {
     source = &source_texture;
 }
 
+static u_int projected_slot(u_int xy, u_int z) {
+    return (xy * 0x9e3779b1u ^ z * 0x85ebca6bu) >> (32 - PROJECTED_BITS);
+}
+
+static void remember_projection(const int *point, int tag) {
+    u_int xy = ((u_int)point[0] & XY_MASK) | ((u_int)point[1] & XY_MASK) << 16, z = (u_int)point[2] & Z_MASK;
+    u_int slot = projected_slot(xy, z);
+    for (int probe = 0; probe < PROJECTED_PROBES; ++probe) {
+        Projected *entry = &projected[(slot + (u_int)probe) & (PROJECTED_SLOTS - 1)];
+        if (entry->frame == frame_number && (entry->xy != xy || entry->z != z)) continue;
+        *entry = {xy, z, tag, frame_number};
+        projected_count++;
+        return;
+    }
+}
+
+void gs_projected(const int *first, const int *second, int record) {
+    remember_projection(first, record << RENDER_PROJECT_SHIFT);
+    if (second != first)
+        remember_projection(second, record << RENDER_PROJECT_SHIFT | RENDER_PROJECT_SIDE_X | RENDER_PROJECT_SIDE_Y);
+}
+
+static int projected_tag(u_int x, u_int y, u_int z) {
+    if (!projected_count) return -1;
+    u_int xy = (x & XY_MASK) | (y & XY_MASK) << 16;
+    z &= Z_MASK;
+    u_int slot = projected_slot(xy, z);
+    for (int probe = 0; probe < PROJECTED_PROBES; ++probe) {
+        const Projected *entry = &projected[(slot + (u_int)probe) & (PROJECTED_SLOTS - 1)];
+        if (entry->frame != frame_number) return -1;
+        if (entry->xy == xy && entry->z == z) return entry->tag;
+    }
+    return -1;
+}
+
+static int corner_tag(int x_from, int y_from) {
+    int sides = RENDER_PROJECT_SIDE_X | RENDER_PROJECT_SIDE_Y;
+    return (x_from & ~sides) | (x_from & RENDER_PROJECT_SIDE_X) | (y_from & RENDER_PROJECT_SIDE_Y);
+}
+
 void gs_next_frame() {
     frame_number++;
+    projected_count = 0;
     for (int i = 0; i < CACHE_LIMIT; ++i) {
         CachedTexture *entry = &cache[i];
         if (!entry->render || frame_number - entry->used < CACHE_IDLE_FRAMES) continue;
@@ -789,9 +841,12 @@ static void kick(u_int x, u_int y, u_int z, int fog, int draw) {
     if (queued == 3) {
         queue[0] = queue[1];
         queue[1] = queue[2];
+        queue_tags[0] = queue_tags[1];
+        queue_tags[1] = queue_tags[2];
         queued = 2;
         vertex = &queue[2];
     }
+    queue_tags[queued] = projected_tag(x, y, z);
     vertex->x = (float)((int)x - (int)gs.xyoffset.OFX) / GS_SUBPIXELS + SAMPLE_OFFSET;
     vertex->y = (float)((int)y - (int)gs.xyoffset.OFY) / GS_SUBPIXELS + SAMPLE_OFFSET;
     float depth = (float)z * depth_scale();
@@ -821,8 +876,14 @@ static void kick(u_int x, u_int y, u_int z, int fog, int draw) {
         int width, height;
         state_for(&state, &width, &height);
         RenderVertex out[6];
+        int tags[6];
         int count = needed;
-        for (int i = 0; i < needed; ++i) out[i] = queue[queued - needed + i];
+        int tagged = 0;
+        for (int i = 0; i < needed; ++i) {
+            out[i] = queue[queued - needed + i];
+            tags[i] = queue_tags[queued - needed + i];
+            tagged |= tags[i] >= 0;
+        }
         for (int i = 0; i < count; ++i) {
             out[i].u /= (float)width;
             out[i].v /= (float)height;
@@ -857,17 +918,24 @@ static void kick(u_int x, u_int y, u_int z, int fog, int draw) {
             out[0] = a, out[1] = corner_b, out[2] = corner_c;
             out[3] = corner_b, out[4] = b, out[5] = corner_c;
             count = 6;
+            int first = tags[0], second = tags[1];
+            tagged = first >= 0 && second >= 0 && first >> RENDER_PROJECT_SHIFT == second >> RENDER_PROJECT_SHIFT;
+            tags[0] = first, tags[1] = corner_tag(second, first), tags[2] = corner_tag(first, second);
+            tags[3] = tags[1], tags[4] = second, tags[5] = tags[2];
         }
         spread_hud(out, count);
         render_source = RENDER_SOURCE_GS;
-        render_draw(&state, topology, out, count);
+        if (tagged) render_projected(&state, topology, out, count, tags);
+        else render_draw(&state, topology, out, count);
     }
     if (type == MG_PRIM_LINE || type == MG_PRIM_TRIANGLE || type == MG_PRIM_SPRITE || type == MG_PRIM_POINT) queued = 0;
     else if (type == MG_PRIM_TRIANGLE_FAN) {
         queue[1] = queue[2];
+        queue_tags[1] = queue_tags[2];
         queued = 2;
     } else if (type == MG_PRIM_LINE_STRIP) {
         queue[0] = queue[1];
+        queue_tags[0] = queue_tags[1];
         queued = 1;
     }
 }

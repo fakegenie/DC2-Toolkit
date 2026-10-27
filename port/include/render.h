@@ -6,6 +6,7 @@ extern "C" {
 #endif
 
 enum { RENDER_POINTS, RENDER_LINES, RENDER_TRIANGLES };
+enum { RENDER_PROJECT_SIDE_X = 1, RENDER_PROJECT_SIDE_Y = 2, RENDER_PROJECT_SHIFT = 2 };
 
 enum {
     MESH_CLIP = 0x001, MESH_SCISSOR = 0x002, MESH_CULL = 0x004, MESH_REAL = 0x008, MESH_POINT_LIGHTS = 0x010,
@@ -253,6 +254,9 @@ void render_sprite(const RenderState *state, const RenderVertex *vertices, const
 void render_water(const RenderState *state, const RenderVertex *vertices, int count, const RenderScreenMapping *mapping,
                   float depth);
 void render_shadow(const RenderState *state, const RenderVertex *vertices, const ShadowPoint *points, int count, int setup);
+int render_project(const float *place, const void *site, const float *view, float half_width, float half_height);
+void render_projected(const RenderState *state, int topology, const RenderVertex *vertices, int count, const int *tags);
+void render_set_animating(int animating);
 void render_present(int target, int width, int height);
 
 void render_capture_begin(void);

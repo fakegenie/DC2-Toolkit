@@ -13,6 +13,9 @@
 void mgInitRetail(int screen_mode, int video_mode);
 void mgEndFrameRetail(mgCDrawManager *manager);
 void mgSetPkFrameBufferRetail(int fbp, int width, int height, int psm);
+int mgTransWorldPrimRetail(int *out, float *pos);
+int mgTransWorldPrim3DSpriteRetail(int *top_left, int *bottom_right, float *position, float width, float height,
+                                   int unused);
 
 enum { LAYOUT_WIDTH = 512, UV_MASK = 0x3fff, WIDE_IMAGE_PIXELS = 1024 * 512, STILL_HEIGHT = 416 };
 
@@ -59,6 +62,27 @@ PORT_OVERRIDE void mgEndFrame(mgCDrawManager *manager) {
     port_state_frame();
     port_mods_frame_exit();
     world_wide = port_world_shown();
+}
+
+PORT_OVERRIDE int mgTransWorldPrim(int *out, float *pos) {
+    int visible = mgTransWorldPrimRetail(out, pos);
+    int record = render_project(pos, __builtin_return_address(0), &mgRenderInfo.world_screen[0][0], 0.0f, 0.0f);
+    if (record >= 0) gs_projected(out, out, record);
+    return visible;
+}
+
+PORT_OVERRIDE int mgTransWorldPrim3DSprite(int *top_left, int *bottom_right, float *position, float width, float height,
+                                           int unused) {
+    int visible = mgTransWorldPrim3DSpriteRetail(top_left, bottom_right, position, width, height, unused);
+    float (*world_screen)[4] = mgRenderInfo.world_screen;
+    float w = position[0] * world_screen[0][3] + position[1] * world_screen[1][3] + position[2] * world_screen[2][3] +
+              position[3] * world_screen[3][3];
+    if (w < 1.0f) return visible;
+    int record = render_project(position, __builtin_return_address(0), &mgRenderInfo.world_screen[0][0],
+                                0.5f * width * mgRenderInfo.view_screen[0][0],
+                                0.5f * height * mgRenderInfo.view_screen[1][1]);
+    if (record >= 0) gs_projected(top_left, bottom_right, record);
+    return visible;
 }
 
 PORT_OVERRIDE void mgSetPkTextureRepeat(sceGsClamp clamp) {

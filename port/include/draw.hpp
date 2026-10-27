@@ -55,6 +55,7 @@ void gs_copy_image(u_int source_base, int source_x, int source_y, u_int destinat
                    int destination_y, int width, int height);
 int gs_texture_for(const mgCTexture *texture);
 void gs_next_frame();
+void gs_projected(const int *first, const int *second, int record);
 void gs_base_state(RenderState *state);
 void gs_texture_state(RenderState *state, const mgCTexture *texture, float *scale_u, float *scale_v);
 RenderBlending gs_blending(sceGsAlpha alpha);

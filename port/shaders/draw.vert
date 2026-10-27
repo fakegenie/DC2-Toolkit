@@ -18,6 +18,7 @@ layout(location = 4) flat out vec4 frag_fog_curve;
 
 void main() {
     gl_Position = vec4(position.x * scale.x - 1.0, 1.0 - position.y * scale.y, position.z, 1.0);
+    gl_PointSize = 1.0;
     frag_color = color;
     frag_uv = uv;
     frag_fog = fog;

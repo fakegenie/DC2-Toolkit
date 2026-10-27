@@ -1052,7 +1052,8 @@ script that counts frames):
 Left to do:
 
 1. **What the CPU places on the screen** (particles, 3D sprites, water, shadows drawn as 2D).
-   Done for 3D sprites and water; shadows already blended (`blend_shadows`):
+   Done for 3D sprites, water, GS draws the engine projects and texture animation drawn as 2D;
+   shadows were already blended (`blend_shadows`):
    - Every `mgC3DSprite` item (the effect manager's particles, dust, fire) is recorded with its
      world position, its object as key and the camera it was projected with (`render_sprite`).
      `match_sprites` pairs each with the nearest of the same object and texture in the frame
@@ -1068,12 +1069,79 @@ Left to do:
      nothing else running), before and after: pool 1.44-1.53 to 1.81-1.93 ms, swamp 1.89-1.97 to
      1.94-2.05 ms, fire 0.83-1.19 to 1.19-1.38 ms, so 0.1 to 0.4 ms more, mostly placing sprites
      and water on the CPU.
-   - Left: GS draws the engine projects itself (`mgTransWorldPrim`, `mgTransWorldPrim3DSprite`:
-     combat hit and death effects, sword trails, town rain and ripples, gift marks) are still
-     paired by signature only and stay at 25 Hz when their count changes. Following them is
-     possible (a projection call since the last PRIM write plus a GEQUAL/GREATER depth test marks
-     one) but none showed up in the test scenes, so it was left out. Texture animation (waterfalls,
-     scrolling streams, flame frames) steps at 25 Hz.
+   - GS draws the engine projects itself (`mgTransWorldPrim`, `mgTransWorldPrim3DSprite`: hit and
+     death effects, sword trails, town rain and ripples, gift marks): done. Both are wrapped
+     (`...Retail` renames in `port.json`, overrides in `mglib.cpp`). Each call records the world
+     point, the camera and the sprite's half size (`render_project`), and `draw.cpp` remembers the
+     screen integers it returned this frame, so a GS vertex written with exactly those integers is
+     tagged with its record (a SPRITE's other two corners take one coordinate from each).
+     `match_projects` pairs a record with the nearest one of the same point and call site in the
+     frame before (within 64 units). The replay projects the blended point with the blended camera
+     and moves the tagged vertices by the difference, and a sprite's corners by the change in half
+     size over W. A record with no match follows the camera.
+   - GS points now set `gl_PointSize = 1`. Metal left their size undefined, so in replays Palm
+     Brinks' opening rain drew its `CParticle` points as a white box, and alpha 1 differed at
+     random.
+   - Measured with `between alpha=0` against the real frame before (pixels off by more than 24),
+     4:3 1x:
+     - Palm Brinks rain (m07 event 151, 12 samples): 83069 before, 3866 with the point size alone,
+       2595 with both changes. Alpha 1 matched the real frame in all 12.
+     - Linda (dungeon 0 floor 4, 24 samples while attacking): 22539 to 21349. Alpha 1 is within
+       24 of the real frame, but its light shafts differ slightly, before and after alike.
+   - Left for these draws:
+     - Damage digits (`CDamageScore`) offset the projected integers and write Z 0, so they are
+       not tagged and still pair by signature.
+     - Names over monsters use `mgTransWorldScreen`, which is not wrapped.
+     - `DrawScreenRain` draws 50 random 2D lines a frame. Signature pairing still blends each
+       line towards an unrelated one.
+     - Gift marks and sword trails were never on screen in a test scene. They go through the
+       same calls as hit effects.
+   - Texture animation drawn as 2D: done.
+     - `TexAnime` (run from `ReloadTexture`) and `CWaveTable::CreateTexture` (the canal ripple
+       shading) draw inside `render_set_animating`.
+     - Those draws into off-screen targets keep their signature. Each pairs with the same draw
+       of the frame before when no vertex moved more than a quarter of the draw's extent, and
+       the replay blends UVs and colours as well as positions. The scrolling quarters slide and
+       the wave shading fades.
+     - Some still step at 25 Hz:
+       - a textured draw whose UVs changed while nothing moved (a frame swap);
+       - a scroll's wrap frame, which moves too far;
+       - 8- and 4-bit animations, which move texels with `mgSetPkMoveImage`;
+       - flame frames.
+   - Water ripples: done. CWater's refraction offsets change every frame but were taken from the
+     last frame only, so alpha 0 looked like the next frame. `match_water` pairs each water draw
+     with the one in the same place in the frame before when the vertex count matches. The replay
+     blends the ripple part of the UVs (UV less screen position times the slide) before the
+     camera follow.
+   - Measured, alpha 0 against the frame before, 6 samples with the camera still:
+     - Finny Frenzy race (map 96), tolerance 0: 23642, 23470 and 23406 to 278, 242 and 238
+       pixels. Over 24: 57 to 10 in total.
+     - Palm Brinks canal (`reload map=m01 x=-735 z=-157`), tolerance 0: 8191-8425 to 2052-2232.
+       Over 24: 43 to 34. A band along the far bank is left.
+     - The swamp's far water strip (s0516): its mean error at alpha 0 went from 2.8 to 2.6, with
+       the camera moving.
+     - Alpha 1 matched the real frame in every sample.
+   - On the race course the wave texture (`water`) is never sampled and never restored. Each
+     replay blends the wave over it once more, which is harmless there.
+   - Cost of all of the above: `replay_us` per replay in the debug build, a fresh launch per
+     scene, two rounds, the build before against the build after:
+
+     | scene | before (ms) | after (ms) |
+     | --- | --- | --- |
+     | rain | 1.37, 1.41 | 1.45, 1.54 |
+     | Linda | 1.32, 1.47 | 1.11, 1.51 |
+     | race | 1.11, 1.11 | 1.34, 1.30 |
+     | canal | 1.11, 1.20 | 1.26, 1.16 |
+
+     So 0.05 to 0.2 ms more. A first version blended the ripples in the mapped transfer buffer,
+     reading it back, and cost 4.3 ms on the race course; the ripples are now built in the
+     scratch copy.
+   - At 16:9 2x, the same scenes against the build before (pixels off by more than 24 at alpha 0,
+     at full resolution):
+     - rain: 16008 to 10716 (12 samples);
+     - race: 3537 to 246;
+     - canal: 119 to 106.
+     - Alpha 1 matched the real frame in every sample.
 2. **Present pacing with vsync.** Done. Since the game moved to its own thread a replay no longer
    blocks on the display, but `smooth_until` still kept a whole refresh free before the field with
    `--vsync` (half a refresh without), from when it did. It now keeps a quarter of a refresh either
