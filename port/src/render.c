@@ -37,7 +37,7 @@ enum { WINDOW_WIDTH = 960, WINDOW_HEIGHT = 720, TARGET_WIDTH = 640, TARGET_HEIGH
 enum {
     TEXTURED = 1, TEXA = 2, AEM = 4, FOG = 8, ALPHA_TEST = 16, FACTOR_FIX = 32,
     SCALE_SOURCE = 64, FACTOR_COLOR = 128, DECAL = 256, VERTEX_ALPHA = 512, DEPTH_READ = 1024, SOLID = 2048, OVERDRAW = 4096,
-    DEST_TEST = 8192, DEST_SET = 16384, TINT = 32768
+    DEST_TEST = 8192, DEST_SET = 16384, TINT = 32768, PS2_SAMPLING = 65536
 };
 
 typedef struct {
@@ -88,7 +88,7 @@ typedef struct {
     uint32_t texture_alpha;
     uint32_t fog_color;
     uint32_t tint;
-    uint32_t unused;
+    uint32_t source_scale;
 } FragmentState;
 
 typedef struct {
@@ -1729,6 +1729,7 @@ static int prepare(Command *command, const RenderState *state, PipelineKey key) 
     if (state->vertex_alpha) flags |= VERTEX_ALPHA;
     if (state->depth_read) flags |= DEPTH_READ;
     if (state->tint) flags |= TINT;
+    if (textured && state->ps2_sampling && state->linear && textures[state->texture].scale > 1) flags |= PS2_SAMPLING;
     uint32_t fix = state->blending.fix;
     command->fragment.flags = flags;
     command->fragment.alpha_reference = state->tests.alpha_reference;
@@ -1737,6 +1738,7 @@ static int prepare(Command *command, const RenderState *state, PipelineKey key) 
     command->fragment.texture_alpha = state->expansion.ta0;
     command->fragment.fog_color = state->fog_color;
     command->fragment.tint = state->tint;
+    if (flags & PS2_SAMPLING) command->fragment.source_scale = (uint32_t)textures[state->texture].scale;
     command->blend_constant = fix >= 128 ? 1.0f : (float)fix / 128.0f;
     command->texture = textured ? state->texture : blank;
     command->resident = 0;

@@ -141,6 +141,7 @@ typedef struct {
     int depth_write;
     uint32_t color_mask;
     uint32_t tint;
+    int ps2_sampling;
     RenderRectangle scissor;
 } RenderState;
 

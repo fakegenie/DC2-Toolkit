@@ -29,8 +29,10 @@ struct WaterView {
     float clip[4][4];
     RenderFogCurve fog;
     float far;
+    float left;
     float offset_x;
     float offset_y;
+    float side;
     float width;
     float height;
     float colour[4];
@@ -107,10 +109,10 @@ static int water_vertex(RenderVertex *vertex, const WaterView &view, const Water
     RenderScreenMapping screen;
     float depth;
     gs_screen_mapping(&screen, &depth);
-    vertex->x = xw - view.offset_x;
+    vertex->x = xw - view.left;
     vertex->y = yw - view.offset_y;
     vertex->z = clamp((float)(long long)zw * depth, 0.0f, 1.0f);
-    float u = clamp(xw - view.offset_x + slope.row * view.param1, 1.0f, view.width);
+    float u = clamp(xw - view.offset_x + view.side + slope.row * view.param1, 1.0f, view.width + 2.0f * view.side);
     float v = clamp(yw - view.offset_y + slope.column * view.param1, 1.0f, view.height);
     vertex->u = u / view.texture_width;
     vertex->v = v / view.texture_height;
@@ -204,8 +206,10 @@ PORT_OVERRIDE int CWater::Draw(u_int *tag, float (*matrix)[4], mgCDrawManager *d
     mgMulMatrix(view.clip, info->world_screen, matrix);
     view.fog = {info->fog.offset, info->fog.near_value, info->fog.far_value, info->fog.scale};
     view.far = info->guard_max[3];
+    view.left = gs_screen_left();
     view.offset_x = (float)mgScreenOffx;
     view.offset_y = (float)mgScreenOffy;
+    view.side = (float)((port_screen_width() - mgScreenWidth) / 2);
     view.width = (float)mgScreenWidth;
     view.height = (float)(mgScreenHeight - 1);
     for (int k = 0; k < 4; k++) view.colour[k] = (float)color[k];

@@ -1017,7 +1017,7 @@
   {
     "file": "ps2/include/mglib.hpp",
     "find": "extern int mgScreenWidth;",
-    "replace": "extern int mgScreenWidth;\nextern \"C\" int port_screen_width(void);\nextern \"C\" int port_wide_width(void);\nextern \"C\" int port_texture_shift(unsigned int base);\nextern \"C\" void port_texture_loaded(const void *image);\nextern \"C\" void port_hud(int spread);\nextern \"C\" void port_end_main_frame(void);"
+    "replace": "extern int mgScreenWidth;\nextern \"C\" int port_screen_width(void);\nextern \"C\" int port_wide_width(void);\nextern \"C\" int port_texture_shift(unsigned int base);\nextern \"C\" void port_texture_loaded(const void *image);\nextern \"C\" void port_hud(int spread);\nextern \"C\" void port_ps2_sampling(int on);\nextern \"C\" void port_end_main_frame(void);"
   },
   {
     "file": "ps2/src/editloop.cpp",
@@ -1092,7 +1092,67 @@
   {
     "file": "ps2/src/screeneffect.cpp",
     "find": "    mgRect<int> source(0, 0, mgScreenWidth * 16, mgScreenHeight * 16);\n    mgRect<int> destination(0, 0, mgScreenWidth * 8, mgScreenHeight * 8);",
-    "replace": "    int side = (port_screen_width() - mgScreenWidth) / 2;\n    mgRect<int> source(-side * 16, 0, (mgScreenWidth + side) * 16, mgScreenHeight * 16);\n    mgRect<int> destination(0, 0, mgScreenWidth * 8, mgScreenHeight * 8);"
+    "replace": "    int side = (port_screen_width() - mgScreenWidth) / 2;\n    mgRect<int> source(-side * 16, 0, (mgScreenWidth + side) * 16, mgScreenHeight * 16);\n    mgRect<int> destination(-side * 16, 0, mgScreenWidth * 8, mgScreenHeight * 8);"
+  },
+  {
+    "file": "ps2/src/screeneffect.cpp",
+    "find": "    mgGetFrameBuffer(&frame_buffer);\n    blur_texture.block = work_texture->block;",
+    "replace": "    port_ps2_sampling(1);\n    mgGetFrameBuffer(&frame_buffer);\n    blur_texture.block = work_texture->block;"
+  },
+  {
+    "file": "ps2/src/screeneffect.cpp",
+    "find": "        destination.bottom = destination.top + height * 2 / 3;\n    }\n}",
+    "replace": "        destination.bottom = destination.top + height * 2 / 3;\n    }\n\n    port_ps2_sampling(0);\n}"
+  },
+  {
+    "file": "ps2/src/sceneevent.cpp",
+    "find": "    rect.Set(0, 0, (mgScreenWidth - 1) << 4, (mgScreenHeight - 1) << 4);\n    mgSetPkMoveImage(&frame, rect, fire_texture, 0, 0, 0);",
+    "replace": "    int side = (port_screen_width() - mgScreenWidth) / 2;\n    rect.Set(-side * 16, 0, (mgScreenWidth + side - 1) << 4, (mgScreenHeight - 1) << 4);\n    mgSetPkMoveImage(&frame, rect, fire_texture, 0, 0, 0);"
+  },
+  {
+    "file": "ps2/src/editloop.cpp",
+    "find": "textures->EnterTexture(66, \"fire_work\", NULL, mgScreenWidth, mgScreenHeight,",
+    "replace": "textures->EnterTexture(66, \"fire_work\", NULL, port_wide_width(), mgScreenHeight,"
+  },
+  {
+    "file": "ps2/src/maintex.cpp",
+    "find": "mgTexManager.EnterTexture(0x4B, \"fire_work\", NULL, mgScreenWidth, mgScreenHeight,",
+    "replace": "mgTexManager.EnterTexture(0x4B, \"fire_work\", NULL, port_wide_width(), mgScreenHeight,"
+  },
+  {
+    "file": "ps2/src/water.cpp",
+    "find": "    left = mgScreenOffx * 16;",
+    "replace": "    left = (mgScreenOffx - (port_screen_width() - mgScreenWidth) / 2) * 16;"
+  },
+  {
+    "file": "ps2/src/water.cpp",
+    "find": "    right = (mgScreenOffx + mgScreenWidth - 2) * 16;",
+    "replace": "    right = (mgScreenOffx + (mgScreenWidth + port_screen_width()) / 2 - 2) * 16;"
+  },
+  {
+    "file": "ps2/src/water.cpp",
+    "find": "                uv0[0] = top_left[0] - mgScreenOffx * 16 + 0x28;",
+    "replace": "                uv0[0] = top_left[0] - left + 0x28;"
+  },
+  {
+    "file": "ps2/src/water.cpp",
+    "find": "                uv1[0] = bottom_right[0] - mgScreenOffx * 16 - 0x28;",
+    "replace": "                uv1[0] = bottom_right[0] - left - 0x28;"
+  },
+  {
+    "file": "ps2/src/water.cpp",
+    "find": "                if (uv0[0] > mgScreenWidth * 16) {\n                    uv0[0] = mgScreenWidth * 16;",
+    "replace": "                if (uv0[0] > port_screen_width() * 16) {\n                    uv0[0] = port_screen_width() * 16;"
+  },
+  {
+    "file": "ps2/src/water.cpp",
+    "find": "                if (uv1[0] > mgScreenWidth * 16) {\n                    uv1[0] = mgScreenWidth * 16;",
+    "replace": "                if (uv1[0] > port_screen_width() * 16) {\n                    uv1[0] = port_screen_width() * 16;"
+  },
+  {
+    "file": "ps2/src/map.cpp",
+    "find": "    mgRect<int> screen_rect(0, 0, (mgScreenWidth - 1) * 16, (mgScreenHeight - 1) * 16);\n    mgSetPkMoveImage(&framebuffer, screen_rect, screen, 0, 0, 0);",
+    "replace": "    int side = (port_screen_width() - mgScreenWidth) / 2;\n    mgRect<int> screen_rect(-side * 16, 0, (mgScreenWidth + side - 1) * 16, (mgScreenHeight - 1) * 16);\n    mgSetPkMoveImage(&framebuffer, screen_rect, screen, -port_texture_shift(screen->tex0.TBP0) * 16, 0, 0);"
   },
   {
     "file": "ps2/src/editriver.cpp",

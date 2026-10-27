@@ -823,7 +823,16 @@ The window is HiDPI on macOS. Left to do:
 1. **An in-game options screen** for these, instead of a mod set.
 2. **The known 1x gaps:** render-to-texture cache textures stay 1x and shadow edges are not
    antialiased; the bitmap fonts and 2D art go soft when upscaled.
-3. **Checks at 2x and above** of heat haze, depth of field and water.
+3. **Checks at 2x and above** of heat haze, depth of field and water: done, at 2x and 4x in
+   Balance Valley (torch haze, distance blur), the fish race course (map 96, a CWater surface) and
+   the Rainbow Butterfly Wood. Haze and water matched 1x (on/off difference 211/208/220 for haze,
+   721/716/715 for water at 1x/2x/4x). Depth of field blurred much less when scaled, as it blurs by
+   halving the frame and the halved frame kept the full resolution. `DepthOfField` now turns on
+   `port_ps2_sampling`, and its draws from scaled targets sample the texture as the GS would at 1x
+   (bilinear between 1x texel centres, `PS2_SAMPLING` in `draw.frag`), so the blur matches 1x and
+   stays smooth: in the blurred cliff at 4x the difference from 1x fell from 640 to 182 (MAE over
+   a 120x80 crop). Left: the lens flare halves and thirds the frame the same way and was not
+   looked at.
 
 ### Widescreen
 
@@ -848,8 +857,17 @@ pixels (512 is 4:3) while the game's 512-wide layout stays as it was, centred in
 
 Left to do:
 
-1. **Effects in the side areas:** depth of field, heat haze, water refraction, outlines, the
-   photo camera and cross-fades act on the middle only.
+1. **Effects in the side areas:** outlines, the photo camera and cross-fades act on the middle
+   only. Depth of field, heat haze and water refraction cover the whole width:
+   - depth of field already blurred the sides; its halved frame is now W/2 wide (it squeezed W
+     into 256) and starts at -side, so the blur is as wide as at 4:3 and the second level fits;
+   - heat haze copies the whole frame into `fire_work` (entered `port_wide_width()` wide) and
+     clamps its wisps to the wide screen instead of the middle;
+   - water copies the whole frame to x 0 of `water_work` whatever shift that block's base last
+     had (texture animations bind it at 0, the shadow pass at side), and `port/src/water.cpp`
+     places the surface by the frame's XYOFFSET and reads the copy at layout x + side. Before, the
+     surface was drawn 85 px left of the scene and its refraction showed objects 85 px away (a
+     ghost of the rock at the race course).
 2. **The HUD** stays in the middle; anchoring the edge pieces (health, minimap) to the sides.
 3. **Content limits:** cutscenes framed for 4:3 may show scenery or actors off camera; movies
    stay 4:3.

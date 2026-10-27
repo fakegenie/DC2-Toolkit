@@ -17,7 +17,7 @@ layout(set = 3, binding = 0) uniform State {
     uint texture_alpha;
     uint fog_color;
     uint tint;
-    uint unused;
+    uint source_scale;
 };
 
 layout(location = 0) out vec4 result;
@@ -39,6 +39,7 @@ const uint OVERDRAW = 4096u;
 const uint DEST_TEST = 8192u;
 const uint DEST_SET = 16384u;
 const uint TINT = 32768u;
+const uint PS2_SAMPLING = 65536u;
 
 const uint ALPHA_NEVER = 0u;
 const uint ALPHA_ALWAYS = 1u;
@@ -69,6 +70,18 @@ float fog_amount() {
     return floor(max(max(min(fogged, frag_fog_curve.y), frag_fog_curve.z), 0.0)) / 255.0;
 }
 
+vec4 ps2_texel(vec2 uv) {
+    vec2 size = vec2(textureSize(source, 0)) / float(source_scale);
+    vec2 at = uv * size - 0.5;
+    vec2 cell = floor(at);
+    vec2 weight = at - cell;
+    vec2 low = (cell + 0.5) / size;
+    vec2 high = (cell + 1.5) / size;
+    vec4 top = mix(texture(source, low), texture(source, vec2(high.x, low.y)), weight.x);
+    vec4 bottom = mix(texture(source, vec2(low.x, high.y)), texture(source, high), weight.x);
+    return mix(top, bottom, weight.y);
+}
+
 void main() {
     stored_depth = vec4(gl_FragCoord.z);
     if ((flags & DEPTH_READ) != 0u) {
@@ -87,7 +100,7 @@ void main() {
     vec4 color = vec4(frag_color.rgb, frag_color.a * MODULATE);
     if ((flags & TEXTURED) != 0u) {
         vec2 uv = frag_limits == vec4(0.0) ? frag_uv : clamp(frag_uv, frag_limits.xy, frag_limits.zw);
-        vec4 texel = texture(source, uv);
+        vec4 texel = (flags & PS2_SAMPLING) != 0u ? ps2_texel(uv) : texture(source, uv);
         if ((flags & TEXA) != 0u) {
             bool black = texel.r + texel.g + texel.b == 0.0;
             texel.a = (flags & AEM) != 0u && black ? 0.0 : float(texture_alpha) / 128.0;

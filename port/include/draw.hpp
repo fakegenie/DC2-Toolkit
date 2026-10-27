@@ -62,6 +62,7 @@ RenderExpansion gs_expansion(sceGsTexa texa);
 void gs_sample_limits(const RenderState *state, float scale_u, float scale_v, RenderTexelLimits *limits);
 void gs_screen_mapping(RenderScreenMapping *screen, float *depth);
 void gs_shift_screen(int x, int y);
+float gs_screen_left();
 
 int visual_packet_draw(const void *common, const void *packet);
 void visual_next_frame();
