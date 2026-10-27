@@ -42,9 +42,7 @@ int smooth_due(void) { return monotonic_ns() >= shown_at + refresh_period(); }
 void smooth_shown(void) { shown_at = monotonic_ns(); }
 
 void smooth_until(uint64_t deadline) {
-    RenderDisplay display;
-    render_display(&display);
-    uint64_t margin = display.vsync ? refresh_period() : refresh_period() / 2;
+    uint64_t margin = refresh_period() / 4;
     uint64_t start = monotonic_ns();
     for (uint64_t now = start; now < deadline; now = monotonic_ns()) {
         if (now >= next_refresh && now + margin < deadline) {

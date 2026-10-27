@@ -3068,7 +3068,9 @@ static int invert(float *out, const float *matrix) {
 }
 
 static int camera_shift(float *shift, const Recording *frame, const Recording *before, float alpha) {
-    if (!frame->has_camera || !before->has_camera || camera_cut(frame, before)) return 0;
+    if (alpha >= 1.0f || !frame->has_camera || !before->has_camera || camera_cut(frame, before) ||
+        !memcmp(frame->view, before->view, sizeof frame->view))
+        return 0;
     float view[16], inverse[16];
     for (int k = 0; k < 16; ++k) view[k] = before->view[k] + (frame->view[k] - before->view[k]) * alpha;
     if (!invert(inverse, frame->view)) return 0;
@@ -3077,6 +3079,7 @@ static int camera_shift(float *shift, const Recording *frame, const Recording *b
 }
 
 static void blend_draws(unsigned char *mapped, const Recording *frame, const Recording *before, float alpha) {
+    if (alpha >= 1.0f) return;
     for (int i = 0; i < frame->command_count; ++i) {
         const Command *command = &frame->commands[i];
         if (command->pair < 0) continue;
@@ -3149,6 +3152,7 @@ static void shadow_corner(float *out, const float *matrix, const float *position
 
 static void blend_shadows(unsigned char *mapped, const Recording *frame, const Recording *before, float alpha,
                           const float *shift) {
+    if (alpha >= 1.0f) return;
     static float (*placements)[4][16];
     static int *placed;
     static unsigned char *hidden;
@@ -3436,7 +3440,7 @@ static void blend_models(const Recording *frame, const Recording *before, float 
         replay_models[i] = frame->models[i];
         int found = frame->matches[i];
         if (found < 0 && follow) multiply(replay_models[i].model_screen, shift, frame->models[i].model_screen);
-        if (found < 0) continue;
+        if (found < 0 || alpha >= 1.0f) continue;
         float *out = (float *)&replay_models[i];
         const float *now = (const float *)&frame->models[i];
         const float *was = (const float *)&before->models[found];
