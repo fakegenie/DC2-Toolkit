@@ -3293,6 +3293,7 @@ static void place_sprite(RenderVertex *out, const Recording *frame, const Record
 
 static void place_sprites(unsigned char *mapped, const Recording *frame, const Recording *before, float alpha,
                           const float *shift) {
+    if (alpha >= 1.0f) return;
     for (int i = 0; i < frame->command_count; ++i) {
         const Command *command = &frame->commands[i];
         if (command->sprite < 0) continue;
