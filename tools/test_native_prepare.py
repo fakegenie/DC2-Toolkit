@@ -1,3 +1,9 @@
+"""Checks tools/native_prepare.py on a scratch engine: port overrides are stripped, mods replace functions and tables,
+and a mod replacing a function the port supplies is refused.
+
+    python3 -I tools/test_native_prepare.py
+"""
+
 import importlib.util
 from pathlib import Path
 import shutil

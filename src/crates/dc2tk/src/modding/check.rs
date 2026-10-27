@@ -63,7 +63,7 @@ pub fn run_mod_check(
                 disc.unwrap(),
                 edited_executable.as_deref(),
                 &executable,
-                None,
+                Some(&crate::native::checked_output()),
                 false,
                 &mod_dirs,
             )?;

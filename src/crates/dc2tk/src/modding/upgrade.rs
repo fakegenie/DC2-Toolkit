@@ -55,7 +55,9 @@ pub fn run_mod_upgrade(folder: &str, id: Option<&str>, mods_dir: &ModsDir) -> Re
                 Some(version) => {
                     body.insert("version".into(), version.into());
                 }
-                None => println!("version {value} is not major.minor.patch; the mod starts at {}", manifest::FIRST_VERSION),
+                None => {
+                    println!("version {value} is not major.minor.patch; the mod starts at {}", manifest::FIRST_VERSION)
+                }
             },
             "start_at" => {
                 dev.insert("start_at".into(), value.clone());
@@ -101,7 +103,8 @@ pub fn run_mod_upgrade(folder: &str, id: Option<&str>, mods_dir: &ModsDir) -> Re
                     .context("\"files\" is not what format 1 wrote")?;
             }
             "includes" => {
-                lock.includes = serde_json::from_value(value.clone()).context("\"includes\" is not what format 1 wrote")?;
+                lock.includes =
+                    serde_json::from_value(value.clone()).context("\"includes\" is not what format 1 wrote")?;
             }
             "note" => {}
             _ => bail!("{folder}'s mod.json has {key:?}, which format 1 did not have; take it out and run this again"),
@@ -169,7 +172,10 @@ pub fn run_mod_upgrade(folder: &str, id: Option<&str>, mods_dir: &ModsDir) -> Re
 
 fn folder_names(value: &Value, key: &str) -> Result<Vec<String>> {
     let Some(names) = value.as_array() else { bail!("\"{key}\" is not a list of mod names") };
-    names.iter().map(|name| name.as_str().map(str::to_string).with_context(|| format!("\"{key}\" has {name}"))).collect()
+    names
+        .iter()
+        .map(|name| name.as_str().map(str::to_string).with_context(|| format!("\"{key}\" has {name}")))
+        .collect()
 }
 
 fn id_of(mods: &Path, folder: &str) -> Result<String> {
@@ -266,7 +272,9 @@ fn move_numbers(mods: &Path, folder: &str, id: &str) -> Result<usize> {
     }
     numbers::write_lock(&lock_path, &lock)?;
     numbers::read_lock(Some(&lock_path))?;
-    let left = old.iter().any(|(key, entries)| key != "note" && entries.as_object().is_some_and(|entries| !entries.is_empty()));
+    let left = old
+        .iter()
+        .any(|(key, entries)| key != "note" && entries.as_object().is_some_and(|entries| !entries.is_empty()));
     if left {
         dc2tk_disc::textfile::write_text(&old_path, &dc2tk_disc::textfile::json_text(&Value::Object(old)))?;
     } else {

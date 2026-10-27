@@ -19,7 +19,8 @@ A scenario is a JSON list of steps, run against build/port/dc2-debug through its
     {"screenshot": "name"}            run one frame and compare its picture with the baseline called name
 
 The game is paused between steps, so a run does not depend on how fast the machine is. Baselines are
-build/port/golden/baseline/SCENARIO/NAME.png, which stays out of git because it is game imagery. A failed
+build/port/golden/baseline-PLATFORM/SCENARIO/NAME.png (macos, linux or windows: each GPU draws a few levels apart),
+which stays out of git because it is game imagery. A failed
 comparison writes build/port/golden/actual/ and a diff image in build/port/golden/diff/ (red marks the
 differing pixels). DC2TK_DEBUG_PORT picks the port (default 7783). The exit status is 1 when anything fails.
 """
@@ -41,6 +42,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PORT = int(os.environ.get("DC2TK_DEBUG_PORT", "7783"))
 GOLDEN = ROOT / "build" / "port" / "golden"
+BASELINE = GOLDEN / f"baseline-{ {'darwin': 'macos', 'win32': 'windows'}.get(sys.platform, sys.platform)}"
 SCENARIOS = ROOT / "port" / "tests" / "golden"
 
 
@@ -162,7 +164,7 @@ def compare(actual, expected, tolerance):
 
 
 def check_screenshot(scenario, name, png, update, tolerance):
-    baseline = GOLDEN / "baseline" / scenario / f"{name}.png"
+    baseline = BASELINE / scenario / f"{name}.png"
     if update:
         baseline.parent.mkdir(parents=True, exist_ok=True)
         baseline.write_bytes(png)
