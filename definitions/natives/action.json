@@ -75,8 +75,8 @@
       "no": 33,
       "name": "_CHECK_PAUSE",
       "accessors": [
-        "out",
-        "int"
+        "int",
+        "out"
       ]
     },
     {
@@ -151,8 +151,8 @@
       "no": 43,
       "name": "_GET_BTN",
       "accessors": [
-        "out",
-        "int"
+        "int",
+        "out"
       ]
     },
     {
@@ -441,48 +441,7 @@
       "no": 102,
       "name": "_SHOT",
       "accessors": [
-        "int",
-        "string",
-        "out",
-        "out",
-        "out",
-        "out",
-        "out",
-        "int",
-        "out",
-        "out",
-        "out",
-        "out",
-        "string",
-        "float",
-        "int",
-        "string",
-        "string",
-        "out",
-        "string",
-        "out",
-        "out",
-        "string",
-        "out",
-        "float",
-        "float",
-        "string",
-        "string",
-        "out",
-        "int",
-        "float",
-        "float",
-        "float",
-        "int",
-        "float",
-        "float",
-        "float",
-        "int",
-        "int",
-        "int",
-        "int",
-        "int",
-        "float"
+        "int"
       ]
     },
     {

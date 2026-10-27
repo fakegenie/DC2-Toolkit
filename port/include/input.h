@@ -68,6 +68,7 @@ struct port_input_state {
 };
 
 unsigned char port_input_axis(int value);
+int port_input_square(int value, int other);
 void port_input_report(const struct port_input_state *state, struct pad_dualshock2_report *report);
 int port_input_init(void);
 void port_input_close(void);

@@ -545,10 +545,13 @@ int gs_texture_for(const mgCTexture *texture) {
     std::vector<u_int> pixels;
     decode(texture, pixels);
     port_stats.texture_decodes++;
-    render_upload(entry->render, 0, 0, texture->width, texture->height, pixels.data());
-    if (!reloaded && !entry->pristine) return entry->render;
+    if (!reloaded && !entry->pristine) {
+        render_upload(entry->render, 0, 0, texture->width, texture->height, pixels.data());
+        return entry->render;
+    }
     if (!entry->pristine) entry->pristine = render_texture(texture->width, texture->height);
-    render_copy(entry->render, 0, 0, entry->pristine, 0, 0, texture->width, texture->height);
+    render_upload(entry->pristine, 0, 0, texture->width, texture->height, pixels.data());
+    render_copy(entry->pristine, 0, 0, entry->render, 0, 0, texture->width, texture->height);
     return entry->render;
 }
 

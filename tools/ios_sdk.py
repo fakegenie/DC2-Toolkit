@@ -11,6 +11,7 @@ import time
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
+JOBS = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count() or 1
 PREFIX = ROOT / "build" / "port" / "ios-sdk"
 WORK = ROOT / "build" / "port" / "ios-sdk-work"
 SDL_VERSION = "3.4.18"
@@ -111,7 +112,7 @@ def build_sdl(name, source):
         "-DSDL_SHARED=OFF", "-DSDL_STATIC=ON", "-DSDL_TEST_LIBRARY=OFF", "-DSDL_TESTS=OFF",
         "-DSDL_EXAMPLES=OFF", "-DSDL_INSTALL_TESTS=OFF", "-DSDL_DISABLE_INSTALL_DOCS=ON",
     ], log=log)
-    seconds += run(["cmake", "--build", str(build), "--parallel", str(os.cpu_count())], log=log)
+    seconds += run(["cmake", "--build", str(build), "--parallel", str(JOBS)], log=log)
     seconds += run(["cmake", "--install", str(build)], log=log)
     return seconds
 
@@ -136,13 +137,13 @@ def build_ffmpeg(name, source):
     log = WORK / f"ffmpeg-{name}.log"
     try:
         seconds = ffmpeg_configure(name, source, build, log, True)
-        seconds += run(["make", f"-j{os.cpu_count()}"], cwd=build, log=log)
+        seconds += run(["make", f"-j{JOBS}"], cwd=build, log=log)
     except SystemExit:
         print(f"FFmpeg {name} with asm failed, retrying with --disable-asm")
         shutil.rmtree(build, ignore_errors=True)
         build.mkdir(parents=True)
         seconds = ffmpeg_configure(name, source, build, log, False)
-        seconds += run(["make", f"-j{os.cpu_count()}"], cwd=build, log=log)
+        seconds += run(["make", f"-j{JOBS}"], cwd=build, log=log)
     seconds += run(["make", "install", f"DESTDIR={PREFIX / name}"], cwd=build, log=log)
     licenses = PREFIX / name / "share" / "licenses" / "ffmpeg"
     licenses.mkdir(parents=True, exist_ok=True)

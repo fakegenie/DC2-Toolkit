@@ -718,7 +718,7 @@
   {
     "file": "ps2/include/effscript.hpp",
     "find": "STATIC_ASSERT(sizeof(_EFF_SCRIPT) == 0x150);",
-    "replace": "STATIC_ASSERT(sizeof(_EFF_SCRIPT) == 0x150);\n\nconstexpr int EFF_SPT_RUNTIME_QUADWORDS = (sizeof(_EFF_SCRIPT) + 15) / 16 + 2 + (sizeof(CCharacter2) + 15) / 16 + 2 + (64 * sizeof(RS_STACKDATA) + 15) / 16 + (2 * sizeof(RS_CALLDATA) + 15) / 16 + 3;"
+    "replace": "STATIC_ASSERT(sizeof(_EFF_SCRIPT) == 0x150);\n\nconstexpr int EFF_SPT_RUNTIME_QUADWORDS = (sizeof(_EFF_SCRIPT) + 15) / 16 + 2 + (sizeof(CCharacter2) + 15) / 16 + 2 + (64 * sizeof(RS_STACKDATA) + 15) / 16 + 2 * sizeof(RS_CALLDATA) / 16 - 1;"
   },
   {
     "file": "ps2/src/effscript.cpp",
@@ -733,12 +733,7 @@
   {
     "file": "ps2/src/effscript.cpp",
     "find": "count * (script->chara->GetCopySize() + 0x68)",
-    "replace": "count * (script->chara->GetCopySize() + align16_blocks(sizeof(CCharacter2))) + 3"
-  },
-  {
-    "file": "ps2/src/effscript.cpp",
-    "find": "memory->Alloc(sizeof(RS_CALLDATA) * 2 / 16)",
-    "replace": "memory->Alloc((sizeof(RS_CALLDATA) * 2 + 15) / 16)"
+    "replace": "count * (script->chara->GetCopySize() + align16_blocks(sizeof(CCharacter2)))"
   },
   {
     "file": "ps2/src/mglib.cpp",
@@ -1098,6 +1093,11 @@
     "file": "ps2/src/screeneffect.cpp",
     "find": "    mgRect<int> source(0, 0, mgScreenWidth * 16, mgScreenHeight * 16);\n    mgRect<int> destination(0, 0, mgScreenWidth * 8, mgScreenHeight * 8);",
     "replace": "    int side = (port_screen_width() - mgScreenWidth) / 2;\n    mgRect<int> source(-side * 16, 0, (mgScreenWidth + side) * 16, mgScreenHeight * 16);\n    mgRect<int> destination(0, 0, mgScreenWidth * 8, mgScreenHeight * 8);"
+  },
+  {
+    "file": "ps2/src/editriver.cpp",
+    "find": "    draw.Color(0, 0, 0, 0x80);\n    draw.Vertex(0, 0, 0);\n    draw.Vertex(mgScreenWidth, mgScreenHeight, 0);",
+    "replace": "    int side = (port_screen_width() - mgScreenWidth) / 2;\n    draw.Color(0, 0, 0, 0x80);\n    draw.Vertex(-side, 0, 0);\n    draw.Vertex(mgScreenWidth + side, mgScreenHeight, 0);"
   },
   {
     "file": "ps2/src/mglib.cpp",

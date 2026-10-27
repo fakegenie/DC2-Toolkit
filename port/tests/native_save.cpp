@@ -10,6 +10,8 @@
 
 extern CSaveData *ActiveSaveData asm(SYMBOL_PREFIX "_ZL14ActiveSaveData");
 extern "C" int port_memory_card_init(const char *);
+extern "C" char **port_arguments;
+char **port_arguments;
 void MakeMemoryCardFileName(int, char *);
 
 static_assert(sizeof(CDC2AlbumData) == 0x64cb0);
@@ -40,6 +42,7 @@ static void run_operation(CMemoryCardManager *manager, int operation) {
 
 int main(int argc, char **argv) {
     assert(argc == 3);
+    port_arguments = argv;
     assert(port_memory_card_init(argv[2]) == 0);
     ActiveSaveData = &data;
     CMemoryCardManager manager;

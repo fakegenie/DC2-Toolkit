@@ -55,7 +55,7 @@ def main():
         ("midi", [*c_flags, "port/tests/midi.c", "port/src/midi.c", "-lm"]),
         ("memory_card", [*c_flags, "port/tests/memory_card.c", "port/src/memory_card.c"]),
         ("executable", [*c_flags, "port/tests/executable.c", "port/src/executable.c"]),
-        ("input", [*c_flags, "port/tests/input.c", "port/src/input.c", "port/src/hooks.c", "port/src/mods.c", "port/src/overrides.c"]),
+        ("input", [*c_flags, "port/tests/input.c", "port/src/input.c", "port/src/hooks.c", "port/src/mods.c", "port/src/overrides.c", "-lm"]),
         ("math", [*cpp_flags, "-ffunction-sections", "-fdata-sections", "port/tests/math.cpp",
                   "port/src/frame.cpp", "port/src/collision.cpp",
                   "engine/tools/kazarov/src/cpp/sce/libvu0.cpp", DEAD_STRIP]),
