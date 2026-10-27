@@ -37,7 +37,7 @@ enum { WINDOW_WIDTH = 960, WINDOW_HEIGHT = 720, TARGET_WIDTH = 640, TARGET_HEIGH
 enum {
     TEXTURED = 1, TEXA = 2, AEM = 4, FOG = 8, ALPHA_TEST = 16, FACTOR_FIX = 32,
     SCALE_SOURCE = 64, FACTOR_COLOR = 128, DECAL = 256, VERTEX_ALPHA = 512, DEPTH_READ = 1024, SOLID = 2048, OVERDRAW = 4096,
-    DEST_TEST = 8192, DEST_SET = 16384, TINT = 32768
+    DEST_TEST = 8192, DEST_SET = 16384, TINT = 32768, TEXEL_EXPANSION = 65536
 };
 
 typedef struct {
@@ -55,6 +55,7 @@ typedef struct {
     int drawn;
     int queued;
     int sampled;
+    int shown;
 } Texture;
 
 typedef union {
@@ -1467,6 +1468,8 @@ int render_width(int slot) { return textures[slot].width; }
 
 int render_scale(int slot) { return textures[slot].scale; }
 
+int render_scaled(int slot) { return textures[slot].scaled; }
+
 struct SDL_GPUDevice *render_device(void) { return device; }
 
 struct SDL_Window *render_window(void) { return window; }
@@ -1729,6 +1732,8 @@ static int prepare(Command *command, const RenderState *state, PipelineKey key) 
     if (state->vertex_alpha) flags |= VERTEX_ALPHA;
     if (state->depth_read) flags |= DEPTH_READ;
     if (state->tint) flags |= TINT;
+    if (textured && state->texa && state->expansion.aem && state->linear && textures[state->texture].scale > 1)
+        flags |= TEXEL_EXPANSION;
     uint32_t fix = state->blending.fix;
     command->fragment.flags = flags;
     command->fragment.alpha_reference = state->tests.alpha_reference;
@@ -2107,6 +2112,7 @@ int render_slot(int slot, RenderSlot *info) {
     info->drawn = textures[slot].drawn;
     info->scale = textures[slot].scale;
     info->samples = textures[slot].samples;
+    info->shown = textures[slot].shown;
     return 1;
 }
 
@@ -3308,6 +3314,7 @@ void render_present(int target, int width, int height) {
     port_stats.gpu_ns += (uint64_t)(unsigned)SDL_SetAtomicInt(&gpu_busy_ns, 0);
     presented++;
     frame_draws = 0;
+    if (target) textures[target].shown = 1;
     int replayed = smoothing && target;
     if (replayed) finish_recording(target, width, height);
     SDL_GPUCommandBuffer *buffer = command_buffer();

@@ -222,6 +222,7 @@ PORT_OVERRIDE int CWater::Draw(u_int *tag, float (*matrix)[4], mgCDrawManager *d
             water_strip(out, view, this, found->second, row, first, count);
         }
     render_source = RENDER_SOURCE_WATER;
+    gs_drawing_scaled();
     render_draw(&state, RENDER_TRIANGLES, out.data(), (int)out.size());
     return 0;
 }

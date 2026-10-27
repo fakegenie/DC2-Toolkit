@@ -39,6 +39,7 @@ const uint OVERDRAW = 4096u;
 const uint DEST_TEST = 8192u;
 const uint DEST_SET = 16384u;
 const uint TINT = 32768u;
+const uint TEXEL_EXPANSION = 65536u;
 
 const uint ALPHA_NEVER = 0u;
 const uint ALPHA_ALWAYS = 1u;
@@ -61,6 +62,18 @@ bool alpha_passes(float value) {
     if (alpha_method == ALPHA_GEQUAL) return level >= reference;
     if (alpha_method == ALPHA_GREATER) return level > reference;
     return level != reference;
+}
+
+float lit_coverage(vec2 at) {
+    vec4 lit = sign(textureGather(source, at, 0) + textureGather(source, at, 1) + textureGather(source, at, 2));
+    vec2 weight = fract(at * vec2(textureSize(source, 0)) - 0.5);
+    return mix(mix(lit.w, lit.z, weight.x), mix(lit.x, lit.y, weight.x), weight.y);
+}
+
+float spread_coverage(vec2 at) {
+    vec2 quarter = 0.25 / vec2(textureSize(source, 0));
+    return 0.25 * (lit_coverage(at - quarter) + lit_coverage(at + quarter) + lit_coverage(at + vec2(quarter.x, -quarter.y)) +
+                   lit_coverage(at + vec2(-quarter.x, quarter.y)));
 }
 
 float fog_amount() {
@@ -91,6 +104,7 @@ void main() {
         if ((flags & TEXA) != 0u) {
             bool black = texel.r + texel.g + texel.b == 0.0;
             texel.a = (flags & AEM) != 0u && black ? 0.0 : float(texture_alpha) / 128.0;
+            if ((flags & TEXEL_EXPANSION) != 0u) texel.a = spread_coverage(uv) * float(texture_alpha) / 128.0;
         }
         if ((flags & VERTEX_ALPHA) != 0u) texel.a = frag_color.a * MODULATE;
         else if ((flags & DECAL) == 0u) texel.a = texel.a * frag_color.a * MODULATE;
