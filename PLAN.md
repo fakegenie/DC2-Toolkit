@@ -863,10 +863,21 @@ The window is HiDPI on macOS. Left to do:
    - GPU cost (`tools/bench.py --unpaced`, gpu_ms mean, two runs each): at 2x Palm Brinks 1.41 ->
      1.46 ms, swamp 1.20 -> 1.19; at 4x 3.41 -> 3.66 and 3.15 -> 3.37.
    - Left: no scene with 3D drawn into a decoded texture (portraits, photo) was found, so that
-     path is only exercised by the canal water. Not checked with `--msaa` or 16:9. Adding any
-     field to render.c's `Texture` or `PipelineKey` changes 13-21 pixels by 1 in the town menu's
-     frame at 1x (with all new logic disabled too, and with nothing else changed), so some
-     pre-existing code depends on memory layout; not found.
+     path is only exercised by the canal water. Not checked with `--msaa` or 16:9.
+   - Pictures that depended on memory layout: found and fixed. Growing render.c's `Texture` (which
+     moves everything in .bss after `textures[]`) changed 21 pixels by 1 along row 55 of the town
+     main menu at 1x. The menu backdrop `menuwork2` that `MenuCapture` builds is 256x256, but the
+     engine writes only its top 240 rows and reserves only those on the menu stack, so the next
+     allocation (`CDC2Mes` and the menu data, full of host pointers) lands in rows 240-255. The
+     preview oval samples the texture linear with REPEAT from v = 0, so its top row takes some of
+     row 255, and those pointers moved with the layout. `port.json` now reserves the whole texture
+     in `MenuCapture` and clears rows 240-255 (the PS2 had its own leftovers there). With the fix,
+     a 32 KB bigger `Texture` changes no pixel in the town main menu, georama, inventory, fish
+     select, spheda, world move, options, monster book, a castle floor or its menu; before it, only
+     the town main menu differed. The fix itself changes ~60 pixels by 1 at the menu's top edge
+     (black instead of pointers). The loading-screen frames that once varied between runs did not
+     vary in two stepped, two paced and two unpaced plays of `palm-brinks` (200-240 presents each,
+     loading screen included), and `MenuCapture` does not run there, so that was not this bug.
 3. **Checks at 2x and above** of heat haze, depth of field and water: done, at 2x and 4x in
    Balance Valley (torch haze, distance blur), the fish race course (map 96, a CWater surface) and
    the Rainbow Butterfly Wood. Haze and water matched 1x (on/off difference 211/208/220 for haze,

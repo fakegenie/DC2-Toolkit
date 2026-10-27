@@ -327,6 +327,11 @@
     "replace": "chara = new (model_stack.Alloc((sizeof(CActionChara) + 15) / 16)) CActionChara;"
   },
   {
+    "file": "ps2/src/menudraw.cpp",
+    "find": "        stack->Alloc(half_w * half_h * 4 / 16 + 1);",
+    "replace": "        stack->Alloc(tex_w * tex_h * 4 / 16 + 1);\n        memset(dst + half_w * half_h * 4, 0, (tex_w * tex_h - half_w * half_h) * 4);"
+  },
+  {
     "file": "ps2/src/menuchr.cpp",
     "find": "npc_chara = new (stack->Alloc(0x105)) CActionChara;",
     "replace": "npc_chara = new (stack->Alloc((sizeof(CActionChara) + 15) / 16)) CActionChara;"
