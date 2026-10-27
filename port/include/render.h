@@ -213,6 +213,7 @@ void port_debug_replayed(int slot, float alpha);
 
 int render_target(uint32_t base, int width, int height);
 int render_target_at(uint32_t base);
+void render_full_size(int slot);
 int render_texture(int width, int height);
 int render_texture_at_scale(int width, int height, int scale);
 void render_upload_full(int texture, const uint32_t *pixels);

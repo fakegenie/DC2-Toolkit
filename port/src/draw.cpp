@@ -707,6 +707,7 @@ float gs_screen_left() {
 }
 
 void gs_screen_mapping(RenderScreenMapping *screen, float *depth) {
+    render_full_size(frame_target);
     float width = (float)(frame_target ? render_width(frame_target) : 1);
     float height = (float)(frame_target ? render_height(frame_target) : 1);
     float offset_x = (float)((int)gs.xyoffset.OFX - screen_shift_x) / GS_SUBPIXELS;

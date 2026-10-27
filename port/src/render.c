@@ -32,7 +32,7 @@ enum { SCALE_LIMIT = 4, SAMPLE_LIMIT = 8, WIDEN_LIMIT = 1024 };
 
 enum { LAYOUT_WIDTH = 512, LAYOUT_HEIGHT = 480, FRAME_WIDTH_LIMIT = 1024 };
 
-enum { WINDOW_WIDTH = 960, WINDOW_HEIGHT = 720, TARGET_WIDTH = 640, TARGET_HEIGHT = 512, DEPTH_TILE = 64 };
+enum { WINDOW_WIDTH = 960, WINDOW_HEIGHT = 720, TARGET_WIDTH = 640, TARGET_HEIGHT = 512, SMALL_TARGET = 256, DEPTH_TILE = 64 };
 
 enum {
     TEXTURED = 1, TEXA = 2, AEM = 4, FOG = 8, ALPHA_TEST = 16, FACTOR_FIX = 32,
@@ -1245,15 +1245,15 @@ static void restart_buffers(void) {
 
 static void encode_pass(SDL_GPUCommandBuffer *buffer, const Command *list, int count) {
     Texture *target = &textures[list[0].target];
-    int shared = depth_for(list[0].target);
-    if (shared < 0) {
+    int depthless = !needs_depth(list, count);
+    int shared = depthless ? -1 : depth_for(list[0].target);
+    if (!depthless && shared < 0) {
         shared = 0;
         while (shared < 8 && depths[shared].texture) shared++;
         if (shared == 8) render_error("depth buffers");
         create_depth(shared, target->width * target->scale, target->height * target->scale, target->samples);
     }
     int multi = target->samples > 1;
-    int depthless = !needs_depth(list, count);
     int mirror = multi && !depthless && (writes_depth(list, count) || !depths[shared].cleared);
     SDL_GPUColorTargetInfo color[2];
     memset(color, 0, sizeof color);
@@ -1263,22 +1263,24 @@ static void encode_pass(SDL_GPUCommandBuffer *buffer, const Command *list, int c
     color[0].store_op = multi ? SDL_GPU_STOREOP_RESOLVE_AND_STORE : SDL_GPU_STOREOP_STORE;
     color[0].resolve_texture = target->color;
     SDL_GPUDepthStencilTargetInfo depth = {0};
-    depth.texture = depths[shared].texture;
-    depth.load_op = depths[shared].cleared ? SDL_GPU_LOADOP_LOAD : SDL_GPU_LOADOP_CLEAR;
-    if (!depthless) depths[shared].cleared = 1;
-    depth.store_op = SDL_GPU_STOREOP_STORE;
-    depth.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
-    depth.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
-    color[1].texture = depths[shared].color;
-    color[1].load_op = depth.load_op;
-    color[1].store_op = SDL_GPU_STOREOP_RESOLVE_AND_STORE;
-    color[1].resolve_texture = depths[shared].resolved;
+    if (!depthless) {
+        depth.texture = depths[shared].texture;
+        depth.load_op = depths[shared].cleared ? SDL_GPU_LOADOP_LOAD : SDL_GPU_LOADOP_CLEAR;
+        depths[shared].cleared = 1;
+        depth.store_op = SDL_GPU_STOREOP_STORE;
+        depth.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
+        depth.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+        color[1].texture = depths[shared].color;
+        color[1].load_op = depth.load_op;
+        color[1].store_op = SDL_GPU_STOREOP_RESOLVE_AND_STORE;
+        color[1].resolve_texture = depths[shared].resolved;
+    }
     target->drawn = 1;
     SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(buffer, color, mirror ? 2 : 1, depthless ? NULL : &depth);
     pass_serial++;
     port_stats.render_passes++;
     port_stats.gpu_commands += (uint32_t)count;
-    if (smoothing) record_pass(target, depthless ? -1 : shared, color[0].load_op, depth.load_op, mirror, list, count);
+    if (smoothing) record_pass(target, shared, color[0].load_op, depth.load_op, mirror, list, count);
     encode(buffer, pass, list, count, model_buffer, bone_buffer, vertex_buffer, target->width, target->height, mirror,
            depthless);
     SDL_EndGPURenderPass(pass);
@@ -1485,18 +1487,59 @@ static int new_texture(int width, int height, int scale, int samples) {
     return slot;
 }
 
-int render_target(uint32_t base, int width, int height) {
-    if (width < TARGET_WIDTH) width = TARGET_WIDTH;
-    if (width < frame_width) width = frame_width;
-    if (height < TARGET_HEIGHT) height = TARGET_HEIGHT;
-    for (int i = 1; i < TEXTURE_LIMIT; ++i) {
-        Texture *texture = &textures[i];
-        if (!texture->used || !texture->target || texture->base != base) continue;
-        if (texture->width >= width && texture->height >= height) return i;
-        render_release(i);
-        break;
+static void full_size(int *width, int *height) {
+    if (*width < TARGET_WIDTH) *width = TARGET_WIDTH;
+    if (*width < frame_width) *width = frame_width;
+    if (*height < TARGET_HEIGHT) *height = TARGET_HEIGHT;
+}
+
+static void clear_target(Texture *texture) {
+    SDL_GPUColorTargetInfo color = {0};
+    color.texture = texture->multi ? texture->multi : texture->color;
+    color.load_op = SDL_GPU_LOADOP_CLEAR;
+    color.clear_color.a = 1.0f;
+    color.store_op = texture->multi ? SDL_GPU_STOREOP_RESOLVE_AND_STORE : SDL_GPU_STOREOP_STORE;
+    color.resolve_texture = texture->color;
+    SDL_EndGPURenderPass(SDL_BeginGPURenderPass(command_buffer(), &color, 1, NULL));
+    if (smoothing) record_pass(texture, -1, SDL_GPU_LOADOP_CLEAR, SDL_GPU_LOADOP_DONT_CARE, 0, NULL, 0);
+}
+
+static void grow_target(int slot, int width, int height) {
+    settle(slot);
+    Texture *texture = &textures[slot];
+    Texture old = *texture;
+    full_size(&width, &height);
+    texture->width = width;
+    texture->height = height;
+    create_storage(texture);
+    if (old.drawn) {
+        clear_target(texture);
+        copy_texture(whole(old.color), whole(texture->color), (Uint32)(old.width * old.scale),
+                     (Uint32)(old.height * old.scale));
+        texture->stale = texture->samples > 1;
     }
-    int slot = new_texture(width, height, quality_scale, quality_samples);
+    release_later(old.color);
+    release_later(old.multi);
+    port_stats.target_creates++;
+}
+
+static int small_target(int slot) {
+    return textures[slot].target && textures[slot].width < TARGET_WIDTH;
+}
+
+void render_full_size(int slot) {
+    if (slot > 0 && slot < TEXTURE_LIMIT && small_target(slot)) grow_target(slot, TARGET_WIDTH, TARGET_HEIGHT);
+}
+
+int render_target(uint32_t base, int width, int height) {
+    int slot = render_target_at(base);
+    if (slot && textures[slot].width >= width && textures[slot].height >= height) return slot;
+    if (slot) {
+        grow_target(slot, width, height);
+        return slot;
+    }
+    if (width > SMALL_TARGET || height > SMALL_TARGET) full_size(&width, &height);
+    slot = new_texture(width, height, quality_scale, quality_samples);
     Texture *texture = &textures[slot];
     texture->base = base;
     texture->target = 1;
@@ -1753,6 +1796,7 @@ static int depth_clash(const RenderState *state) {
 }
 
 static void draw_to_bound(const RenderState *state) {
+    if (touches_depth(state) && small_target(bound)) grow_target(bound, TARGET_WIDTH, TARGET_HEIGHT);
     if (bound == drawing) return;
     if (target_pending(drawing) && (state->texture == drawing || depth_clash(state))) flush_for(drawing, 0);
     if (target_pending(drawing) && used_by_pending(bound)) detach_readers(bound);

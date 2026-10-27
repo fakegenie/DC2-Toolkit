@@ -292,10 +292,41 @@ one fits per tick on the iPhone (50 shown a second at 120 Hz), and in the swamp 
    halved copy resolved, the shadows and the fire animation each need their own version of slot
    22, and the heat haze copies the frame into `fire_work` every frame before the HUD is drawn, even
    when no fire reads it. Copy-on-write for MSAA targets was tried before and dropped: the redraw
-   that refills a fresh MSAA texture from its resolved copy is lossy at edges. Left: the texture
-   animation and fire draws into slots 17 and 22 are 128x128 but pay for a whole 640x512 4x MSAA
-   target, as `render_target` makes every target at least that size with the frame's samples; and
-   nothing here was measured on a tile GPU.
+   that refills a fresh MSAA texture from its resolved copy is lossy at edges.
+
+   Texture-sized targets, done: `render_target` makes a target no bigger than 256x256
+   (`SMALL_TARGET`) at its own size, and grows it in place to the full 640x512, keeping what it
+   holds, when a larger use, a 3D draw (`gs_screen_mapping`) or a draw that touches depth reaches
+   it, so draws that test the frame's depth still share it. Small targets keep the frame's samples:
+   single-sampled, the swamp's scrolling water (s0517, VRAM 0x2e20) puts its 0.2-pixel seams
+   through a different resolve and 682 of 1000 swamp frames change. A repeating texture that filled
+   only part of its target was sampled through a copy made every frame (`gs_sampled`); at its own
+   size it is sampled directly. A depthless pass no longer allocates a depth buffer for its size,
+   which the small sizes would otherwise use up (eight at most; a first version of this ran out of
+   them in a sweep of every town). Swamp, unpaced 4x MSAA, three alternating rounds against the
+   previous commit (`tools/bench.py`, medians): scale 1 777 to 793 ticks a second, gpu_ms 1.19 to
+   1.16; scale 3 186.5 to 198.6, gpu_ms 5.11 to 4.70, every run of the change faster than every
+   run without it (four earlier rounds agreed: 186.6 to 199.8); Palm Brinks, which has no small
+   target, unchanged (637 and 639, 195.5 both). Passes stay 8.2 and 8.0 a frame; attachment
+   loads, stores and resolves, counted per pass without compression over the frames after the load,
+   141.6 to 131.5 MB a frame in the swamp and 124.4 both times in Palm Brinks. Every present of both recordings hashes identically to before (scale
+   1, and the swamp at scale 3), and of a sweep of every town map and three floors of each dungeon,
+   15 towns made small targets, three of which grew to full size in a later town; the screenshots
+   of those towns match the previous commit's.
+
+   Why slot 22 (VRAM 0x2d20) stays full size: the PS2 draws the s0516 animation, the fire
+   animation (`fire_wrk`, 20 draws), the depth of field's halved frame and the shadows all at that
+   address; the shadows test the frame's depth, which is shared only between targets of one size
+   and sample count, and the halving, its strips and the shadow composite use it at 512x480. The
+   s0516 animation is not a bug: s0516 and s0517 are image-less 32-bit textures that `TexAnime`
+   draws into, s0516 is the far water strip behind the log, and a mesh samples it (through
+   `gs_texture` by its VRAM address, and a 128x128 copy as it repeats) in the 125 swamp frames it
+   is on screen. In the other ~660 frames the draws are dead work retail does too: `TexAnime`
+   animates every group of a texture block whenever the block is reloaded, seen or not. The fire
+   animation into 0x2d20 at the end of every frame is never read in either recording; the next
+   frame overwrites it. Skipping either needs to know the frame's later reads, so it is left.
+   Left: the s0516 animation and the shadows are two back-to-back passes into slot 22 (one load
+   and store of 640x512 4x could go), and nothing here was measured on a tile GPU.
 3. **The game on its own thread.** Done. SDL only lets the window's thread acquire a swapchain
    texture, so the game moved instead: `main` starts it on an SDL thread (`run_game`) and the main
    thread runs `port_present_run`, which pumps events, hands them to the game through a queue
