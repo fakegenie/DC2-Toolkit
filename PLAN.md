@@ -880,9 +880,27 @@ Left to do:
 
 1. **What the CPU places on the screen** (particles, 3D sprites, water, shadows drawn as 2D)
    stays at the game's rate; recording them in world space would let them blend too.
-2. **Present pacing with vsync:** each replay blocks on the display, so fewer fit between the
-   20 ms fields; a mailbox present (where the platform has one) would not block.
-3. **Mid-frame uploads:** a texture uploaded after an earlier pass used it is replayed with its
-   last contents.
-4. **Blending effects** that read the frame (the castle's lamp glow) come out slightly dimmer in
-   replays.
+2. **Present pacing with vsync.** Done. Since the game moved to its own thread a replay no longer
+   blocks on the display, but `smooth_until` still kept a whole refresh free before the field with
+   `--vsync` (half a refresh without), from when it did. It now keeps a quarter of a refresh either
+   way. Swamp and Palm Brinks recordings, `--smooth 0`, background window, 98 Hz display, shown frames
+   counted on the main thread: with `--vsync` 75 to 93-94 shown a second and the slowest shown gap
+   in a typical second 23.5 to 15 ms; without it 90-91 to 93-94. The tick's slowest frame stays at
+   42 ms and every published frame is shown. Holding a replay until the main thread has taken the one before
+   (`shown == serial`) made no difference on an idle machine, so it was left out; with five other
+   games running it had cut overwritten frames from 64 to 0.
+3. **Mid-frame uploads.** Not needed. A probe on every `render_upload`, counting uploads to a texture
+   that a pass or copy recorded earlier in the same frame had used, found none in the attract demo,
+   both recordings, six menus over 3D (main, shop, inventory, georama, character, options), the
+   first floor of four dungeons and the castle prologue event (texture animation restores through a
+   recorded copy). Replays that run while the next frame is partly drawn do not see its uploads
+   either: those wait in that frame's command buffer, which is submitted after the replay's.
+4. **Blending effects that read the frame.** Done. No dimming is left: in Palm Brinks at night the
+   lamp regions match the real frame at `between alpha=0.5` with a fixed camera (61 of 21600 pixels
+   off by 1), and over 80
+   presented pictures each replay has the lamp brightness of the frame it ends on. What did differ
+   at `between alpha=1` were sparkles and particles a pixel off (castle prologue, 25 of 30
+   samples): `was + (now - was) * alpha` and the camera shift through an inverted view are not
+   exact at 1. At alpha 1 the replay now draws the recorded vertices, models and bones as they were,
+   and an unchanged camera adds no shift; the castle (56 samples) and Palm Brinks at night (scale 2,
+   4x MSAA) now match pixel for pixel.
