@@ -1110,6 +1110,88 @@
     "replace": "        destination.bottom = destination.top + height * 2 / 3;\n    }\n\n    port_ps2_sampling(0);\n}"
   },
   {
+    "file": "ps2/src/screeneffect.cpp",
+    "find": "    int   width = mgScreenWidth;\n    int   height = mgScreenHeight;",
+    "replace": "    int   width = mgScreenWidth;\n    int   height = mgScreenHeight;\n    int   side = (port_screen_width() - mgScreenWidth) / 2;"
+  },
+  {
+    "file": "ps2/src/screeneffect.cpp",
+    "find": "    mgSetPkFrameBuffer(first);\n    mgCDrawPrim prim;",
+    "replace": "    port_ps2_sampling(1);\n    mgSetPkFrameBuffer(first);\n    mgCDrawPrim prim;"
+  },
+  {
+    "file": "ps2/src/screeneffect.cpp",
+    "find": "    prim.Vertex(0, 0, 0);\n    prim.Vertex(mgScreenWidth, mgScreenHeight, 0);",
+    "replace": "    prim.Vertex(-side, 0, 0);\n    prim.Vertex(mgScreenWidth + side, mgScreenHeight, 0);"
+  },
+  {
+    "file": "ps2/src/screeneffect.cpp",
+    "find": "    prim.Vertex(0, 0, depth);\n    prim.Vertex(width, height, depth);",
+    "replace": "    prim.Vertex(-side, 0, depth);\n    prim.Vertex(width + side, height, depth);"
+  },
+  {
+    "file": "ps2/src/screeneffect.cpp",
+    "find": "    prim.TextureCrd4(0, 0);\n    prim.Vertex4(0, 0, 0);\n    prim.TextureCrd4(width * 16 + 0x40, height * 16 + 0x40);\n    prim.Vertex4(width * 16 / 3, height * 16 / 3, 0);",
+    "replace": "    prim.TextureCrd4(-side * 16, 0);\n    prim.Vertex4(0, 0, 0);\n    prim.TextureCrd4((width + side) * 16 + 0x40, height * 16 + 0x40);\n    prim.Vertex4((width + 2 * side) * 16 / 3, height * 16 / 3, 0);"
+  },
+  {
+    "file": "ps2/src/screeneffect.cpp",
+    "find": "    int small_width = width / 3;",
+    "replace": "    int small_width = (width + 2 * side) / 3;"
+  },
+  {
+    "file": "ps2/src/screeneffect.cpp",
+    "find": "    float alpha_scale = 0.7f * (fade * fade);",
+    "replace": "    float alpha_scale = 0.7f * (fade * fade);\n    port_ps2_sampling(0);"
+  },
+  {
+    "file": "ps2/src/screeneffect.cpp",
+    "find": "    int current = 0;",
+    "replace": "    port_ps2_sampling(1);\n    int current = 0;"
+  },
+  {
+    "file": "ps2/src/screeneffect.cpp",
+    "find": "        prim.TextureCrd((int) width / 3, (int) height / 3);",
+    "replace": "        prim.TextureCrd(small_width, (int) height / 3);",
+    "count": 4
+  },
+  {
+    "file": "ps2/src/screeneffect.cpp",
+    "find": "        int wide = (int) width / 3 * 16;",
+    "replace": "        int wide = small_width * 16;"
+  },
+  {
+    "file": "ps2/src/screeneffect.cpp",
+    "find": "    int centre_x = screen[0] / 3;",
+    "replace": "    int centre_x = (screen[0] + side * 16) / 3;"
+  },
+  {
+    "file": "ps2/src/screeneffect.cpp",
+    "find": "    radii[0] = (small_width + (height / 3)) * 6;\n    radii[1] = radii[0] - small_width;",
+    "replace": "    radii[0] = (width / 3 + (height / 3)) * 6;\n    radii[1] = radii[0] - width / 3;"
+  },
+  {
+    "file": "ps2/src/screeneffect.cpp",
+    "find": "    prim.Vertex(width, height, 0);\n    prim.End();\n}",
+    "replace": "    prim.Vertex(width, height, 0);\n    prim.End();\n    port_ps2_sampling(0);\n}"
+  },
+  {
+    "file": "ps2/src/screeneffect.cpp",
+    "find": "    prim.TextureCrd(0, 0);\n    prim.Vertex(0, 0, 0);\n    prim.TextureCrd(small_width, (height / 3));\n    prim.Vertex(width, height, 0);",
+    "replace": "    prim.TextureCrd(0, 0);\n    prim.Vertex(-side, 0, 0);\n    prim.TextureCrd(small_width, (height / 3));\n    prim.Vertex(width + side, height, 0);",
+    "count": 2
+  },
+  {
+    "file": "ps2/src/editloop.cpp",
+    "find": "textures->EnterTexture(157, \"f_work2\", NULL, mgScreenWidth / 3,",
+    "replace": "textures->EnterTexture(157, \"f_work2\", NULL, port_wide_width() / 3,"
+  },
+  {
+    "file": "ps2/src/maintex.cpp",
+    "find": "mgTexManager.EnterTexture(0x64, \"work2\", NULL, mgScreenWidth / 3,",
+    "replace": "mgTexManager.EnterTexture(0x64, \"work2\", NULL, port_wide_width() / 3,"
+  },
+  {
     "file": "ps2/src/sceneevent.cpp",
     "find": "    rect.Set(0, 0, (mgScreenWidth - 1) << 4, (mgScreenHeight - 1) << 4);\n    mgSetPkMoveImage(&frame, rect, fire_texture, 0, 0, 0);",
     "replace": "    int side = (port_screen_width() - mgScreenWidth) / 2;\n    rect.Set(-side * 16, 0, (mgScreenWidth + side - 1) << 4, (mgScreenHeight - 1) << 4);\n    mgSetPkMoveImage(&frame, rect, fire_texture, 0, 0, 0);"

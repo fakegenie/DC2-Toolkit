@@ -917,8 +917,19 @@ The window is HiDPI on macOS. Left to do:
    `port_ps2_sampling`, and its draws from scaled targets sample the texture as the GS would at 1x
    (bilinear between 1x texel centres, `PS2_SAMPLING` in `draw.frag`), so the blur matches 1x and
    stays smooth: in the blurred cliff at 4x the difference from 1x fell from 640 to 182 (MAE over
-   a 120x80 crop). Left: the lens flare halves and thirds the frame the same way and was not
-   looked at.
+   a 120x80 crop). The lens flare thirds the frame the same way, and its glow came out ~30%
+   narrower when scaled. `LensFlare` now turns on `port_ps2_sampling` for its downsample, radial
+   blur passes and final adds. Measured in Balance Valley at 6:18 with the sun in view, the glow
+   being the frame with the flare minus the frame without it, over the 512x140 sky: the glow's
+   difference from 1x fell from 0.82 to 0.49 at 2x and from 0.89 to 0.50 at 4x (0.24/0.26 to
+   0.14/0.15 over the whole frame); its strength is 58.68 and 58.66 against 58.86 at 1x, where
+   it was 58.42 and 58.36. One draw stays plainly sampled: the copy of `second` back into
+   `first`, which stretches 171 texels over 170 columns. At 2x and above, sampling it at 1x texel
+   centres reaches column 170.75, which the downsample (it ends at 170.67) does not draw. That
+   column still holds the last frame's blur, which a smoothing replay cannot reproduce. With
+   that draw also sampled the glow was closer (0.43 and 0.28), but `between alpha=1` differed
+   from the real frame on ~370 pixels by up to 4. Without it, alpha 1 matches exactly. Scale 1 is
+   unchanged.
 
 ### Widescreen
 
@@ -981,6 +992,40 @@ Left to do:
    Sindain, 11091 (the mayor's office) and 207 (the station): no actor pops in or out at the
    sides and the scenery reaches the edges, so event cameras stay wide. A fixed camera in a
    small interior (Polly's Bakery) shows black past the room's walls. Movies stay 4:3.
+4. **At 2x and above, and at 21:9:** done. I checked 16:9 at 1x, 2x and 4x, with and without
+   `--msaa 4`, in seven scenes: Palm Brinks' canal, its square, the swamp recording, the fish
+   race course (map 96, CWater), Balance Valley (haze, depth of field, lens flare), the castle
+   dungeon's floor 1 (HUD, water, shadows) and the town main menu.
+   - The lens flare covered only the middle 512. Its mask, downsample, radial blur, star and
+     final adds now span the wide frame, and `f_work2` and `work2` are entered
+     `port_wide_width() / 3` wide. Before the fix, the sky had a hard vertical edge where the
+     middle ends. Measured as the step between neighbouring columns over the sky rows at
+     x 84|85 and 596|597, it fell from 25.6/27.5 to 0.60/0.62 at 1x, from 26.1/26.1 to 0.46/0.59
+     at 2x and from 25.4/27.6 to 0.51/0.55 at 4x with msaa 4. The other column pairs there step
+     0.3 to 0.6.
+   - Everything else was right as it was. The middle 512 of each wide frame differs from the 4:3
+     frame by an MAE of 0.42 (canal), 0.44 (square), 0.30 (swamp) and 0.50 (race) at every scale.
+     The valley differs by 0.85 to 1.18, as the flare now also gathers the sky at the sides. The
+     dungeon differs by 5.1 to 5.7, as its HUD is spread by design. The menu differs by 0.002, as
+     it is shown 4:3. Each scale differs from its own 1x as much as 4:3 does (canal 2.10 against
+     2.28, square 2.50 against 2.47). The sides are black only along the engine's one-pixel frame
+     border (0.016). There are no seams in the canal or race water at any scale.
+   - Smoothing at 16:9 2x: `between alpha=1` matches the real frame exactly (0 pixels) in the
+     swamp, the swamp while the camera turns, the race course, the canal, the dungeon and the
+     valley.
+   - 21:9 works: W is 896, within `FRAME_WIDTH_LIMIT` (1024, so up to 2.67:1); `WIDEN_LIMIT` is
+     only the batch size for widened lines. I checked the same scenes at 1x and 2x, with and
+     without msaa 4. The middle differs from 4:3 by 0.44 (square), 0.29 (swamp), 0.50 (race),
+     0.42 to 0.46 (valley) and 5.1 to 5.7 (dungeon HUD). The flare edges step 0.45/0.64 at 1x
+     and 0.52/0.60 at 2x. The canal differs by 1.56: its recording, played at 21:9, ends with
+     different ripples in the `water` texture (3% of its pixels). A 4:3 save state loaded at 21:9
+     draws the same `water` texture as at 4:3, and its middle then differs by 0.41. The HUD
+     spreads at most `HUD_SIDE` (85), so at 21:9 it sits where it does at 16:9; for example, the
+     dungeon's key icon ends 142 px from the right edge.
+   - Tried and left out: placing depth of field's 16 columns (each W/16 wide) on the 4:3 column
+     lines changed 4 pixels in the valley.
+   - Left: the dungeon's lens flare (`work`/`work2`, same code) has not been seen at a wide aspect.
+     The water ripples at the race course are not interpolated between frames, at any aspect.
 
 ### 144 fps
 
