@@ -37,7 +37,7 @@ enum { WINDOW_WIDTH = 960, WINDOW_HEIGHT = 720, TARGET_WIDTH = 640, TARGET_HEIGH
 enum {
     TEXTURED = 1, TEXA = 2, AEM = 4, FOG = 8, ALPHA_TEST = 16, FACTOR_FIX = 32,
     SCALE_SOURCE = 64, FACTOR_COLOR = 128, DECAL = 256, VERTEX_ALPHA = 512, DEPTH_READ = 1024, SOLID = 2048, OVERDRAW = 4096,
-    DEST_TEST = 8192, DEST_SET = 16384, TINT = 32768, TEXEL_EXPANSION = 65536
+    DEST_TEST = 8192, DEST_SET = 16384, TINT = 32768
 };
 
 typedef struct {
@@ -55,7 +55,6 @@ typedef struct {
     int drawn;
     int queued;
     int sampled;
-    int shown;
 } Texture;
 
 typedef union {
@@ -73,6 +72,7 @@ typedef union {
         uint32_t wire : 1;
         uint32_t samples : 2;
         uint32_t mirror : 1;
+        uint32_t spread : 1;
     };
 } PipelineKey;
 
@@ -286,6 +286,7 @@ static int model_count;
 static RenderBone bone_sets[BONE_LIMIT][RENDER_BONE_SLOTS];
 static int bone_count;
 static SDL_GPUShader *fragment_shader;
+static SDL_GPUShader *spread_shader;
 static SDL_GPUSampler *samplers[8];
 static SDL_GPUBuffer *vertex_buffer;
 static SDL_GPUTransferBuffer *vertex_transfer;
@@ -611,6 +612,8 @@ int render_init(void) {
                                 SDL_GPU_SHADERSTAGE_VERTEX, 0, 0, 2);
     fragment_shader = create_shader(draw_frag_spirv, sizeof draw_frag_spirv, draw_frag_msl, sizeof draw_frag_msl,
                                     SDL_GPU_SHADERSTAGE_FRAGMENT, 2, 1, 0);
+    spread_shader = create_shader(draw_spread_frag_spirv, sizeof draw_spread_frag_spirv, draw_spread_frag_msl,
+                                  sizeof draw_spread_frag_msl, SDL_GPU_SHADERSTAGE_FRAGMENT, 2, 1, 0);
     for (int i = 0; i < 8; ++i) {
         SDL_GPUSamplerCreateInfo info = {0};
         info.min_filter = info.mag_filter = (i & 1) ? SDL_GPU_FILTER_LINEAR : SDL_GPU_FILTER_NEAREST;
@@ -766,7 +769,7 @@ static SDL_GPUGraphicsPipeline *pipeline_for(PipelineKey key) {
     targets[1].blend_state.color_write_mask = key.depth_write ? SDL_GPU_COLORCOMPONENT_R : 0;
     SDL_GPUGraphicsPipelineCreateInfo info = {0};
     info.vertex_shader = mesh ? mesh_shader : vertex_shader;
-    info.fragment_shader = fragment_shader;
+    info.fragment_shader = key.spread ? spread_shader : fragment_shader;
     info.vertex_input_state.vertex_buffer_descriptions = &buffer;
     info.vertex_input_state.num_vertex_buffers = 1;
     info.vertex_input_state.vertex_attributes = mesh ? model : flat;
@@ -1732,8 +1735,6 @@ static int prepare(Command *command, const RenderState *state, PipelineKey key) 
     if (state->vertex_alpha) flags |= VERTEX_ALPHA;
     if (state->depth_read) flags |= DEPTH_READ;
     if (state->tint) flags |= TINT;
-    if (textured && state->texa && state->expansion.aem && state->linear && textures[state->texture].scale > 1)
-        flags |= TEXEL_EXPANSION;
     uint32_t fix = state->blending.fix;
     command->fragment.flags = flags;
     command->fragment.alpha_reference = state->tests.alpha_reference;
@@ -1758,6 +1759,8 @@ static int prepare(Command *command, const RenderState *state, PipelineKey key) 
         if (render_toggles.wireframe && key.topology == RENDER_TRIANGLES) command->key.wire = 1;
     }
     command->sampler = (state->linear ? 1 : 0) | (state->repeat_u ? 2 : 0) | (state->repeat_v ? 4 : 0);
+    command->key.spread = textured && state->texa && state->expansion.aem && state->linear &&
+                          textures[state->texture].scale > 1;
     command->model = -1;
     command->shadow = -1;
     command->follow = -1;
@@ -2112,7 +2115,6 @@ int render_slot(int slot, RenderSlot *info) {
     info->drawn = textures[slot].drawn;
     info->scale = textures[slot].scale;
     info->samples = textures[slot].samples;
-    info->shown = textures[slot].shown;
     return 1;
 }
 
@@ -3314,7 +3316,6 @@ void render_present(int target, int width, int height) {
     port_stats.gpu_ns += (uint64_t)(unsigned)SDL_SetAtomicInt(&gpu_busy_ns, 0);
     presented++;
     frame_draws = 0;
-    if (target) textures[target].shown = 1;
     int replayed = smoothing && target;
     if (replayed) finish_recording(target, width, height);
     SDL_GPUCommandBuffer *buffer = command_buffer();

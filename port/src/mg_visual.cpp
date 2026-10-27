@@ -134,7 +134,7 @@ static void draw_run(const VisualDraw &draw, const FaceRun &run, const RenderSta
     }
     if (edge) state.depth_write = 0;
     uniforms.flags.face_type = run.type;
-    gs_drawing_scaled();
+    gs_drawing_scaled(state.texture);
     render_mesh(&state, draw.cull, &uniforms, draw.skinned ? draw.bones : NULL, run.vertices, run.count, run.resident);
 }
 

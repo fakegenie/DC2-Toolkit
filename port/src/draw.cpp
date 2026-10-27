@@ -5,6 +5,7 @@
 #include "mg_drawprim.hpp"
 #include "port_graphics.h"
 #include "port_overrides.h"
+#include "port_present.h"
 #include "sce/libgraph.h"
 #include <cmath>
 #include <cstdio>
@@ -443,8 +444,11 @@ static int target_copy(int target, int width, int height) {
 }
 
 static int scaled_cache_texture(int slot) {
+    int scale, samples;
+    render_quality(&scale, &samples);
+    if (scale == 1 || render_scaled(slot)) return slot;
     auto found = by_render.find(slot);
-    if (found == by_render.end() || found->second->hd || render_scaled(slot)) return slot;
+    if (found == by_render.end() || found->second->hd) return slot;
     CachedTexture *entry = found->second;
     int scaled = render_scaled_texture(entry->width, entry->height);
     render_copy(slot, 0, 0, scaled, 0, 0, entry->width, entry->height);
@@ -457,8 +461,8 @@ static int scaled_cache_texture(int slot) {
     return scaled;
 }
 
-void gs_drawing_scaled() {
-    scaled_cache_texture(frame_target);
+void gs_drawing_scaled(int texture) {
+    if (texture != frame_target) scaled_cache_texture(frame_target);
 }
 
 int gs_sampled(int texture, int width, int height, int repeat) {
@@ -811,12 +815,15 @@ static void kick(u_int x, u_int y, u_int z, int fog, int draw) {
                 out[i].a = out[count - 1].a;
             }
         int topology = type == MG_PRIM_POINT ? RENDER_POINTS : type <= MG_PRIM_LINE_STRIP ? RENDER_LINES : RENDER_TRIANGLES;
-        if (!state.texture || render_scaled(state.texture)) gs_drawing_scaled();
+        if (!state.texture || render_scaled(state.texture)) gs_drawing_scaled(state.texture);
         if (type == MG_PRIM_SPRITE) {
             RenderVertex a = out[0], b = out[1];
             RenderSlot target;
-            int sharp = state.linear && render_scale(state.texture) == 1 && render_slot(render_bound(), &target) &&
-                        target.scale > 1 && target.shown && one_to_one(&queue[queued - 2], &queue[queued - 1]);
+            int shown_width, shown_height;
+            int sharp = state.linear && render_scale(state.texture) == 1 &&
+                        render_bound() == port_display_target(&shown_width, &shown_height) &&
+                        render_slot(render_bound(), &target) && target.scale > 1 &&
+                        one_to_one(&queue[queued - 2], &queue[queued - 1]);
             if (state.texture) round_texels_down(&a, &b);
             if (render_slot(render_bound(), &target) && (target.scale > 1 || target.samples > 1))
                 align_sprite(&a, &b, state.texture != 0);

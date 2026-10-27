@@ -191,7 +191,6 @@ typedef struct {
     int drawn;
     int scale;
     int samples;
-    int shown;
 } RenderSlot;
 
 extern RenderToggles render_toggles;

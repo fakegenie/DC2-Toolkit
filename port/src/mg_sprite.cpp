@@ -187,7 +187,7 @@ static void draw_sprite(const SpriteFrame &frame, const SpriteOp &item, const Re
         out[i].v /= (float)height;
     }
     render_source = RENDER_SOURCE_SPRITE;
-    gs_drawing_scaled();
+    gs_drawing_scaled(state.texture);
     render_sprite(&state, out, 6, &screen, depth);
 }
 
