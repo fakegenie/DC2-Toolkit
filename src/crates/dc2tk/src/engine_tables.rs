@@ -5,7 +5,10 @@ use std::ops::Range;
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
-use dc2tk_assets::{elf, exe_tables as exe, fishing_data as fish, invention_data as invent, monster_data as monster};
+use dc2tk_assets::{
+    dungeon_layout as layout, elf, exe_tables as exe, fishing_data as fish, invention_data as invent,
+    monster_data as monster,
+};
 
 #[derive(Clone, Copy)]
 enum Kind {
@@ -13,6 +16,7 @@ enum Kind {
     Unsigned(usize),
     Float,
     Text(usize),
+    Named(usize),
 }
 
 struct Table {
@@ -33,7 +37,7 @@ fn consecutive_fields(count: usize, size: usize) -> Vec<(usize, usize, Kind)> {
 }
 
 fn tables() -> Vec<Table> {
-    use Kind::{Float as F, Signed as S, Text as T, Unsigned as U};
+    use Kind::{Float as F, Named as N, Signed as S, Text as T, Unsigned as U};
     let mut monsters = vec![
         (0x02, 1, S(2)),
         (0x24, 3, T(16)),
@@ -78,6 +82,14 @@ fn tables() -> Vec<Table> {
     }
     for index in 0..22 {
         species.push((40 + index * 2, 10 + index, S(2)));
+    }
+    let mut parts = vec![(0, 0, N(layout::PART_NAME_SLOT)), (4, 1, S(2)), (6, 2, U(1)), (7, 3, U(1))];
+    for index in 0..8 {
+        parts.push((8 + index * 2, 4 + index, S(2)));
+    }
+    let mut minimap = Vec::new();
+    for index in 0..layout::MINIMAP_TILES {
+        minimap.push((16 + index * 2, 1 + index, S(2)));
     }
     vec![
         Table {
@@ -192,14 +204,41 @@ fn tables() -> Vec<Table> {
             rows: fish::RACE_KINDS,
             fields: vec![(4, 1, F), (8, 2, F), (12, 3, F), (16, 4, F), (20, 5, F), (24, 6, S(4))],
         },
+        Table {
+            file: "automap.cpp",
+            symbol: "PartsInfoData",
+            address: layout::PARTS_TABLE,
+            stride: layout::PARTS_RECORD,
+            rows: layout::PARTS_COUNT,
+            fields: parts,
+        },
+        Table {
+            file: "automap.cpp",
+            symbol: "MiniMapInfoData",
+            address: layout::MINIMAP_TABLE,
+            stride: layout::MINIMAP_RECORD,
+            rows: layout::MINIMAP_MAPS,
+            fields: minimap,
+        },
     ]
 }
 
 fn width(kind: Kind) -> usize {
     match kind {
-        Kind::Signed(size) | Kind::Unsigned(size) | Kind::Text(size) => size,
+        Kind::Signed(size) | Kind::Unsigned(size) | Kind::Text(size) | Kind::Named(size) => size,
         Kind::Float => 4,
     }
+}
+
+/// Where a field's bytes are in elf: in the record at `at`, or for a name, where the record's pointer points.
+fn field_bytes(elf: &[u8], at: usize, kind: Kind) -> Result<Range<usize>> {
+    let Kind::Named(size) = kind else {
+        return Ok(at..at + width(kind));
+    };
+    let pointer =
+        u32::from_le_bytes(elf.get(at..at + 4).context("a table name's pointer is past the end")?.try_into()?);
+    let text = elf::table_offset(elf, pointer, size, "table name string")?;
+    Ok(text..text + size)
 }
 
 fn literal(bytes: &[u8], kind: Kind) -> Result<String> {
@@ -228,7 +267,7 @@ fn literal(bytes: &[u8], kind: Kind) -> Result<String> {
                 format!("{text}.0f")
             }
         }
-        Kind::Text(_) => {
+        Kind::Text(_) | Kind::Named(_) => {
             let end = bytes.iter().position(|&byte| byte == 0).context("a table string has no terminator")?;
             if bytes[end..].iter().any(|&byte| byte != 0) {
                 bail!("a table string has nonzero bytes after its terminator");
@@ -403,6 +442,51 @@ fn check_initializer(source: &str, baseline: &str, relative: &str, symbol: &str)
     Ok(())
 }
 
+/// The engine units, under ps2/src, that hold tables an edit can reach.
+pub fn files() -> std::collections::BTreeSet<&'static str> {
+    tables().into_iter().map(|table| table.file).collect()
+}
+
+fn table_edited(table: &Table, start: usize, retail: &[u8], edited: &[u8]) -> Result<bool> {
+    for row in 0..table.rows {
+        for &(offset, _, kind) in &table.fields {
+            let bytes = field_bytes(retail, start + row * table.stride + offset, kind)?;
+            if retail[bytes.clone()] != edited[bytes] {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// Each edited table's fields in built, the executable linked from the source apply wrote, against edited, what the
+/// byte-patch path would have written; symbols are the link map's addresses.
+pub fn check_built(built: &[u8], retail: &[u8], edited: &[u8], symbols: &BTreeMap<String, u32>) -> Result<()> {
+    for table in tables() {
+        let start = elf::table_offset(retail, table.address, table.stride * table.rows, table.symbol)?;
+        if !table_edited(&table, start, retail, edited)? {
+            continue;
+        }
+        let address = *symbols.get(table.symbol).with_context(|| format!("the link map has no {}", table.symbol))?;
+        let at = elf::table_offset(built, address, table.stride * table.rows, table.symbol)?;
+        for row in 0..table.rows {
+            for &(offset, leaf, kind) in &table.fields {
+                let wanted = field_bytes(retail, start + row * table.stride + offset, kind)?;
+                let found = field_bytes(built, at + row * table.stride + offset, kind)?;
+                if built[found.clone()] != edited[wanted.clone()] {
+                    bail!(
+                        "the built engine's {} row {row} field {leaf} is {:02X?}, the edit wrote {:02X?}",
+                        table.symbol,
+                        &built[found],
+                        &edited[wanted]
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn apply(copy: &Path, baseline: &Path, retail: &[u8], edited: &[u8]) -> Result<Vec<String>> {
     if retail == edited {
         return Ok(Vec::new());
@@ -414,7 +498,7 @@ pub fn apply(copy: &Path, baseline: &Path, retail: &[u8], edited: &[u8]) -> Resu
     let mut covered = vec![false; retail.len()];
     for table in tables() {
         let start = elf::table_offset(retail, table.address, table.stride * table.rows, table.symbol)?;
-        if retail[start..start + table.stride * table.rows] == edited[start..start + table.stride * table.rows] {
+        if !table_edited(&table, start, retail, edited)? {
             continue;
         }
         let relative = format!("ps2/src/{}", table.file);
@@ -431,8 +515,7 @@ pub fn apply(copy: &Path, baseline: &Path, retail: &[u8], edited: &[u8]) -> Resu
         let mut replacements = Vec::new();
         for row in 0..table.rows {
             for &(offset, leaf, kind) in &table.fields {
-                let at = start + row * table.stride + offset;
-                let end = at + width(kind);
+                let Range { start: at, end } = field_bytes(retail, start + row * table.stride + offset, kind)?;
                 if retail[at..end] == edited[at..end] {
                     continue;
                 }
@@ -489,6 +572,19 @@ mod tests {
         for (index, value) in [1u32, 0x100, 0x330000, 0x330000, 0x60000, 0x60000].iter().enumerate() {
             elf[0x34 + index * 4..0x38 + index * 4].copy_from_slice(&value.to_le_bytes());
         }
+        let mut names = 0x36C708u32;
+        for table in tables() {
+            let start = elf::file_offset(&elf, table.address).unwrap();
+            for row in 0..table.rows {
+                for &(offset, _, kind) in &table.fields {
+                    if let Kind::Named(size) = kind {
+                        let at = start + row * table.stride + offset;
+                        elf[at..at + 4].copy_from_slice(&names.to_le_bytes());
+                        names += size as u32;
+                    }
+                }
+            }
+        }
         let mut sources: BTreeMap<&str, String> = BTreeMap::new();
         for table in tables() {
             let source = sources.entry(table.file).or_default();
@@ -523,29 +619,73 @@ mod tests {
             let start = elf::file_offset(&retail, table.address).unwrap();
             for row in 0..table.rows {
                 for &(offset, _, kind) in &table.fields {
-                    let at = start + row * table.stride + offset;
+                    let bytes = field_bytes(&retail, start + row * table.stride + offset, kind).unwrap();
                     match kind {
-                        Kind::Float => edited[at..at + 4].copy_from_slice(&(-0.125f32).to_le_bytes()),
-                        Kind::Text(_) => edited[at..at + 4].copy_from_slice(b"a\"\\z"),
-                        _ => edited[at..at + width(kind)].fill(0xFF),
+                        Kind::Float => edited[bytes].copy_from_slice(&(-0.125f32).to_le_bytes()),
+                        Kind::Text(_) | Kind::Named(_) => {
+                            edited[bytes.start..bytes.start + 4].copy_from_slice(b"a\"\\z")
+                        }
+                        _ => edited[bytes].fill(0xFF),
                     }
                 }
             }
         }
         let changed = apply(&folder, &folder.join("baseline"), &retail, &edited).unwrap();
-        assert_eq!(changed.len(), 10);
+        assert_eq!(changed.len(), 11);
         for table in tables() {
             let source = std::fs::read_to_string(folder.join("ps2/src").join(table.file)).unwrap();
             let rows = row_leaves(&source, &table).unwrap();
             let start = elf::file_offset(&retail, table.address).unwrap();
             for (row, spans) in rows.iter().enumerate().take(table.rows) {
                 for &(offset, leaf, kind) in &table.fields {
-                    let at = start + row * table.stride + offset;
-                    assert_eq!(&source[spans[leaf].clone()], literal(&edited[at..at + width(kind)], kind).unwrap());
+                    let bytes = field_bytes(&retail, start + row * table.stride + offset, kind).unwrap();
+                    assert_eq!(&source[spans[leaf].clone()], literal(&edited[bytes], kind).unwrap());
                 }
             }
         }
         std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn part_names_change_their_strings_and_never_their_pointers() {
+        let (folder, retail) = sample();
+        let parts = elf::file_offset(&retail, layout::PARTS_TABLE).unwrap();
+        let record = parts + 3 * layout::PARTS_RECORD;
+        let name = field_bytes(&retail, record, Kind::Named(layout::PART_NAME_SLOT)).unwrap();
+        let tile = elf::file_offset(&retail, layout::MINIMAP_TABLE).unwrap() + 2 * layout::MINIMAP_RECORD + 16 + 2 * 7;
+        let mut edited = retail.clone();
+        edited[name.start..name.start + 6].copy_from_slice(b"hall0\0");
+        edited[record + 6] = 5;
+        edited[tile..tile + 2].copy_from_slice(&300i16.to_le_bytes());
+        assert_eq!(apply(&folder, &folder.join("baseline"), &retail, &edited).unwrap(), ["ps2/src/automap.cpp"]);
+        let source = std::fs::read_to_string(folder.join("ps2/src/automap.cpp")).unwrap();
+        let table = |symbol: &str| tables().into_iter().find(|table| table.symbol == symbol).unwrap();
+        let rows = row_leaves(&source, &table("PartsInfoData")).unwrap();
+        assert_eq!(&source[rows[3][0].clone()], "\"\\150\\141\\154\\154\\060\"");
+        assert_eq!(&source[rows[3][2].clone()], "5U");
+        let rows = row_leaves(&source, &table("MiniMapInfoData")).unwrap();
+        assert_eq!(&source[rows[2][8].clone()], "300");
+        let mut moved = retail.clone();
+        moved[record..record + 4].copy_from_slice(&0x36C800u32.to_le_bytes());
+        let error = apply(&folder, &folder.join("baseline"), &retail, &moved).unwrap_err().to_string();
+        assert!(error.contains("outside supported table fields"), "{error}");
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn the_built_engine_must_hold_every_edited_field() {
+        let (_, retail) = sample();
+        let mut edited = retail.clone();
+        let at = elf::file_offset(&retail, exe::DONNY_TABLE).unwrap();
+        edited[at] = 5;
+        let symbols = BTreeMap::from([("dony_shoplist".to_string(), exe::DONNY_TABLE)]);
+        assert!(check_built(&edited, &retail, &edited, &symbols).is_ok());
+        let error = check_built(&retail, &retail, &edited, &symbols).unwrap_err().to_string();
+        assert!(error.contains("dony_shoplist row 0 field 0"), "{error}");
+        let mut moved = retail.clone();
+        moved[at + 0x100] = 5;
+        let symbols = BTreeMap::from([("dony_shoplist".to_string(), exe::DONNY_TABLE + 0x100)]);
+        assert!(check_built(&moved, &retail, &edited, &symbols).is_ok());
     }
 
     #[test]

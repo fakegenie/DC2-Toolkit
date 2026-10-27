@@ -14,7 +14,14 @@ pub const EXTENSION: &str = "dc2pak";
 pub const CONFIG: &str = "pak.cfg";
 pub const FILES: &str = "files";
 
-pub fn run_mod_build(source: &Path, disc: &Path, id: &str, output: &Path, mods_dir: &ModsDir, common: &Common) -> Result<ExitCode> {
+pub fn run_mod_build(
+    source: &Path,
+    disc: &Path,
+    id: &str,
+    output: &Path,
+    mods_dir: &ModsDir,
+    common: &Common,
+) -> Result<ExitCode> {
     let mod_dir = mods::by_id(mods_dir.path(), id)?;
     let own = manifest::read(&mod_dir)?;
     let (built, binary) = build::built_game_files(source, disc, &[id.to_string()], None, mods_dir, common)?;
@@ -83,7 +90,9 @@ pub fn read_pak(path: &Path) -> Result<Pak> {
             "game" => pak.game = value.to_string(),
             "number" => {
                 let mut parts = value.splitn(3, ' ');
-                if let (Some(kind), Some(Ok(number)), Some(name)) = (parts.next(), parts.next().map(str::parse), parts.next()) {
+                if let (Some(kind), Some(Ok(number)), Some(name)) =
+                    (parts.next(), parts.next().map(str::parse), parts.next())
+                {
                     pak.numbers.push((kind.to_string(), number, name.to_string()));
                 }
             }
@@ -118,7 +127,8 @@ pub fn add_paks(paths: &[PathBuf], files: &mut Files, lock: &numbers::Lock, mod_
             }
         }
     }
-    let mut owners: BTreeMap<String, String> = files.keys().map(|path| (path.clone(), "the built mods".to_string())).collect();
+    let mut owners: BTreeMap<String, String> =
+        files.keys().map(|path| (path.clone(), "the built mods".to_string())).collect();
     for path in paths {
         let pak = read_pak(path)?;
         if mod_ids.contains(&pak.id) {
@@ -141,7 +151,10 @@ pub fn add_paks(paths: &[PathBuf], files: &mut Files, lock: &numbers::Lock, mod_
             files.insert(file, data);
         }
         if skipped > 0 {
-            println!("{}: {skipped} files only the native port uses (port settings, HD textures) left off the disc", pak.id);
+            println!(
+                "{}: {skipped} files only the native port uses (port settings, HD textures) left off the disc",
+                pak.id
+            );
         }
         println!("built mod {} from {}", pak.id, shown(path));
     }

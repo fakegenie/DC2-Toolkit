@@ -16,6 +16,7 @@ import urllib.request
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+JOBS = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count() or 1
 WINDOWS = sys.platform == "win32"
 PREFIX = ROOT / "build" / "port" / ("windows-sdk" if WINDOWS else "sdk")
 WORK = ROOT / "build" / "port" / ("windows-sdk-work" if WINDOWS else "sdk-work")
@@ -91,7 +92,7 @@ def build_sdl():
          "-DCMAKE_INSTALL_LIBDIR=lib", "-DSDL_SHARED=ON", "-DSDL_STATIC=OFF", "-DSDL_TEST_LIBRARY=OFF", "-DSDL_TESTS=OFF",
          "-DSDL_EXAMPLES=OFF", "-DSDL_INSTALL_TESTS=OFF", *(darwin if sys.platform == "darwin" else []),
          *(windows if WINDOWS else [])], log, env=env)
-    run(["cmake", "--build", str(build), "--parallel", str(os.cpu_count())], log, env=env)
+    run(["cmake", "--build", str(build), "--parallel", str(JOBS)], log, env=env)
     run(["cmake", "--install", str(build), "--strip"], log, env=env)
     licences = PREFIX / "share" / "licenses" / "SDL3"
     licences.mkdir(parents=True, exist_ok=True)
@@ -116,7 +117,7 @@ def build_ffmpeg():
     windows = ["--target-os=mingw32", "--arch=x86_64"]
     configure = [str(source / "configure"), "--prefix=/", "--cc=clang", *FFMPEG_CONFIGURE,
                  *(darwin if sys.platform == "darwin" else []), *(windows if WINDOWS else [])]
-    make = ["make", f"-j{os.cpu_count()}"]
+    make = ["make", f"-j{JOBS}"]
     install = ["make", "install", f"DESTDIR={PREFIX}"]
     if WINDOWS:
         if not GIT_BASH.exists():

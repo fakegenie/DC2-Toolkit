@@ -1,3 +1,9 @@
+"""Links the native port's objects with port/tests/native_save.cpp in place of memcard.cpp and checks the save it
+writes. Build the port first.
+
+    python3 -I port/tests/native_save.py
+"""
+
 import importlib.util
 import json
 import pathlib

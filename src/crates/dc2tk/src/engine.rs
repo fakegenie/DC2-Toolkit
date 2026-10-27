@@ -1,7 +1,7 @@
 //! dc2tk engine: the game's executable built from ChronicleTwo's decompiled engine (the engine/
 //! submodule) by ChronicleTwo's own build, in Kazarov's container, on a copy under build/engine/.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
@@ -24,6 +24,7 @@ const KAZAROV: &str = "tools/kazarov/scripts/kazarov";
 const CONTAINER_ROOT: &str = "/work/chronicletwo";
 const RETAIL: &str = "rom/pal/extracted/iso/SCES_511.90";
 const BUILT: &str = "build/pal/SCES_511.90";
+const KEPT_COPIES: usize = 4;
 
 #[derive(Deserialize)]
 pub(crate) struct Substitution {
@@ -342,6 +343,7 @@ fn run_in_container(copy: &Path, image: &str, target: &str) -> Result<bool> {
 fn python_in_container(copy: &Path, image: &str, arguments: &[String]) -> Result<()> {
     let status = container_command(copy, image)?
         .arg("python3")
+        .arg("-I")
         .args(arguments)
         .status()
         .context("cannot run Python in the engine build container")?;
@@ -377,7 +379,7 @@ pub fn mod_files(mod_dirs: &[PathBuf]) -> Result<Vec<EngineFile>> {
     if !mod_dirs.iter().any(|folder| folder.join("engine").exists()) {
         return Ok(Vec::new());
     }
-    collect_mod_files(mod_dirs, &files::root().join("engine"))
+    collect_mod_files(mod_dirs, &engine_dir(None)?)
 }
 
 fn collect_mod_files(mod_dirs: &[PathBuf], engine: &Path) -> Result<Vec<EngineFile>> {
@@ -425,6 +427,53 @@ pub struct PreparedMods {
     image: String,
     retail: Vec<u8>,
     previous_files: Vec<(PathBuf, Vec<u8>, std::time::SystemTime)>,
+    _lock: fs::File,
+}
+
+fn lock_copy(copy: &Path) -> Result<fs::File> {
+    let path = copy.with_extension("lock");
+    dc2tk_disc::files::create_dir_all(path.parent().context("engine copy has no folder")?)?;
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("cannot open {}", path.display()))?;
+    if file.try_lock().is_err() {
+        println!("waiting for another build that uses {}", files::shown_path(copy));
+        file.lock().with_context(|| format!("cannot lock {}", path.display()))?;
+    }
+    file.set_modified(std::time::SystemTime::now())?;
+    Ok(file)
+}
+
+fn remove_old_copies(kept: &Path) -> Result<()> {
+    let folder = files::root().join("build/engine");
+    let mut copies = Vec::new();
+    for entry in fs::read_dir(&folder)? {
+        let path = entry?.path();
+        if path.is_dir() && path.file_name().is_some_and(|name| name.to_string_lossy().starts_with("mods-")) {
+            let used = fs::metadata(path.with_extension("lock")).and_then(|value| value.modified());
+            copies.push((used.unwrap_or(std::time::UNIX_EPOCH), path));
+        }
+    }
+    copies.sort();
+    for (_, path) in copies.into_iter().rev().skip(KEPT_COPIES) {
+        if path == kept {
+            continue;
+        }
+        let lock = path.with_extension("lock");
+        let Ok(file) = fs::OpenOptions::new().create(true).truncate(false).write(true).open(&lock) else {
+            continue;
+        };
+        if file.try_lock().is_ok() {
+            fs::remove_dir_all(&path).with_context(|| format!("cannot remove {}", path.display()))?;
+            drop(file);
+            let _ = fs::remove_file(&lock);
+            println!("removed the old engine copy {}", files::shown_path(&path));
+        }
+    }
+    Ok(())
 }
 
 pub fn prepare_mods(disc: &Path, mod_dirs: &[PathBuf]) -> Result<Option<PreparedMods>> {
@@ -435,6 +484,8 @@ pub fn prepare_mods(disc: &Path, mod_dirs: &[PathBuf]) -> Result<Option<Prepared
     let engine = engine_dir(None)?;
     let retail = retail_executable(disc)?;
     let copy = std::path::absolute(files::root().join("build/engine").join(format!("mods-{}", mod_hash(&inputs))))?;
+    let lock = lock_copy(&copy)?;
+    remove_old_copies(&copy)?;
     let mut previous_paths = Vec::new();
     for folder in ["ps2/include", "ps2/src"] {
         if copy.join(folder).is_dir() {
@@ -475,7 +526,7 @@ pub fn prepare_mods(disc: &Path, mod_dirs: &[PathBuf]) -> Result<Option<Prepared
     let image = kazarov_image(&engine)?;
     python_in_container(&copy, &image, &[script.into(), "apply".into(), CONTAINER_ROOT.into(), manifest_path.into()])?;
     restore_unchanged(&previous_files)?;
-    Ok(Some(PreparedMods { copy, engine, image, retail, previous_files }))
+    Ok(Some(PreparedMods { copy, engine, image, retail, previous_files, _lock: lock }))
 }
 
 fn restore_unchanged(files: &[(PathBuf, Vec<u8>, std::time::SystemTime)]) -> Result<()> {
@@ -496,6 +547,7 @@ pub fn export_override(mod_dir: &Path, function: &str) -> Result<()> {
     let image = kazarov_image(&engine)?;
     let output = container_command(&copy, &image)?
         .arg("python3")
+        .arg("-I")
         .arg(script)
         .args(["extract", CONTAINER_ROOT, function])
         .stderr(Stdio::inherit())
@@ -525,60 +577,35 @@ pub fn export_override(mod_dir: &Path, function: &str) -> Result<()> {
 
 pub fn compile_mods(prepared: &PreparedMods, edited: Option<&[u8]>) -> Result<Vec<u8>> {
     if let Some(edited) = edited {
-        let units = crate::engine_tables::apply(&prepared.copy, &prepared.engine, &prepared.retail, edited)?;
-        if !units.is_empty() {
-            let path = prepared.copy.join("edited-units.txt");
-            let mut changed: BTreeSet<String> =
-                dc2tk_disc::files::read_to_string(&path)?.lines().map(str::to_string).collect();
-            for unit in units {
-                changed.insert(
-                    Path::new(&unit)
-                        .file_stem()
-                        .context("edited engine unit has no name")?
-                        .to_string_lossy()
-                        .into_owned(),
-                );
-            }
-            let profile_path = prepared.copy.join("scripts/build/satansfiddle.json");
-            let mut profile: serde_json::Value = serde_json::from_slice(&dc2tk_disc::files::read(&profile_path)?)?;
-            remove_profiles(&mut profile, &changed);
-            write_if_changed(&profile_path, &serde_json::to_vec_pretty(&profile)?)?;
-            write_if_changed(&path, changed.into_iter().collect::<Vec<_>>().join("\n").as_bytes())?;
-        }
+        crate::engine_tables::apply(&prepared.copy, &prepared.engine, &prepared.retail, edited)?;
     }
     restore_unchanged(&prepared.previous_files)?;
     if !run_in_container(&prepared.copy, &prepared.image, "elf")? {
         bail!("the mods' engine did not build: ChronicleTwo's build says why above");
     }
     report_heap(&prepared.copy)?;
-    dc2tk_disc::files::read(prepared.copy.join(BUILT)).map_err(Into::into)
+    let built = dc2tk_disc::files::read(prepared.copy.join(BUILT))?;
+    if let Some(edited) = edited {
+        let map = dc2tk_disc::files::read_to_string(prepared.copy.join(format!("{BUILT}.xMAP")))?;
+        crate::engine_tables::check_built(&built, &prepared.retail, edited, &map_symbols(&map))?;
+    }
+    Ok(built)
 }
 
-fn remove_profiles(value: &mut serde_json::Value, units: &BTreeSet<String>) {
-    match value {
-        serde_json::Value::Array(rows) => {
-            rows.retain(|row| {
-                !["translation_unit", "name"].iter().any(|key| {
-                    row.get(key).and_then(serde_json::Value::as_str).is_some_and(|name| {
-                        units.contains(name)
-                            || Path::new(name)
-                                .file_stem()
-                                .and_then(|stem| stem.to_str())
-                                .is_some_and(|stem| units.contains(stem))
-                    })
-                })
-            });
-            for row in rows {
-                remove_profiles(row, units);
-            }
+/// Each symbol's address in a link map: the first word of the line that names it.
+fn map_symbols(map: &str) -> BTreeMap<String, u32> {
+    let mut symbols = BTreeMap::new();
+    for line in map.lines() {
+        let mut words = line.split_whitespace();
+        let Some(address) = words.next().and_then(|word| u32::from_str_radix(word.trim_start_matches("#>"), 16).ok())
+        else {
+            continue;
+        };
+        for word in words {
+            symbols.entry(word.to_string()).or_insert(address);
         }
-        serde_json::Value::Object(fields) => {
-            for field in fields.values_mut() {
-                remove_profiles(field, units);
-            }
-        }
-        _ => {}
     }
+    symbols
 }
 
 fn heap_gap(map: &str) -> Result<i64> {
@@ -653,22 +680,13 @@ mod tests {
     }
 
     #[test]
-    fn changed_units_lose_only_their_matching_profile_rows() {
-        let mut profile = serde_json::json!({
-            "translation_units": [{"name": "a.cpp"}, {"name": "b.cpp"}],
-            "floating_point": {"expression_overrides": [
-                {"translation_unit": "a.cpp", "function": "A"},
-                {"translation_unit": "b.cpp", "function": "B"}
-            ]}
-        });
-        remove_profiles(&mut profile, &BTreeSet::from(["a".to_string()]));
-        assert_eq!(profile["translation_units"], serde_json::json!([{"name": "b.cpp"}]));
-        assert_eq!(
-            profile["floating_point"]["expression_overrides"],
-            serde_json::json!([
-                {"translation_unit": "b.cpp", "function": "B"}
-            ])
+    fn the_link_map_gives_each_symbol_its_first_address() {
+        let symbols = map_symbols(
+            "  0033D440 0019F8 0033D440  8 PartsInfoData\tautomap.o\n#>01F64A00 __bss_end\nnot a map line\n",
         );
+        assert_eq!(symbols["PartsInfoData"], 0x33D440);
+        assert_eq!(symbols["__bss_end"], 0x01F64A00);
+        assert!(!symbols.contains_key("map"));
     }
 
     #[test]

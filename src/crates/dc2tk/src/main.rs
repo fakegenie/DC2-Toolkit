@@ -32,10 +32,7 @@ use dc2tk_script::{asm, build, definitions, natives, stb};
 use options::{Common, NativesArg};
 
 #[derive(Parser)]
-#[command(
-    name = "dc2tk",
-    about = "Extract every DC2 asset into formats you can edit, and rebuild a playable disc"
-)]
+#[command(name = "dc2tk", about = "Extract every DC2 asset into formats you can edit, and rebuild a playable disc")]
 struct Cli {
     /// Print how long the command took.
     #[arg(long, global = true)]

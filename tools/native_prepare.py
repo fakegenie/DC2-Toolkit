@@ -1,3 +1,10 @@
+"""Puts mods' engine files into the native port's engine copy, and strips the functions port/src supplies.
+
+    python3 -I tools/native_prepare.py ENGINE COPY PORT
+
+ENGINE is the engine copy dc2tk prepared, whose build/mod-inputs/manifest.json lists the mods' files.
+"""
+
 import argparse
 import importlib.util
 import json
