@@ -194,9 +194,14 @@ int gs_read_shift(u_int base) {
 }
 
 static int hud_spread;
+static int ps2_sampling;
 
 extern "C" void port_hud(int spread) {
     hud_spread = spread;
+}
+
+extern "C" void port_ps2_sampling(int on) {
+    ps2_sampling = on;
 }
 
 static void spread_hud(RenderVertex *vertices, int count) {
@@ -612,6 +617,7 @@ static void state_for(RenderState *state, int *texture_width, int *texture_heigh
         state->repeat_v = gs.clamp.WMT == GS_WRAP_REPEAT;
         state->texture = bound_texture(state->repeat_u || state->repeat_v, texture_width, texture_height);
         sampling_state(state, gs.tex0, gs.tex1);
+        state->ps2_sampling = ps2_sampling;
     }
     state->blend = gs.prim.ABE;
     state->blending = gs_blending(gs.alpha);
@@ -660,6 +666,10 @@ static float depth_scale();
 void gs_shift_screen(int x, int y) {
     screen_shift_x = x;
     screen_shift_y = y;
+}
+
+float gs_screen_left() {
+    return (float)((int)gs.xyoffset.OFX - screen_shift_x) / GS_SUBPIXELS;
 }
 
 void gs_screen_mapping(RenderScreenMapping *screen, float *depth) {

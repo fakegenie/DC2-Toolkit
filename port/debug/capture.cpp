@@ -239,9 +239,11 @@ static int command_textures(const DebugArgs *args, DebugReply *reply) {
     for (int slot = 1; slot < render_slot_limit(); ++slot) {
         RenderSlot info;
         if (!render_slot(slot, &info)) continue;
-        debug_print(reply, "%s{\"slot\": %d, \"kind\": \"%s\", \"width\": %d, \"height\": %d, \"base\": %u, \"drawn\": %d",
-                    first ? "" : ", ", slot, info.target ? "target" : "texture", info.width, info.height, info.base,
-                    info.drawn);
+        debug_print(reply,
+                    "%s{\"slot\": %d, \"kind\": \"%s\", \"width\": %d, \"height\": %d, \"scale\": %d, \"base\": %u, "
+                    "\"drawn\": %d",
+                    first ? "" : ", ", slot, info.target ? "target" : "texture", info.width, info.height, info.scale,
+                    info.base, info.drawn);
         first = 0;
         CacheInfo cache;
         if (gs_cache_info(slot, &cache)) {
