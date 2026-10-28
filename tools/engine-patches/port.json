@@ -2151,5 +2151,10 @@
     "file": "ps2/src/monster.cpp",
     "find": "        boss_life_gage.Draw(0);",
     "replace": "        port_hud(1);\n        boss_life_gage.Draw(0);\n        port_hud(0);"
+  },
+  {
+    "file": "ps2/src/menuop.cpp",
+    "find": "                MenuPosData->GetEtcTblValue(\"op_cursorlimmit\", limit[0], limit[1]);",
+    "replace": "                MenuPosData->GetEtcTblValue(\"op_cursorlimmit\", limit[0], limit[1]);\n                int rest[2];\n                LocalMenuBGForm->GetPutPosXY(\"base_msg\", rest[0], rest[1]);\n                int settled = pos.y - (int) OptionButtonForm->y + rest[1] - top * 24 - 3;\n\n                if (limit[1] < settled) {\n                    limit[1] = settled;\n                }"
   }
 ]
