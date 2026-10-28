@@ -2156,5 +2156,55 @@
     "file": "ps2/src/menuop.cpp",
     "find": "                MenuPosData->GetEtcTblValue(\"op_cursorlimmit\", limit[0], limit[1]);",
     "replace": "                MenuPosData->GetEtcTblValue(\"op_cursorlimmit\", limit[0], limit[1]);\n                int rest[2];\n                LocalMenuBGForm->GetPutPosXY(\"base_msg\", rest[0], rest[1]);\n                int settled = pos.y - (int) OptionButtonForm->y + rest[1] - top * 24 - 3;\n\n                if (limit[1] < settled) {\n                    limit[1] = settled;\n                }"
+  },
+  {
+    "file": "ps2/src/editmenu.cpp",
+    "find": "static CDC2Mes *DownLoadMes[6];",
+    "replace": "static CDC2Mes *DownLoadMes[8];"
+  },
+  {
+    "file": "ps2/src/sceneload.cpp",
+    "find": "#include \"scenesnd.hpp\"\n",
+    "replace": "#include \"scenesnd.hpp\"\n\nvoid port_forget_event_handles(mgCMemory *memory);\n"
+  },
+  {
+    "file": "ps2/src/sceneload.cpp",
+    "find": "    memory = slot->stack;\n    memory->stack_used = 0;",
+    "replace": "    memory = slot->stack;\n    port_forget_event_handles(memory);\n    memory->stack_used = 0;"
+  },
+  {
+    "file": "ps2/src/runscript_opcodes.cpp",
+    "find": "                nowMonster->req_prog = MONSTER_PROG_RUNNING;\n            }\n        } else {\n            nowMonster->mons_script.resume();",
+    "replace": "                nowMonster->req_prog = MONSTER_PROG_RUNNING;\n            } else if (script == MONSTER_PROG_PIYORI) {\n                nowMonster->piyori_mark = nowMonster->piyori_time;\n                nowMonster->piyori.Set(nowMonster, nowMonster->piyori_mark);\n                nowMonster->req_prog = MONSTER_PROG_RUNNING;\n            }\n        } else if (nowMonster->piyori_mark <= 0 || nowMonster->mons_script.check_program(MONSTER_PROG_PIYORI) != 0) {\n            nowMonster->mons_script.resume();"
+  },
+  {
+    "file": "ps2/src/editmenu.cpp",
+    "find": "            float rate = space / (num - GEORAMA_LIST_LINE_NUM);",
+    "replace": "            float rate = num > GEORAMA_LIST_LINE_NUM ? space / (num - GEORAMA_LIST_LINE_NUM) : 0.0f;"
+  },
+  {
+    "file": "ps2/src/menusys.cpp",
+    "find": "                        for (int i = 0; i < 8; i++) {\n                            TrushMesCls[i] = NULL;",
+    "replace": "                        for (int i = 0; i < 4; i++) {\n                            TrushMesCls[i] = NULL;"
+  },
+  {
+    "file": "ps2/src/menusys.cpp",
+    "find": "*(u_long128 *) color = *(u_long128 *) fusion_ambient;",
+    "replace": "memcpy(color, fusion_ambient, sizeof(fusion_ambient));"
+  },
+  {
+    "file": "ps2/src/menuop.cpp",
+    "find": "static short manual_boot_event_no[47] = {",
+    "replace": "static short manual_boot_event_no[50] = {"
+  },
+  {
+    "file": "ps2/src/menuop.cpp",
+    "find": "SAVE_FLAG_FINNY_FRENZY_UNLOCKED, SAVE_FLAG_FINNY_FRENZY_UNLOCKED, -1};",
+    "replace": "SAVE_FLAG_FINNY_FRENZY_UNLOCKED, SAVE_FLAG_FINNY_FRENZY_UNLOCKED, -1, -1, -1, -1};"
+  },
+  {
+    "file": "ps2/src/dngmenu.cpp",
+    "find": "                char line[32];",
+    "replace": "                char line[FONT_STR_MAX];"
   }
 ]

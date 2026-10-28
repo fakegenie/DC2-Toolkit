@@ -186,6 +186,54 @@ written fresh. These are what it found to fix:
     smoothing modes, with ASLR, after a relocated state load and a card Continue, nor in the
     simulator with the phone's `launcher.cfg` settings as flags; `memory` showed no overflow.
     Next: the user's phone save and a device log.
+29. **Done: crash in the Geostone announcement.** `DownLoadMes` (editmenu.cpp) has 6 slots, and the step
+    loop and `DrawDownLoadAnaunce` walk 8. Slot 6 is `DownLoadWinRect` read as a pointer
+    (`0x8401e200ae000f`) once `InitDownLoadAnaunce` has run, and slot 7 the request and parts counts,
+    so both loops call `Step()` on them. SIGSEGV in `StepDownLoadAnaunce` the first time Georama
+    opens after a Geostone is read, and in `DrawDownLoadAnaunce` during s26's event 502 (the
+    chapter 2 Carpenterion Geostone lesson), even with no downloads. `port.json` declares 8 slots,
+    as ChronicleTwo does; the extra two stay null. Both paths now run to the end.
+30. **Done: crash in chapter 6 after the Griffon fight.** In story_612 (d06e01 612, s31 510, s35 500),
+    s31's quake scene binds event handles 4 and 5 to its map parts `p01_toge-0/1`;
+    `load_dungeon_map("s35")` frees s31 and the next event step plays their sequences: SIGSEGV in
+    `CEohMother::GetPos` from `CSceneObjSeq::Play`. Repeats every time (cap6,
+    `dungeon dungeon=5 floor=1 event=16120`). s35 to d06e01 binds parts 6-8 the same way.
+    `CScene::DeleteMap` now calls `port_forget_event_handles` (`port/src/event_handles.cpp`)
+    before it rewinds the map's memory, resetting every object, frame or function point handle
+    inside it. The chain now runs d06e01, s31, s36, s35, d06e01, s35, d06e01 to s70 and hands
+    back control.
+31. **Done: the Rainbow Butterfly hung after a stun.** Its script, b02a (and the b02a1 parts), has no
+    stun program 1400, so `CMonsterMan::RunScript` never takes the request: `req_prog` stays 1400,
+    `piyori_time` never runs down and the boss stays in the air for good. Retail's `RunScript` is the
+    same, so the PS2 has it too. Seen by poking `req_prog=1400 piyori_time=120` as
+    `SetNearAreaPiyori` writes them (cap2, `event=22030`); not yet through Julia's ability in play.
+    `RunScript` now takes a stun request a script has no program for as `_SET_PIYORI_MARK` does,
+    holds the running program while `piyori_mark` counts down and then resumes it; the boss moves
+    and fights on. Monsters with a stun program (Pumpkinhead) are unchanged.
+32. **Done: a stray Georama scroll bar.** A parts list that fits on one page divides
+    `space / (num - GEORAMA_LIST_LINE_NUM)` as 0/0, which is finite on the EE but NaN here, and
+    `CalcMenu1` keeps the NaN for the rest of the menu. Make, Place, the house list and page 6 get a
+    NaN `scroll_bar_y` and the bar draws from the top of the screen through the tab header (arm64
+    turns the NaN into 0; x86-64 would give INT_MIN). The rate is now 0 when the list fits, as
+    ChronicleTwo has it.
+33. **Done: out-of-bounds accesses with no effect yet.** Harmless at our `-O0` layout, but
+    undefined, now kept in bounds (4 slots nulled, a 50-entry table padded with -1, `line` of
+    `FONT_STR_MAX`, a `memcpy`):
+    - the item overflow notice nulls 8 `TrushMesCls` slots of 4, zeroing `MenuItemCmdRet`, which
+      is reset before every use (ChronicleTwo lost the minimap and lock-on to it);
+    - the Help menu reads `manual_boot_event_no[47..49]` of 47: padding and half of
+      `submap_table_1022[0]`, which `GetBitFlag` returns 0 for;
+    - the floor list's debug panel writes 35 bytes into `char line[32]` (dngmenu.cpp), into
+      `detail` that is written next;
+    - the fusion colour copies `fusion_ambient` (4-byte aligned) as a `u_long128`: two `movq` at
+      `-O0`, a faulting `movaps` at `-O2` on x86-64.
+    Geostone condition text was checked and fits: the longest PAL name is 32 bytes after
+    `ConvertFontCode`, within `wrapped`'s 64.
+34. **Crash: a Help tutorial video in the debug build.** Help, Cross on entry 1 plays
+    VTUTO1.PSS and then faults in `mgCFrame::GetLWMatrix` from `GetWorldPosition0`, called by
+    `debug_recording_sample` through `debug_fault_frame` at `mgEndFrame`: the recording and fault
+    sampler reads the player's frame while the video has the scene unloaded. Twice in two tries
+    (cap6, `menu open=main_town`). The release `dc2` not yet checked.
 
 ### Next: debugging and states that last
 
