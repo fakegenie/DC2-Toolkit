@@ -36,6 +36,9 @@ char **port_arguments;
 #if TARGET_OS_IPHONE
 static void enter_documents(void) {
     if (chdir(port_ios_documents())) fprintf(stderr, "cannot enter %s\n", port_ios_documents());
+    if (!freopen("log.txt", "w", stderr)) return;
+    setvbuf(stderr, NULL, _IONBF, 0);
+    dup2(fileno(stderr), fileno(stdout));
 }
 
 static void find_saves(void) { port_ios_saves(); }

@@ -6,6 +6,7 @@
 #include "port_overrides.h"
 #include "port_stats.h"
 #include <ctype.h>
+#include <errno.h>
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
@@ -129,7 +130,12 @@ static int read_disc(uint64_t offset, void *buffer, size_t size) {
     unsigned char *out = buffer;
     while (size) {
         ssize_t result = pread(disc, out, size, (off_t)offset);
-        if (result <= 0) return 0;
+        if (result < 0 && (errno == EINTR || errno == EAGAIN)) continue;
+        if (result <= 0) {
+            fprintf(stderr, "cdvd: read of %zu bytes at %llu failed: %s\n", size, (unsigned long long)offset,
+                    result ? strerror(errno) : "end of file");
+            return 0;
+        }
         out += result;
         offset += (size_t)result;
         size -= (size_t)result;
