@@ -13,7 +13,7 @@
 #include <TargetConditionals.h>
 #endif
 
-enum { FINGER_LIMIT = 10, CONTROL_LIMIT = 16, SIDE_LEFT = 0, SIDE_RIGHT = 1 };
+enum { FINGER_LIMIT = 10, CONTROL_LIMIT = 20, SIDE_LEFT = 0, SIDE_RIGHT = 1 };
 enum { CONTROL_BUTTON, CONTROL_SHOULDER, CONTROL_PILL, CONTROL_DPAD, CONTROL_LEFT_STICK, CONTROL_RIGHT_STICK,
        CONTROL_SAVE, CONTROL_LOAD };
 enum { HELD_BUTTONS = -1 };
@@ -25,6 +25,7 @@ enum { IDLE_AFTER = 4000, IDLE_FADE = 800, REVEAL_TIME = 3000, NOTICE_TIME = 200
 #define FULL_TILT 0.6f
 #define GAME_DEAD_ZONE (50.0f / 128.0f)
 #define IDLE_ALPHA 0.35f
+#define ACTIVE_ALPHA 0.55f
 
 typedef struct {
     int kind;
@@ -143,6 +144,8 @@ static void layout(SDL_Window *window) {
     add(CONTROL_SHOULDER, left + 104 * s, top + 18 * s, 64 * s, 32 * s, PORT_INPUT_L1, "L1", 0, 1, 1, 1);
     add(CONTROL_SHOULDER, right - 104 * s, top + 18 * s, 64 * s, 32 * s, PORT_INPUT_R1, "R1", 0, 1, 1, 1);
     add(CONTROL_SHOULDER, right - 32 * s, top + 18 * s, 64 * s, 32 * s, PORT_INPUT_R2, "R2", 0, 1, 1, 1);
+    add(CONTROL_SHOULDER, left + 32 * s, bottom - 18 * s, 64 * s, 32 * s, PORT_INPUT_L3, "L3", 0, 1, 1, 1);
+    add(CONTROL_SHOULDER, right - 32 * s, bottom - 18 * s, 64 * s, 32 * s, PORT_INPUT_R3, "R3", 0, 1, 1, 1);
     add(CONTROL_DPAD, left + 78 * s, top + 142 * s, 60 * s, 0, 0, NULL, 0, 1, 1, 1);
     add(CONTROL_LEFT_STICK, left + 168 * s, bottom - 66 * s, 52 * s, 0, 0, NULL, 0, 1, 1, 1);
     add(CONTROL_RIGHT_STICK, right - 168 * s, bottom - 66 * s, 52 * s, 0, 0, NULL, 0, 1, 1, 1);
@@ -317,7 +320,7 @@ static void update_fade(void) {
     Uint64 now = SDL_GetTicks();
     if (finger_count || tap_count || !touched_at) touched_at = now;
     float idle = (float)(now - touched_at) - IDLE_AFTER;
-    fade = idle <= 0 ? 1 : SDL_max(IDLE_ALPHA, 1 - (1 - IDLE_ALPHA) * idle / IDLE_FADE);
+    fade = idle <= 0 ? ACTIVE_ALPHA : SDL_max(IDLE_ALPHA, ACTIVE_ALPHA - (ACTIVE_ALPHA - IDLE_ALPHA) * idle / IDLE_FADE);
 }
 
 void port_touch_read(struct port_input_state *state) {
