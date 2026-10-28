@@ -40,6 +40,7 @@ const uint DEST_TEST = 8192u;
 const uint DEST_SET = 16384u;
 const uint TINT = 32768u;
 const uint PS2_SAMPLING = 65536u;
+const uint TEXA_16 = 131072u;
 
 const uint ALPHA_NEVER = 0u;
 const uint ALPHA_ALWAYS = 1u;
@@ -122,11 +123,17 @@ void main() {
         vec4 texel = (flags & PS2_SAMPLING) != 0u ? ps2_texel(uv) : texture(source, uv);
         if ((flags & TEXA) != 0u) {
 #ifdef SPREAD
-            texel.a = spread_coverage(uv) * float(texture_alpha) / 128.0;
+            texel.a = spread_coverage(uv) * float(texture_alpha & 255u) / 128.0;
 #else
             bool black = texel.r + texel.g + texel.b == 0.0;
-            texel.a = (flags & AEM) != 0u && black ? 0.0 : float(texture_alpha) / 128.0;
+            texel.a = (flags & AEM) != 0u && black ? 0.0 : float(texture_alpha & 255u) / 128.0;
 #endif
+        }
+        if ((flags & TEXA_16) != 0u) {
+            bool black = texel.r + texel.g + texel.b == 0.0;
+            bool set = int(texel.a * 128.0 + 0.5) >= 128;
+            uint level = set ? (texture_alpha >> 8) & 255u : texture_alpha & 255u;
+            texel.a = (flags & AEM) != 0u && black && !set ? 0.0 : float(level) / 128.0;
         }
         if ((flags & VERTEX_ALPHA) != 0u) texel.a = frag_color.a * MODULATE;
         else if ((flags & DECAL) == 0u) texel.a = texel.a * frag_color.a * MODULATE;

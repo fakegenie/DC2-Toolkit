@@ -196,7 +196,7 @@ PORT_OVERRIDE int CWater::Draw(u_int *tag, float (*matrix)[4], mgCDrawManager *d
     state.fog = fogged;
     state.fog_color = fog_colour;
     state.expansion = gs_expansion(texa);
-    state.texa = 1;
+    state.texa = RENDER_TEXA_24;
     state.linear = texture->tex1.MMAG;
     state.texture = gs_sampled(gs_texture(texture->tex0.TBP0, mgScreenWidth, mgScreenHeight), mgScreenWidth,
                                mgScreenHeight, 0);

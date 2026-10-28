@@ -37,7 +37,7 @@ enum { WINDOW_WIDTH = 960, WINDOW_HEIGHT = 720, TARGET_WIDTH = 640, TARGET_HEIGH
 enum {
     TEXTURED = 1, TEXA = 2, AEM = 4, FOG = 8, ALPHA_TEST = 16, FACTOR_FIX = 32,
     SCALE_SOURCE = 64, FACTOR_COLOR = 128, DECAL = 256, VERTEX_ALPHA = 512, DEPTH_READ = 1024, SOLID = 2048, OVERDRAW = 4096,
-    DEST_TEST = 8192, DEST_SET = 16384, TINT = 32768, PS2_SAMPLING = 65536
+    DEST_TEST = 8192, DEST_SET = 16384, TINT = 32768, PS2_SAMPLING = 65536, TEXA_16 = 131072
 };
 
 typedef struct {
@@ -1888,7 +1888,8 @@ static int prepare(Command *command, const RenderState *state, PipelineKey key) 
     command->key = key;
     int textured = state->texture && !(render_toggles.no_textures && !state->depth_read);
     if (textured) flags |= TEXTURED;
-    if (state->texa) flags |= TEXA;
+    if (state->texa == RENDER_TEXA_24) flags |= TEXA;
+    if (state->texa == RENDER_TEXA_16) flags |= TEXA_16;
     if (state->expansion.aem) flags |= AEM;
     if (state->fog && !render_toggles.no_fog) flags |= FOG;
     if (state->tests.alpha_test) flags |= ALPHA_TEST;
@@ -1903,7 +1904,7 @@ static int prepare(Command *command, const RenderState *state, PipelineKey key) 
     command->fragment.alpha_reference = state->tests.alpha_reference;
     command->fragment.alpha_method = state->tests.alpha_method;
     command->fragment.blend_fix = fix;
-    command->fragment.texture_alpha = state->expansion.ta0;
+    command->fragment.texture_alpha = state->expansion.ta0 | (uint32_t)state->expansion.ta1 << 8;
     command->fragment.fog_color = state->fog_color;
     command->fragment.tint = state->tint;
     if (flags & PS2_SAMPLING) command->fragment.source_scale = (uint32_t)textures[state->texture].scale;
@@ -1923,7 +1924,7 @@ static int prepare(Command *command, const RenderState *state, PipelineKey key) 
         if (render_toggles.wireframe && key.topology == RENDER_TRIANGLES) command->key.wire = 1;
     }
     command->sampler = (state->linear ? 1 : 0) | (state->repeat_u ? 2 : 0) | (state->repeat_v ? 4 : 0);
-    command->key.spread = textured && state->texa && state->expansion.aem && state->linear &&
+    command->key.spread = textured && state->texa == RENDER_TEXA_24 && state->expansion.aem && state->linear &&
                           textures[state->texture].scale > 1;
     command->model = -1;
     command->shadow = -1;

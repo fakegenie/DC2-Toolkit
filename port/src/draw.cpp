@@ -692,7 +692,9 @@ static void sampling_state(RenderState *state, sceGsTex0 tex0, sceGsTex1 tex1) {
     state->linear = tex1.MMAG;
     state->decal = tex0.TFX == GS_TFX_DECAL;
     state->vertex_alpha = !tex0.TCC;
-    state->texa = tex0.PSM == SCE_GS_PSMCT24;
+    state->texa = tex0.PSM == SCE_GS_PSMCT24                                    ? RENDER_TEXA_24
+                  : tex0.PSM == SCE_GS_PSMCT16 || tex0.PSM == SCE_GS_PSMCT16S ? RENDER_TEXA_16
+                                                                              : RENDER_TEXA_OFF;
 }
 
 static void state_for(RenderState *state, int *texture_width, int *texture_height) {

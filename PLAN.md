@@ -174,6 +174,18 @@ written fresh. These are what it found to fix:
     replay GPU copies but not uploads, so replaying the frame that filled a texture's untouched
     copy filled it mid-blink. `gs_texture_for` (`port/src/draw.cpp`) now uploads the decoded
     picture into the untouched copy and copies it to the texture. Seen only with smoothing on.
+28. **Done: white boxes in camera photos.** The shutter sprite-copies the frame into the 64x64
+    CT16 `fix_work` with blending off, so the copy keeps the frame's alpha, which is mostly 0.
+    The GS gives a CT16 texel the alpha TA1 or TA0 from TEXA by its A bit, and the engine sets
+    both to 128, so photos draw opaque; the port read the bit as 0 or 255, and the photo list's
+    blend let the white paper through. `sampling_state` (`port/src/draw.cpp`) now marks CT16
+    and CT16S as `RENDER_TEXA_16` and `draw.frag` expands their alpha from TA0 and TA1 with
+    AEM; `store_pixels` (`port/src/mglib.cpp`) sets the CT16 bit from A[7] as the GS does.
+    Older than f2b74ad. The iPhone's Palm Brinks report (gibberish speech, missing buildings,
+    a broken save menu) did not show on the Mac at 4:3, 16:9, fill, scale 3, msaa 4, both
+    smoothing modes, with ASLR, after a relocated state load and a card Continue, nor in the
+    simulator with the phone's `launcher.cfg` settings as flags; `memory` showed no overflow.
+    Next: the user's phone save and a device log.
 
 ### Next: debugging and states that last
 

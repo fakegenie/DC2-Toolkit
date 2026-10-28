@@ -202,7 +202,7 @@ static void store_pixels(int psm, const u_int *pixels, int count, u_long128 *buf
             case SCE_GS_PSMCT16:
             case SCE_GS_PSMCT16S: {
                 u_int packed = ((color >> 3) & 31) | ((color >> 11) & 31) << 5 | ((color >> 19) & 31) << 10 |
-                               (alpha >= 0x40 ? 0x8000u : 0);
+                               (alpha >= 0x80 ? 0x8000u : 0);
                 out[i * 2] = (unsigned char)packed;
                 out[i * 2 + 1] = (unsigned char)(packed >> 8);
                 break;
