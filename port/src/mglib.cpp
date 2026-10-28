@@ -101,7 +101,8 @@ extern "C" int port_wide_width(void) {
 
 PORT_OVERRIDE void mgSetPkFrameBuffer(int fbp, int width, int height, int psm) {
     mgSetPkFrameBufferRetail(fbp, width, height, psm);
-    int wide = mgScreenWidth == LAYOUT_WIDTH ? port_screen_width() : mgScreenWidth;
+    int texture = gs_resident_at((u_int)mgFRAME_1.FBP * GS_BLOCKS_PER_PAGE);
+    int wide = mgScreenWidth == LAYOUT_WIDTH && !texture ? port_screen_width() : mgScreenWidth;
     gs_frame((int)mgFRAME_1.FBP, wide, mgScreenHeight, (int)mgFRAME_1.PSM);
     gs_frame_shift((wide - mgScreenWidth) / 2);
     if (fbp >= 0) return;

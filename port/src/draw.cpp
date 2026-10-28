@@ -200,10 +200,19 @@ void gs_frame_shift(int pixels) {
     wide_frames[0].shift = pixels;
 }
 
-int gs_read_shift(u_int base) {
+int gs_resident_at(u_int base) {
+    return resident_texture(base, 0) != NULL;
+}
+
+static int drawn_shift(u_int base) {
     for (int i = 0; i < WIDE_FRAME_LIMIT; ++i)
         if (wide_frames[i].base == base) return wide_frames[i].shift;
     return 0;
+}
+
+int gs_read_shift(u_int base) {
+    int shift = drawn_shift(base);
+    return shift && gs_resident_at(base) ? 0 : shift;
 }
 
 static int hud_spread;
@@ -654,11 +663,15 @@ static int sampled_texture(u_int base, int width, int height) {
     return target ? target : gs_texture(base, width, height);
 }
 
+static int sampling_source() {
+    return source && source->tex0.TBP0 == gs.tex0.TBP0 && source->image[0];
+}
+
 static int bound_texture(int repeat, int *width, int *height) {
     int texture_width = 1 << gs.tex0.TW;
     int texture_height = 1 << gs.tex0.TH;
     int texture = 0;
-    if (source && source->tex0.TBP0 == gs.tex0.TBP0 && source->image[0]) texture = gs_texture_for(source);
+    if (sampling_source()) texture = gs_texture_for(source);
     else texture = sampled_texture(gs.tex0.TBP0, texture_width, texture_height);
     texture = gs_sampled(texture, texture_width, texture_height, repeat);
     *width = texture ? render_width(texture) : 1;
@@ -858,7 +871,7 @@ static void kick(u_int x, u_int y, u_int z, int fog, int draw) {
     vertex->b = gs.rgbaq.bytes.blue;
     vertex->a = gs.rgbaq.bytes.alpha;
     vertex->fog = (float)fog / 255.0f;
-    int lift = gs.prim.TME ? gs_read_shift(gs.tex0.TBP0) : 0;
+    int lift = gs.prim.TME && !sampling_source() ? gs_read_shift(gs.tex0.TBP0) : 0;
     if (gs.prim.FST) {
         int u = (int)gs.uv.U;
         if (lift > 0 && u >= UV_WRAP - lift * GS_SUBPIXELS) u -= UV_WRAP;

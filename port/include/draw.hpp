@@ -43,6 +43,7 @@ void gs_reset();
 void gs_frame(int fbp, int width, int height, int psm);
 int gs_frame_target();
 void gs_frame_shift(int pixels);
+int gs_resident_at(u_int base);
 int gs_read_shift(u_int base);
 extern "C" int port_screen_width(void);
 void gs_write(int reg, u_long value);

@@ -1038,6 +1038,32 @@ Left to do:
      lines changed 4 pixels in the valley.
    - Left: the dungeon's lens flare (`work`/`work2`, same code) has not been seen at a wide aspect.
      The water ripples at the race course are not interpolated between frames, at any aspect.
+5. **Gibberish text after the lens flare:** fixed. Facing the low sun in Palm Brinks around 5 am
+   at any wide aspect, the menu's place name, NPC speech and the save menu showed every glyph
+   shifted (at fill, 832 wide, each character code + 10: "Palm Brinks Residence" read "Zkvw*L|sxu}
+   ...") and the menu's oval had vertical bands. It was no memory corruption: the bytes were right.
+   - Every texture block is placed at `vram_top` (11552), so `f_work`, `shadow_work`, `work`, the
+     font and `menuwork2` all share that base. The lens flare draws into `f_work` (512 wide, a
+     whole-screen work target) after the shadow pass, so that base kept a wide shift of (W - 512) /
+     2 (160 at 832: 10 glyphs of 16 px) at the end of every frame the flare was drawn. The font and
+     `menuwork2` were then sampled at u + 160 though they are textures uploaded from main memory,
+     not the wide render target. Walking hid it, as the shadow pass resets the base to 0 before
+     the next flare; menus and talking draw no shadow.
+   - Now a base's shift is only read when the draw samples the render target there: a draw whose
+     own texture has pixels in memory (`sampling_source`), or a base where such a texture is
+     resident, reads it at shift 0 (`gs_read_shift`). A frame buffer set on a resident texture
+     (a texture animation's destination) is never made wide, so drawing into it and reading it
+     agree.
+   - Present since widescreen came in (0bdd683): c062484 and f2b74ad (the phone's earlier builds)
+     show it with the same steps, so it is no regression of the 2026-10-27 batch. Smoothing does
+     not matter (c37cf87 with `--smooth 1` shows it too); 4:3 has no shift.
+   - Steps: load the save in Palm Brinks Residence at about 5 am, stand at x -2677 z -830, turn
+     the camera to face the houses to the north-east (the sun), open the main menu, then the save
+     menu (`menu open=save`). Before and after at fill, 16:9 and 21:9: the place name, the save
+     menu and the oval are right; the town frame and the Palm Brinks recording are unchanged
+     (13 pixels differ, by at most 24).
+   - Not explained: the "buildings not loading" seen on the iPhone. Map meshes do not read the
+     shift, so it is not this bug; it was not reproduced on the Mac.
 
 ### 144 fps
 
