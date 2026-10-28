@@ -85,6 +85,18 @@ PORT_OVERRIDE int mgTransWorldPrim3DSprite(int *top_left, int *bottom_right, flo
     return visible;
 }
 
+extern "C" void port_lock_on_box(const int *top_left, const int *bottom_right) {
+    int inset = 0x120;
+    gs_projected_corner(top_left[0], top_left[1], 0, top_left, top_left);
+    gs_projected_corner(top_left[0] + inset, top_left[1] + inset, 0, top_left, top_left);
+    gs_projected_corner(bottom_right[0] - inset, top_left[1], 0, bottom_right, top_left);
+    gs_projected_corner(bottom_right[0], top_left[1] + inset, 0, bottom_right, top_left);
+    gs_projected_corner(top_left[0], bottom_right[1] - inset, 0, top_left, bottom_right);
+    gs_projected_corner(top_left[0] + inset, bottom_right[1], 0, top_left, bottom_right);
+    gs_projected_corner(bottom_right[0] - inset, bottom_right[1] - inset, 0, bottom_right, bottom_right);
+    gs_projected_corner(bottom_right[0], bottom_right[1], 0, bottom_right, bottom_right);
+}
+
 PORT_OVERRIDE void mgSetPkTextureRepeat(sceGsClamp clamp) {
     gs_write(SCE_GS_CLAMP_1, clamp.value);
 }

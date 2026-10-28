@@ -451,6 +451,28 @@ static SDL_Thread *timer;
 static int timer_stop;
 static SDL_AtomicInt gpu_busy_ns;
 
+enum { FRAMES_AHEAD = 2 };
+static SDL_GPUFence *pace_fences[FRAMES_AHEAD];
+static int pace_next;
+
+static void keep_pace(void) {
+    SDL_GPUFence **fence = &pace_fences[pace_next];
+    pace_next = (pace_next + 1) % FRAMES_AHEAD;
+    if (*fence) {
+        SDL_WaitForGPUFences(device, true, fence, 1);
+        SDL_ReleaseGPUFence(device, *fence);
+    }
+    SDL_GPUCommandBuffer *buffer = SDL_AcquireGPUCommandBuffer(device);
+    *fence = buffer ? SDL_SubmitGPUCommandBufferAndAcquireFence(buffer) : NULL;
+}
+
+static void release_pace(void) {
+    for (int i = 0; i < FRAMES_AHEAD; ++i) {
+        if (pace_fences[i]) SDL_ReleaseGPUFence(device, pace_fences[i]);
+        pace_fences[i] = NULL;
+    }
+}
+
 static int time_fences(void *unused) {
     (void)unused;
     uint64_t finished = 0;
@@ -697,6 +719,7 @@ int render_init(void) {
 void render_shutdown(void) {
     if (!device) return;
     SDL_WaitForGPUIdle(device);
+    release_pace();
     stop_timer();
     SDL_ReleaseWindowFromGPUDevice(device, window);
     SDL_DestroyWindow(window);
@@ -2742,10 +2765,12 @@ static void present_texture(SDL_GPUCommandBuffer *buffer, SDL_GPUTexture *color,
     uint64_t now = SDL_GetTicksNS();
     if (!color || (render_toggles.unpaced && now - shown_at < SDL_NS_PER_SECOND / (uint64_t)render_refresh_rate())) {
         submit_timed(buffer);
+        keep_pace();
         return;
     }
     shown_at = now;
     publish(buffer, SCREEN_GAME, color, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, scale, width, height);
+    keep_pace();
 }
 
 void render_show_debug(SDL_Window *target, SDL_GPUTexture *canvas, int format, int width, int height) {

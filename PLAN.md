@@ -234,6 +234,29 @@ written fresh. These are what it found to fix:
     `debug_recording_sample` through `debug_fault_frame` at `mgEndFrame`: the recording and fault
     sampler reads the player's frame while the video has the scene unloaded. Twice in two tries
     (cap6, `menu open=main_town`). The release `dc2` not yet checked.
+35. **Done: the phone killed at the language select.** iOS ended DC2 for memory ("highwater",
+    3.1 GB, JetsamEvent 2026-10-26 21:39); there was no crash report. The game thread submitted
+    frames without waiting for the GPU, and every frame queued ahead cycled the 64 MB vertex and
+    replay buffers (and their transfer buffers) into new copies that SDL keeps for the session.
+    How far the GPU fell behind decided how many there were: on the Mac at the phone's 2556x1179
+    with msaa 4 and display smoothing there were thirty 64 MB buffers, 4.5 GB in all. Each shown
+    picture now waits for the GPU to finish the one two pictures back (`keep_pace` in
+    `port/src/render.c`), and the same screen takes 1.3 GB. The language select still runs at its
+    50 fps.
+36. **Done: rain at 4:3 in wide frames.** The dungeon's screen rain (132 streaks from x 16) and
+    the event rain's screen streaks (`DrawScreenRain`, x 0 to 512) covered the middle, and its 3D
+    drops were born in a 45° cone. Their count and range now scale with the wide width, and
+    `RandXYinViewArea` widens the cone Hor+. Checked in Rainbow Butterfly Wood with the weather
+    poked to rain: 214 streaks from x -76 to 851 at fill (832). The event rain was not seen.
+37. **Probably done: the dungeon map's dark backing.** The map an event shows on a floor
+    (`_DNGMAP_LOAD`, `CDngFreeMap::DrawBackPattern` in event mode) dims the scene with a black
+    sprite from 0 to 512; it now reaches the edges (`port_screen_left`/`right`). Not seen in game:
+    no event that shows it was found, so the user's dark overlay may be a different one.
+38. **Done: the lock-on box at 25 fps.** `CLockOnModel::Draw` builds its four corners from the
+    projected box with 18 px offsets and z 0, so no vertex matched a recorded projection and the
+    box moved only on game frames. `port_lock_on_box` registers each of its 8 vertices with its
+    corner's projection (`gs_projected_corner`). Between frames it now moves with the monster: 341,
+    338, 335 at alpha 0, 0.5, 1.
 
 ### Next: debugging and states that last
 

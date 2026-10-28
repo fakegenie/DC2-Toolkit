@@ -2206,5 +2206,40 @@
     "file": "ps2/src/dngmenu.cpp",
     "find": "                char line[32];",
     "replace": "                char line[FONT_STR_MAX];"
+  },
+  {
+    "file": "ps2/src/scene.cpp",
+    "find": "    float spread = f_rand(view_angle / -2.0f, view_angle / 2.0f);",
+    "replace": "    view_angle = 2.0f * atanf(tanf(view_angle / 2.0f) * port_screen_width() / mgScreenWidth);\n    float spread = f_rand(view_angle / -2.0f, view_angle / 2.0f);"
+  },
+  {
+    "file": "ps2/src/scene.cpp",
+    "find": "    for (i = 0; i < 50; i++) {\n        float length = f_rand(mgScreenHeight / 8, mgScreenHeight / 4);",
+    "replace": "    for (i = 0; i < 50 * port_screen_width() / mgScreenWidth; i++) {\n        float length = f_rand(mgScreenHeight / 8, mgScreenHeight / 4);"
+  },
+  {
+    "file": "ps2/src/scene.cpp",
+    "find": "        int   x = i_rand(0, mgScreenWidth);",
+    "replace": "        int   x = i_rand((mgScreenWidth - port_screen_width()) / 2, (mgScreenWidth + port_screen_width()) / 2);"
+  },
+  {
+    "file": "ps2/src/dng_main.cpp",
+    "find": "        int x = 16;\n\n        for (int r = 0; r < 132; r++) {",
+    "replace": "        int x = 16 - (port_screen_width() - mgScreenWidth) / 2;\n\n        for (int r = 0; r < 132 * port_screen_width() / mgScreenWidth; r++) {"
+  },
+  {
+    "file": "ps2/src/dngmenu.cpp",
+    "find": "        prim->Color(0, 0, 0, 32);\n        prim->Vertex(0, 0, 0);\n        prim->Vertex(mgScreenWidth, mgScreenHeight, 0);",
+    "replace": "        prim->Color(0, 0, 0, 32);\n        prim->Vertex((int) port_screen_left(0.0f), 0, 0);\n        prim->Vertex((int) port_screen_right((float) mgScreenWidth), mgScreenHeight, 0);"
+  },
+  {
+    "file": "ps2/src/dng_hud.cpp",
+    "find": "int CLockOnModel::Draw() {",
+    "replace": "extern \"C\" void port_lock_on_box(const int *top_left, const int *bottom_right);\n\nint CLockOnModel::Draw() {"
+  },
+  {
+    "file": "ps2/src/dng_hud.cpp",
+    "find": "    if (mgTransWorldPrim3DSprite(top_left, bottom_right, target_pos, 20.0f * size, 20.0f * size, 0) != 0) {\n        bottom_right[0] -= 0x120;",
+    "replace": "    if (mgTransWorldPrim3DSprite(top_left, bottom_right, target_pos, 20.0f * size, 20.0f * size, 0) != 0) {\n        port_lock_on_box(top_left, bottom_right);\n        bottom_right[0] -= 0x120;"
   }
 ]

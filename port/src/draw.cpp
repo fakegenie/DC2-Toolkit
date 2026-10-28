@@ -640,6 +640,14 @@ static int corner_tag(int x_from, int y_from) {
     return (x_from & ~sides) | (x_from & RENDER_PROJECT_SIDE_X) | (y_from & RENDER_PROJECT_SIDE_Y);
 }
 
+void gs_projected_corner(int x, int y, int z, const int *x_from, const int *y_from) {
+    int x_tag = projected_tag((u_int)x_from[0], (u_int)x_from[1], (u_int)x_from[2]);
+    int y_tag = projected_tag((u_int)y_from[0], (u_int)y_from[1], (u_int)y_from[2]);
+    if (x_tag < 0 || y_tag < 0 || x_tag >> RENDER_PROJECT_SHIFT != y_tag >> RENDER_PROJECT_SHIFT) return;
+    int point[3] = {x, y, z};
+    remember_projection(point, corner_tag(x_tag, y_tag));
+}
+
 void gs_next_frame() {
     frame_number++;
     projected_count = 0;
