@@ -35,11 +35,11 @@ enum { DESKTOP = 1, SAVES_ITEM = 0 };
 #define MODS_ACTION "Open mods folder"
 #endif
 
-enum { CANVAS_WIDTH = 960, CANVAS_HEIGHT = 600, HERO_WIDTH = 520, PANEL_LEFT = 520, PANEL_WIDTH = 440, PAD = 48 };
-enum { OPTION_CHOICES = 8, OPTION_LIMIT = 16, PATH_SIZE = 1024, LINE_SIZE = 512 };
+enum { CANVAS_WIDTH = 960, CANVAS_HEIGHT = 700, HERO_WIDTH = 520, PANEL_LEFT = 520, PANEL_WIDTH = 440, PAD = 48 };
+enum { OPTION_CHOICES = 14, OPTION_LIMIT = 16, PATH_SIZE = 1024, LINE_SIZE = 512 };
 enum { GLOW_SIZE = 64, WINDOW_RADIUS = 14 };
-enum { MENU_TOP = 175, MENU_STEP = 50 };
-enum { LARGEST_HEIGHT = 720, DRAG_START = 10, REVEAL_ABOVE = 60, REVEAL_BELOW = 50 };
+enum { MENU_TOP = 225, MENU_STEP = 50 };
+enum { LARGEST_HEIGHT = 840, DRAG_START = 10, REVEAL_ABOVE = 60, REVEAL_BELOW = 50 };
 #define BODY_POINTS 20.0f
 enum { ROWS_TOP = 96, ROW_HEIGHT = 30, HEADING_HEIGHT = 28, TOGGLE_WIDTH = 34, TOGGLE_HEIGHT = 20 };
 enum { PAGE_MAIN, PAGE_SETTINGS, PAGE_MODS, PAGE_COUNT };
@@ -90,6 +90,13 @@ static Option options[] = {
     {NULL, "Save state buttons", "input.states", 2, {"Off", "On"}, {"false", "true"}, 1, 0, 1, 0},
     {"GAME", "Sound", "sound.mute", 2, {"Off", "On"}, {"true", "false"}, 1, 0, 1, 0},
     {NULL, "In-Game Debug Menu", "debug.menus", 2, {"Off", "On"}, {"false", "true"}, 0, 0, 1, 0},
+    {"STARTUP", "Language", "boot.language", 6, {"Ask", "English", "Français", "Deutsch", "Italiano", "Español"},
+     {"ask", "1", "2", "3", "4", "5"}, 0, 0, 0, 0},
+    {NULL, "Skip intro", "boot.skip_intro", 2, {"Off", "On"}, {"false", "true"}, 0, 0, 1, 0},
+    {NULL, "Load save", "boot.save", 14,
+     {"Off", "Slot 1", "Slot 2", "Slot 3", "Slot 4", "Slot 5", "Slot 6", "Slot 7", "Slot 8", "Slot 9", "Slot 10",
+      "Slot 11", "Slot 12", "Slot 13"},
+     {"off", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13"}, 0, 0, 0, 0},
 };
 #else
 static Option options[] = {
@@ -110,6 +117,13 @@ static Option options[] = {
     {"GAME", "Sound", "sound.mute", 2, {"Off", "On"}, {"true", "false"}, 1, 0, 1, 0},
     {NULL, "In-Game Debug Menu", "debug.menus", 2, {"Off", "On"}, {"false", "true"}, 0, 0, 1, 0},
     {NULL, "Port Developer Panel", "debug.window", 2, {"Hidden", "Shown"}, {"false", "true"}, 0, 1, 1, 0},
+    {"STARTUP", "Language", "boot.language", 6, {"Ask", "English", "Français", "Deutsch", "Italiano", "Español"},
+     {"ask", "1", "2", "3", "4", "5"}, 0, 0, 0, 0},
+    {NULL, "Skip intro", "boot.skip_intro", 2, {"Off", "On"}, {"false", "true"}, 0, 0, 1, 0},
+    {NULL, "Load save", "boot.save", 14,
+     {"Off", "Slot 1", "Slot 2", "Slot 3", "Slot 4", "Slot 5", "Slot 6", "Slot 7", "Slot 8", "Slot 9", "Slot 10",
+      "Slot 11", "Slot 12", "Slot 13"},
+     {"off", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13"}, 0, 0, 0, 0},
 };
 #endif
 

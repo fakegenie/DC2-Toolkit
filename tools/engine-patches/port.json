@@ -2241,5 +2241,35 @@
     "file": "ps2/src/dng_hud.cpp",
     "find": "    if (mgTransWorldPrim3DSprite(top_left, bottom_right, target_pos, 20.0f * size, 20.0f * size, 0) != 0) {\n        bottom_right[0] -= 0x120;",
     "replace": "    if (mgTransWorldPrim3DSprite(top_left, bottom_right, target_pos, 20.0f * size, 20.0f * size, 0) != 0) {\n        port_lock_on_box(top_left, bottom_right);\n        bottom_right[0] -= 0x120;"
+  },
+  {
+    "file": "ps2/src/nowload.cpp",
+    "find": "void SCElogoFade(int fade_out, mgCMemory *memory) {",
+    "replace": "int port_boot_language(void);\nint port_skip_intro(void);\n\nvoid SCElogoFade(int fade_out, mgCMemory *memory) {"
+  },
+  {
+    "file": "ps2/src/nowload.cpp",
+    "find": "        TitleLangSelInit(memory);\n\n        do {\n            mgBeginFrame(NULL);\n            language = TitleLangSelKey();\n            TitleLangSelDraw();\n            GamePad__2.UpDate();\n            mgEndFrame(NULL);\n        } while (!(0 < language));",
+    "replace": "        TitleLangSelInit(memory);\n        language = port_boot_language();\n\n        while (language <= 0) {\n            mgBeginFrame(NULL);\n            language = TitleLangSelKey();\n            TitleLangSelDraw();\n            GamePad__2.UpDate();\n            mgEndFrame(NULL);\n        }"
+  },
+  {
+    "file": "ps2/src/nowload.cpp",
+    "find": "        if (remaining > 0 && remaining < 300) {",
+    "replace": "        if (!port_skip_intro() && remaining > 0 && remaining < 300) {"
+  },
+  {
+    "file": "ps2/src/nowload.cpp",
+    "find": "    int         frame;\n    mgCTexture *logo;",
+    "replace": "    if (port_skip_intro()) {\n        return;\n    }\n\n    int         frame;\n    mgCTexture *logo;"
+  },
+  {
+    "file": "ps2/src/title.cpp",
+    "find": "int TitleLoop() {",
+    "replace": "int port_skip_intro(void);\nint port_boot_save(CMemoryCardManager *card);\n\nint TitleLoop() {"
+  },
+  {
+    "file": "ps2/src/title.cpp",
+    "find": "            if (TitleMCCheckKey() != 0) {\n                TitleMCCheck->FinishForMC();\n                TitleInfo->next_mode = TITLE_MODE_COPYRIGHT;\n            }",
+    "replace": "            if (TitleMCCheckKey() != 0) {\n                if (port_boot_save(TitleMCCheck)) {\n                    next_loop = 2;\n                }\n\n                TitleMCCheck->FinishForMC();\n                TitleInfo->next_mode = port_skip_intro() ? TITLE_MODE_TITLE : TITLE_MODE_COPYRIGHT;\n            }"
   }
 ]

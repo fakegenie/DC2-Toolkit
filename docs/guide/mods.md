@@ -376,6 +376,9 @@ A mod with `"targets": ["native"]` may use features only the native port has. Su
 | `render.vsync` | `true` waits for the display's refresh | `--vsync` |
 | `render.filter` | `"nearest"` for sharp pixels, else smooth | |
 | `render.smooth` | `false`, `"display"` to draw frames between the game's updates (below) at the display's rate, or a rate such as `144` | `--smooth 144`, `--smooth 0` |
+| `boot.language` | `1` English, `2` French, `3` German, `4` Italian, `5` Spanish; anything else asks | |
+| `boot.skip_intro` | `true` goes from the language straight to the title, past the logos and the Level-5 movie | |
+| `boot.save` | `1` to `13` loads that save on the first memory card at boot; an empty slot opens the title | |
 
 ```json
 "port": {"settings": {"render.aspect": "16:9", "render.scale": "auto"}}
